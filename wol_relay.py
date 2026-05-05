@@ -4,12 +4,12 @@ from requests.auth import HTTPDigestAuth
 import json
 import time
 
-# --- Konfiguration ---
-MAC_ADDRESS      = "54:E1:AD:43:6B:29"   # MAC-Adresse des PCs
-ADMIN_PASSWORD   = "dein_admin_passwort"  # Gleicher Wert wie ADMIN_PASSWORD in Vercel
-FRITZBOX_IP      = "192.168.188.1"        # Fritz!Box LAN-IP
-FRITZBOX_USER    = ""                     # Fritz!Box Benutzername (leer = kein Benutzer)
-FRITZBOX_PASSWORD = "dein_fritzbox_passwort"  # Fritz!Box Passwort
+# --- Configuration ---
+MAC_ADDRESS       = "54:E1:AD:43:6B:29"       # MAC address of the PC to wake
+ADMIN_PASSWORD    = "your_admin_password"       # Same value as ADMIN_PASSWORD in Vercel
+FRITZBOX_IP       = "192.168.188.1"             # Fritz!Box LAN IP
+FRITZBOX_USER     = ""                          # Fritz!Box username (leave empty if none)
+FRITZBOX_PASSWORD = "your_fritzbox_password"    # Fritz!Box web UI password
 # ---------------------
 
 SOAP_BODY = """<?xml version="1.0" encoding="utf-8"?>
@@ -35,9 +35,9 @@ def send_wol_tr064(mac: str):
         timeout=10
     )
     if r.ok:
-        print(f"[TR-064] WoL gesendet für {mac}")
+        print(f"[TR-064] WoL sent for {mac}")
     else:
-        print(f"[TR-064] Fehler: {r.status_code} — {r.text[:200]}")
+        print(f"[TR-064] Error: {r.status_code} — {r.text[:200]}")
 
 def get_topic(mac: str, password: str) -> str:
     clean = mac.replace(":", "").replace("-", "").replace(" ", "").lower()
@@ -46,7 +46,7 @@ def get_topic(mac: str, password: str) -> str:
 def listen():
     topic = get_topic(MAC_ADDRESS, ADMIN_PASSWORD)
     url   = f"https://ntfy.sh/{topic}/json"
-    print(f"[ntfy] Lausche auf Topic: {topic}")
+    print(f"[ntfy] Listening on topic: {topic}")
 
     while True:
         try:
@@ -61,11 +61,11 @@ def listen():
                     if data.get("event") == "message":
                         msg = data.get("message", "").strip().lower()
                         if msg == "wake":
-                            print("[ntfy] Wake-Befehl empfangen, sende WoL via TR-064...")
+                            print("[ntfy] Wake command received, sending WoL via TR-064...")
                             send_wol_tr064(MAC_ADDRESS)
-                        # "off" wird von agent.py auf dem Windows-PC verarbeitet
+                        # "off" is handled by agent.exe on the Windows PC
         except Exception as e:
-            print(f"[Fehler] {e} – Reconnect in 5s...")
+            print(f"[Error] {e} — reconnecting in 5s...")
             time.sleep(5)
 
 if __name__ == "__main__":

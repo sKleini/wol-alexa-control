@@ -161,12 +161,12 @@ systemctl status wol-relay
 journalctl -u wol-relay -f
 ```
 
-> **Hinweis:** Nach jeder Änderung an der Service-Datei `daemon-reload` und `restart` ausführen:
+> **Note:** After any change to the service file, reload and restart:
 > ```bash
 > systemctl daemon-reload && systemctl restart wol-relay
 > ```
 
-The relay listens on ntfy.sh and logs: `[ntfy] Lausche auf Topic: wol_xxxxxxxxxxxxxxxxxx`
+The relay listens on ntfy.sh and logs: `[ntfy] Listening on topic: wol_xxxxxxxxxxxxxxxxxx`
 
 #### 6. Add Devices & Discover
 - Open your Vercel URL and log in with your `ADMIN_PASSWORD`.
