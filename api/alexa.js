@@ -178,23 +178,42 @@ async function sendWoLViaFritzBox(macAddress) {
     const sid = await getFritzBoxSID(baseUrl, user, password);
     console.log(`Fritz!Box SID obtained, sending WoL for ${formatMac(macAddress)}`);
 
-    const body = new URLSearchParams({
-      sid,
-      mac: formatMac(macAddress),
-      net: ''
-    }).toString();
-
-    const wolRes = await fetch(`${baseUrl}/net/wakeupcomputer.lua`, {
+    // Get device list to find UID by MAC
+    const listBody = new URLSearchParams({ xhr: '1', sid, page: 'netDev' }).toString();
+    const listRes = await fetch(`${baseUrl}/data.lua`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body
+      body: listBody
+    });
+    const listData = await listRes.json();
+
+    const targetMac = formatMac(macAddress).toUpperCase();
+    const allDevices = [
+      ...(listData?.data?.active || []),
+      ...(listData?.data?.passive || [])
+    ];
+    const device = allDevices.find(d => d.mac?.toUpperCase() === targetMac);
+
+    if (!device?.UID) {
+      console.error(`Device ${targetMac} not found in Fritz!Box device list`);
+      console.error(`Available MACs: ${allDevices.map(d => d.mac).join(', ')}`);
+      return;
+    }
+
+    console.log(`Found device UID: ${device.UID}, sending WoL`);
+
+    const wolBody = new URLSearchParams({ xhr: '1', sid, page: 'netDev', wakeup: '1', dev: device.UID }).toString();
+    const wolRes = await fetch(`${baseUrl}/data.lua`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: wolBody
     });
 
     if (!wolRes.ok) {
       const text = await wolRes.text();
       console.error(`Fritz!Box WoL failed: ${wolRes.status} — ${text.substring(0, 300)}`);
     } else {
-      console.log(`Fritz!Box WoL sent successfully for MAC: ${formatMac(macAddress)}`);
+      console.log(`Fritz!Box WoL sent successfully for MAC: ${targetMac}`);
     }
   } catch (err) {
     console.error(`Fritz!Box WoL error: ${err.message}`);
