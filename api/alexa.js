@@ -185,7 +185,14 @@ async function sendWoLViaFritzBox(macAddress) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: listBody
     });
-    const listData = await listRes.json();
+    const listText = await listRes.text();
+    console.log(`data.lua response (first 500): ${listText.substring(0, 500)}`);
+
+    let listData;
+    try { listData = JSON.parse(listText); } catch(e) {
+      console.error(`data.lua response is not JSON: ${e.message}`);
+      return;
+    }
 
     const targetMac = formatMac(macAddress).toUpperCase();
     const allDevices = [
@@ -196,6 +203,8 @@ async function sendWoLViaFritzBox(macAddress) {
 
     if (!device?.UID) {
       console.error(`Device ${targetMac} not found in Fritz!Box device list`);
+      console.error(`Top-level keys: ${Object.keys(listData || {}).join(', ')}`);
+      console.error(`data keys: ${Object.keys(listData?.data || {}).join(', ')}`);
       console.error(`Available MACs: ${allDevices.map(d => d.mac).join(', ')}`);
       return;
     }
