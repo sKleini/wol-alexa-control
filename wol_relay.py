@@ -5,7 +5,7 @@ import json
 import time
 
 # --- Configuration ---
-MAC_ADDRESS       = "54:E1:AD:43:6B:29"       # MAC address of the PC to wake
+MAC_ADDRESS       = "AA:BB:CC:DD:EE:FF"       # MAC address of the PC to wake
 ADMIN_PASSWORD    = "your_admin_password"       # Same value as ADMIN_PASSWORD in Vercel
 FRITZBOX_IP       = "192.168.188.1"             # Fritz!Box LAN IP
 FRITZBOX_USER     = ""                          # Fritz!Box username (leave empty if none)
