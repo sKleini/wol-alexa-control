@@ -112,6 +112,36 @@ async function handleDiscovery(request, res) {
   }
 }
 
+function buildDigestAuth(method, uri, user, password, wwwAuth) {
+  const getValue = (key) => {
+    const match = wwwAuth.match(new RegExp(`${key}="([^"]+)"`));
+    return match ? match[1] : '';
+  };
+  const realm = getValue('realm');
+  const nonce = getValue('nonce');
+  const opaque = getValue('opaque');
+  const qop = (wwwAuth.match(/qop="?([^",]+)"?/) || [])[1];
+
+  const ha1 = crypto.createHash('md5').update(`${user}:${realm}:${password}`).digest('hex');
+  const ha2 = crypto.createHash('md5').update(`${method}:${uri}`).digest('hex');
+
+  let responseHash;
+  let authHeader = `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}"`;
+
+  if (qop) {
+    const nc = '00000001';
+    const cnonce = crypto.randomBytes(8).toString('hex');
+    responseHash = crypto.createHash('md5').update(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`).digest('hex');
+    authHeader += `, qop=${qop}, nc=${nc}, cnonce="${cnonce}"`;
+  } else {
+    responseHash = crypto.createHash('md5').update(`${ha1}:${nonce}:${ha2}`).digest('hex');
+  }
+
+  authHeader += `, response="${responseHash}"`;
+  if (opaque) authHeader += `, opaque="${opaque}"`;
+  return authHeader;
+}
+
 async function sendWoLViaFritzBox(macAddress) {
   const fritzUrl = process.env.FRITZBOX_URL;
   const user = process.env.FRITZBOX_USER || '';
@@ -136,27 +166,38 @@ async function sendWoLViaFritzBox(macAddress) {
   </s:Body>
 </s:Envelope>`;
 
-  const credentials = Buffer.from(`${user}:${password}`).toString('base64');
-
   const parsedUrl = new URL(fritzUrl);
   if (!parsedUrl.port) parsedUrl.port = parsedUrl.protocol === 'https:' ? '49443' : '49000';
-  const tr064Url = `${parsedUrl.protocol}//${parsedUrl.hostname}:${parsedUrl.port}/upnp/control/hosts`;
+  const tr064Path = '/upnp/control/hosts';
+  const tr064Url = `${parsedUrl.protocol}//${parsedUrl.hostname}:${parsedUrl.port}${tr064Path}`;
+  const soapHeaders = {
+    'Content-Type': 'text/xml; charset="utf-8"',
+    'SOAPAction': '"urn:dslforum-org:service:Hosts:1#X_AVM-DE_WakeOnLANByMACAddress"',
+  };
 
-  console.log(`Fritz!Box TR-064 request to: ${parsedUrl.protocol}//${parsedUrl.hostname}:${parsedUrl.port}/upnp/control/hosts`);
+  console.log(`Fritz!Box TR-064 request to: ${tr064Url}`);
 
-  const response = await fetch(tr064Url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/xml; charset="utf-8"',
-      'SOAPAction': '"urn:dslforum-org:service:Hosts:1#X_AVM-DE_WakeOnLANByMACAddress"',
-      'Authorization': `Basic ${credentials}`
-    },
-    body: soapBody
-  });
+  // First attempt without auth to get Digest challenge
+  let response = await fetch(tr064Url, { method: 'POST', headers: soapHeaders, body: soapBody });
+
+  if (response.status === 401) {
+    const wwwAuth = response.headers.get('WWW-Authenticate') || '';
+    console.log(`Fritz!Box auth challenge: ${wwwAuth.substring(0, 100)}`);
+
+    const authHeader = wwwAuth.toLowerCase().startsWith('digest')
+      ? buildDigestAuth('POST', tr064Path, user, password, wwwAuth)
+      : `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`;
+
+    response = await fetch(tr064Url, {
+      method: 'POST',
+      headers: { ...soapHeaders, 'Authorization': authHeader },
+      body: soapBody
+    });
+  }
 
   if (!response.ok) {
     const text = await response.text();
-    console.error(`Fritz!Box WoL failed: ${response.status} — URL was: ${tr064Url} — Body: ${text.substring(0, 200)}`);
+    console.error(`Fritz!Box WoL failed: ${response.status} — ${text.substring(0, 300)}`);
   } else {
     console.log(`Fritz!Box WoL sent successfully for MAC: ${formatMac(macAddress)}`);
   }
