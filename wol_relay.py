@@ -9,7 +9,7 @@ import sys
 # --- Konfiguration ---
 MAC_ADDRESS   = "54:E1:AD:43:6B:29"   # MAC-Adresse des PCs
 ADMIN_PASSWORD = "dein_admin_passwort" # Gleicher Wert wie ADMIN_PASSWORD in Vercel
-BROADCAST     = "192.168.178.255"      # Subnet-Broadcast deines Heimnetzes
+BROADCAST     = "192.168.188.255"      # Subnet-Broadcast deines Heimnetzes
 WOL_PORT      = 9
 # ---------------------
 
