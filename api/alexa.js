@@ -139,7 +139,7 @@ async function sendWoLViaFritzBox(macAddress) {
   const credentials = Buffer.from(`${user}:${password}`).toString('base64');
 
   const parsedUrl = new URL(fritzUrl);
-  if (!parsedUrl.port) parsedUrl.port = '49000';
+  if (!parsedUrl.port) parsedUrl.port = parsedUrl.protocol === 'https:' ? '49443' : '49000';
   const tr064Url = `${parsedUrl.protocol}//${parsedUrl.hostname}:${parsedUrl.port}/upnp/control/hosts`;
 
   const response = await fetch(tr064Url, {
