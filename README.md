@@ -153,12 +153,18 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 ```bash
+systemctl daemon-reload
 systemctl enable --now wol-relay
 systemctl status wol-relay
 
 # Monitor logs
 journalctl -u wol-relay -f
 ```
+
+> **Hinweis:** Nach jeder Änderung an der Service-Datei `daemon-reload` und `restart` ausführen:
+> ```bash
+> systemctl daemon-reload && systemctl restart wol-relay
+> ```
 
 The relay listens on ntfy.sh and logs: `[ntfy] Lausche auf Topic: wol_xxxxxxxxxxxxxxxxxx`
 
