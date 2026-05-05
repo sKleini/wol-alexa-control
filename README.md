@@ -145,7 +145,7 @@ Description=WoL Relay via ntfy.sh
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /root/wol_relay.py
+ExecStart=/usr/bin/python3 -u /root/wol_relay.py
 Restart=always
 RestartSec=5
 
