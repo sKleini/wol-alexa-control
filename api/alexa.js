@@ -142,6 +142,8 @@ async function sendWoLViaFritzBox(macAddress) {
   if (!parsedUrl.port) parsedUrl.port = parsedUrl.protocol === 'https:' ? '49443' : '49000';
   const tr064Url = `${parsedUrl.protocol}//${parsedUrl.hostname}:${parsedUrl.port}/upnp/control/hosts`;
 
+  console.log(`Fritz!Box TR-064 request to: ${parsedUrl.protocol}//${parsedUrl.hostname}:${parsedUrl.port}/upnp/control/hosts`);
+
   const response = await fetch(tr064Url, {
     method: 'POST',
     headers: {
@@ -154,9 +156,9 @@ async function sendWoLViaFritzBox(macAddress) {
 
   if (!response.ok) {
     const text = await response.text();
-    console.error(`Fritz!Box WoL failed: ${response.status} ${text}`);
+    console.error(`Fritz!Box WoL failed: ${response.status} — URL was: ${tr064Url} — Body: ${text.substring(0, 200)}`);
   } else {
-    console.log(`Fritz!Box WoL sent for MAC: ${formatMac(macAddress)}`);
+    console.log(`Fritz!Box WoL sent successfully for MAC: ${formatMac(macAddress)}`);
   }
 }
 
