@@ -60,11 +60,11 @@ Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
 
 #### 3. Alexa & AWS Lambda Integration
-- **AWS Lambda**: Create a new function (Runtime: Node.js 18+).
+- **AWS Lambda**: Create a new function at the [Lambda Console](https://eu-west-1.console.aws.amazon.com/lambda/home?region=eu-west-1#/functions) (Runtime: Node.js 18+).
 - Copy the code from `/bridge/lambda_bridge.js` and update the `vercelUrl` variable to your Vercel URL.
 - Add an **Alexa Smart Home** trigger and copy the Lambda **ARN**.
 
-- **Alexa Developer Console**: Create a new **Smart Home** skill.
+- **Alexa Developer Console**: Create a new **Smart Home** skill at the [Alexa Skills Kit Console](https://developer.amazon.com/alexa/console/ask).
   - **Smart Home Service Endpoint**: paste your Lambda ARN.
   - **Account Linking**:
     - Authorization URI: `https://your-app.vercel.app/api/auth`
