@@ -22,14 +22,14 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 Turn ON (Voice command – no VPS needed):
 Alexa (WakeOnLANController) → Echo device (local LAN) → WoL magic packet → PC
 
-Turn ON (Routine – requires VPS):
-Alexa Routine → AWS Lambda → Vercel → ntfy.sh ("wake") → VPS (WireGuard Tunnel) → Fritz!Box TR-064 → WoL → PC
+Turn ON (Routine – requires a local relay e.g. VPS/Raspberry Pi/NAS):
+Alexa Routine → AWS Lambda → Vercel → ntfy.sh ("wake") → Local relay → WoL → PC
 
 Turn OFF / Sleep / Hibernate:
 Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe) → Sleep/Shutdown/Hibernate
 ```
 
-> **Note:** The direct voice path works because the skill registers each device with `Alexa.WakeOnLANController`, which lets the Echo device on the local network send the WoL magic packet without any cloud relay. Alexa Routines use the `PowerController` interface instead, so they always go through the VPS path.
+> **Note:** The direct voice path works because the skill registers each device with `Alexa.WakeOnLANController`, which lets the Echo device on the local network send the WoL magic packet without any cloud relay. Alexa Routines use the `PowerController` interface instead, so they always go through the relay path — which can be a VPS with WireGuard, or any local device (Raspberry Pi, NAS, etc.) that runs `wol_relay.py` and has access to the local network.
 
 **Components:**
 | Component | Purpose |
