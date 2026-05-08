@@ -25,6 +25,9 @@ Alexa (WakeOnLANController) → Echo device (local LAN) → WoL magic packet →
 Turn ON (Routine – requires a local relay e.g. VPS/Raspberry Pi/NAS):
 Alexa Routine → AWS Lambda → Vercel → ntfy.sh ("wake") → Local relay → WoL → PC
 
+Turn ON (Routine – via VPS + WireGuard, as used in this project):
+Alexa Routine → AWS Lambda → Vercel → ntfy.sh ("wake") → VPS (WireGuard Tunnel) → Fritz!Box TR-064 → WoL → PC
+
 Turn OFF / Sleep / Hibernate:
 Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe) → Sleep/Shutdown/Hibernate
 ```
