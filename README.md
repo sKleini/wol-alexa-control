@@ -19,12 +19,17 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 ### 🏗️ Architecture
 
 ```
-Turn ON:
-Alexa → AWS Lambda → Vercel → ntfy.sh ("wake") → VPS (WireGuard Tunnel) → Fritz!Box TR-064 → WoL → PC
+Turn ON (Voice command – no VPS needed):
+Alexa (WakeOnLANController) → Echo device (local LAN) → WoL magic packet → PC
+
+Turn ON (Routine – requires VPS):
+Alexa Routine → AWS Lambda → Vercel → ntfy.sh ("wake") → VPS (WireGuard Tunnel) → Fritz!Box TR-064 → WoL → PC
 
 Turn OFF / Sleep / Hibernate:
 Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe) → Sleep/Shutdown/Hibernate
 ```
+
+> **Note:** The direct voice path works because the skill registers each device with `Alexa.WakeOnLANController`, which lets the Echo device on the local network send the WoL magic packet without any cloud relay. Alexa Routines use the `PowerController` interface instead, so they always go through the VPS path.
 
 **Components:**
 | Component | Purpose |
