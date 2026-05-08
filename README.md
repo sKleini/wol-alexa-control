@@ -73,7 +73,7 @@ Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe
     - Client Secret: `anything`
 
 #### 4. Windows Agent (Turn OFF / Sleep / Hibernate)
-- Download `agent.exe` from the **Releases** section.
+- Download `agent.exe` from the [Releases](https://github.com/FlowersPowerz/wol-alexa-control/releases/tag/v0.0.1) section.
 - Run it on the PC you want to control.
 - Enter the **MAC Address** of the PC (must match the dashboard entry).
 - Enter the **Security Key** (`ADMIN_PASSWORD` from Vercel).
