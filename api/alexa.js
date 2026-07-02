@@ -93,6 +93,41 @@ async function handleDiscovery(request, res) {
       };
     });
 
+    endpoints.push({
+      endpointId: "endpoint-fritzbox-led",
+      manufacturerName: "FlowersPowerz",
+      friendlyName: "Fritzbox LED",
+      description: "LED-Anzeige der FRITZ!Box",
+      displayCategories: ["LIGHT"],
+      capabilities: [
+        {
+          type: "AlexaInterface",
+          interface: "Alexa.PowerController",
+          version: "3",
+          properties: {
+            supported: [{ name: "powerState" }],
+            proactivelyReported: false,
+            retrievable: true
+          }
+        },
+        {
+          type: "AlexaInterface",
+          interface: "Alexa.EndpointHealth",
+          version: "3",
+          properties: {
+            supported: [{ name: "connectivity" }],
+            proactivelyReported: false,
+            retrievable: true
+          }
+        },
+        {
+          type: "AlexaInterface",
+          interface: "Alexa",
+          version: "3"
+        }
+      ]
+    });
+
     return res.status(200).json({
       event: {
         header: {
@@ -134,6 +169,80 @@ async function handlePowerControl(request, res) {
   const name = header.name;
 
   console.log(`Power Control: ${name} for ${endpointId}`);
+
+  const cleanId = endpointId.replace('endpoint-', '');
+
+  if (cleanId === 'fritzbox-led') {
+    if (!process.env.LED_TOPIC || !process.env.LED_PASSWORD) {
+      console.error("LED_TOPIC or LED_PASSWORD not configured");
+      return res.status(200).json({
+        event: {
+          header: {
+            namespace: "Alexa",
+            name: "ErrorResponse",
+            messageId: messageId + "-R",
+            correlationToken: correlationToken,
+            payloadVersion: "3"
+          },
+          endpoint: {
+            endpointId: endpointId
+          },
+          payload: {
+            type: "INTERNAL_ERROR",
+            message: "LED_TOPIC or LED_PASSWORD not configured"
+          }
+        }
+      });
+    }
+
+    const action = name === 'TurnOn' ? 'on' : 'off';
+
+    try {
+      await fetch(`https://ntfy.sh/${process.env.LED_TOPIC}`, {
+        method: 'POST',
+        body: `led:${action}:${process.env.LED_PASSWORD}`
+      });
+      console.log(`Sent LED command: ${action}`);
+    } catch (err) {
+      console.error("Error sending LED command to ntfy:", err);
+    }
+
+    return res.status(200).json({
+      event: {
+        header: {
+          namespace: "Alexa",
+          name: "Response",
+          messageId: messageId + "-R",
+          correlationToken: correlationToken,
+          payloadVersion: "3"
+        },
+        endpoint: {
+          endpointId: endpointId
+        },
+        payload: {}
+      },
+      context: {
+        properties: [
+          {
+            namespace: "Alexa.PowerController",
+            name: "powerState",
+            value: name === "TurnOn" ? "ON" : "OFF",
+            timeOfSample: new Date().toISOString(),
+            uncertaintyInMilliseconds: 0
+          },
+          {
+            namespace: "Alexa.EndpointHealth",
+            name: "connectivity",
+            value: {
+              value: "OK"
+            },
+            timeOfSample: new Date().toISOString(),
+            uncertaintyInMilliseconds: 0
+          }
+        ]
+      }
+    });
+  }
 
   if (name === 'TurnOn') {
     const cleanId = endpointId.replace('endpoint-', '');
