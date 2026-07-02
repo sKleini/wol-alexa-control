@@ -12,6 +12,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Windows Agent (Ready to use)**: Pre-compiled executable that lives in your system tray.
 - **Secure SHA-256 Bridge**: Encrypted communication between Alexa and your PC using your private hash.
 - **Modern Dashboard**: Sleek *Glassmorphism* interface to manage your devices.
+- **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
 ---
@@ -30,6 +31,9 @@ Alexa Routine → AWS Lambda → Vercel → ntfy.sh ("wake") → VPS (WireGuard 
 
 Turn OFF / Sleep / Hibernate:
 Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe) → Sleep/Shutdown/Hibernate
+
+Fritzbox LED (optional):
+Alexa ("Fritzbox LED") or GET /api/led → Vercel → ntfy.sh ("led:<on|off>:<password>") → VPS relay (fritzbox-led-relay) → Fritz!Box LED
 ```
 
 > **Note:** The direct voice path works because the skill registers each device with `Alexa.WakeOnLANController`, which lets the Echo device on the local network send the WoL magic packet without any cloud relay. Alexa Routines use the `PowerController` interface instead, so they always go through the relay path — which can be a VPS with WireGuard, or any local device (Raspberry Pi, NAS, etc.) that runs `wol_relay.py` and has access to the local network.
@@ -44,6 +48,7 @@ Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe
 | Windows Agent | Receives "off" commands, executes sleep/shutdown |
 | VPS + WireGuard | Relays "wake" commands from ntfy.sh to Fritz!Box |
 | Fritz!Box TR-064 | Sends WoL magic packet to the PC on the local network |
+| LED relay (optional) | VPS service (`fritzbox-led-relay`) that switches the Fritz!Box LED display |
 
 ---
 
@@ -64,6 +69,9 @@ Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe
 | `UPSTASH_REDIS_REST_URL` | from Upstash |
 | `UPSTASH_REDIS_REST_TOKEN` | from Upstash |
 | `ADMIN_PASSWORD` | A secret password of your choice |
+| `LED_TOPIC` | *(optional, LED feature)* ntfy.sh topic the LED relay listens on |
+| `LED_PASSWORD` | *(optional, LED feature)* Password expected by the LED relay |
+| `LED_CALL_KEY` | *(optional, LED feature)* Secret key for the manual `/api/led` endpoint |
 
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
 
@@ -181,6 +189,18 @@ The relay listens on ntfy.sh and logs: `[ntfy] Listening on topic: wol_xxxxxxxxx
 - Add your PC's **name** and **MAC address**.
 - Tell Alexa: **"Alexa, discover my devices"**.
 
+#### 7. (Optional) Fritz!Box LED Control
+
+The skill exposes a static virtual device **"Fritzbox LED"** (shown as a light in the Alexa app) that switches the LED display of your FRITZ!Box. It requires a separate relay service on the VPS (`fritzbox-led-relay`) that listens on its own ntfy.sh topic and toggles the LED when a message in the format `led:<on|off>:<password>` arrives. Messages older than 60 s or with a wrong password are ignored by the relay.
+
+- Set the Vercel environment variables `LED_TOPIC`, `LED_PASSWORD`, and `LED_CALL_KEY` (see step 2).
+- Tell Alexa: **"Alexa, discover my devices"** — "Fritzbox LED" appears as a light.
+- The LED can also be switched manually without Alexa:
+  ```
+  GET https://your-app.vercel.app/api/led?action=on|off&key=<LED_CALL_KEY>
+  ```
+- Monitor the relay on the VPS: `journalctl -u fritzbox-led-relay -f`
+
 ---
 
 ### 🗣️ Usage
@@ -189,6 +209,7 @@ The relay listens on ntfy.sh and logs: `[ntfy] Listening on topic: wol_xxxxxxxxx
 |---|---|
 | *"Alexa, turn on [Device Name]"* | Sends WoL via VPS → Fritz!Box TR-064 |
 | *"Alexa, turn off [Device Name]"* | Sends shutdown command via ntfy.sh → Windows Agent |
+| *"Alexa, turn on/off Fritzbox LED"* | Switches the Fritz!Box LED display via ntfy.sh → LED relay |
 
 The Windows Agent supports **Sleep**, **Shutdown**, and **Hibernate** — configurable in the tray app.
 
@@ -199,6 +220,8 @@ The Windows Agent supports **Sleep**, **Shutdown**, and **Hibernate** — config
 All communication between Vercel and your PC/VPS uses [ntfy.sh](https://ntfy.sh) with a unique, unguessable topic ID. This ID is derived from a **SHA-256 hash** of your MAC address + your private `ADMIN_PASSWORD`. No one can trigger your PC without knowing your secret password.
 
 The VPS relay uses local TR-064 (HTTP, port 49000) over the WireGuard tunnel — no Fritz!Box external access is required or enabled.
+
+The optional LED feature uses its own, fully separated chain: a dedicated ntfy.sh topic (`LED_TOPIC`) and password (`LED_PASSWORD`) taken directly from the environment variables (no hashing). The LED relay additionally ignores messages older than 60 seconds or with a wrong password.
 
 ---
 
