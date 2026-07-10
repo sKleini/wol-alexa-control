@@ -1,5 +1,7 @@
 name: Build & Release agent.exe
 
+run-name: Build & Release agent.exe (${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }})
+
 on:
   push:
     tags:
