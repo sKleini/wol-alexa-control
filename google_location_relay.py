@@ -1,18 +1,21 @@
+import json
+import os
 import sys
 import time
 import requests
 from locationsharinglib import Service
 from locationsharinglib.locationsharinglibexceptions import InvalidCookies
 
-# --- Configuration ---
-COOKIES_FILE  = "/root/google_cookies.txt"      # Netscape cookies.txt export of the Google account
-GOOGLE_EMAIL  = "your.dedicated@gmail.com"      # Google account the person shares their location with
-VERCEL_URL    = "https://your-app.vercel.app"   # Your Vercel deployment URL
-LOCATION_KEY  = "your_location_key"             # Same value as LOCATION_KEY in Vercel
-PERSONS = {                                     # Google display name -> person name in the dashboard
+# --- Configuration (edit here, or override via environment variables of the same name) ---
+COOKIES_FILE  = os.environ.get("COOKIES_FILE", "/root/google_cookies.txt")    # Netscape cookies.txt export of the Google account
+GOOGLE_EMAIL  = os.environ.get("GOOGLE_EMAIL", "your.dedicated@gmail.com")    # Google account the person shares their location with
+VERCEL_URL    = os.environ.get("VERCEL_URL", "https://your-app.vercel.app")   # Your Vercel deployment URL
+LOCATION_KEY  = os.environ.get("LOCATION_KEY", "your_location_key")           # Same value as LOCATION_KEY in Vercel
+PERSONS = json.loads(os.environ["PERSONS_MAP"]) if os.environ.get("PERSONS_MAP") else {
+    # Google display name -> person name in the dashboard
     "Julia Muster": "Julia",
 }
-POLL_INTERVAL = 180                             # Seconds between polls
+POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "180"))                   # Seconds between polls
 # ---------------------
 
 def push_location(person_name, p):
