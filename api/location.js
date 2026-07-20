@@ -1,6 +1,6 @@
 // api/location.js – POST /api/location?key=<LOCATION_KEY>&u=<person name>
-// Location ingest endpoint, fed by google_location_relay.py on the VPS
-// (or any other source that can POST { lat, lon, tst, acc, address, batt }).
+// Location ingest endpoint, fed by MacroDroid on the phone (or any other
+// source that can POST { lat, lon, tst, acc, address, batt }).
 import { Redis } from '@upstash/redis'
 
 const redis = new Redis({
