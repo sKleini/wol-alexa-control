@@ -230,7 +230,7 @@ Ask Alexa where a family member currently is and get a spoken answer like *"Juli
      - Content type: `application/json`
      - Request body (the `[...]` tokens are MacroDroid *magic text* — insert them via the `...` button next to the text field):
        ```json
-       {"lat": "[last_loc_lat]", "lon": "[last_loc_lon]", "acc": "[last_loc_accuracy]", "batt": "[battery]"}
+       {"lat": "[last_loc_lat]", "lon": "[last_loc_long]", "acc": "[last_loc_accuracy]", "batt": "[battery]"}
        ```
 4. Test: run the macro manually (▶ button) — afterwards the dashboard knows the position and the skill can answer.
 
