@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis'
+import { findZone, relativeTimeDe } from '../lib/geo.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -15,6 +16,7 @@ export default async function handler(req, res) {
 
   if (req.query.type === 'persons') return handlePersons(req, res);
   if (req.query.type === 'zones') return handleZones(req, res);
+  if (req.query.type === 'locations') return handleLocations(req, res);
 
   if (req.method === 'POST') {
     const { mac, name } = req.body;
@@ -86,6 +88,33 @@ async function handlePersons(req, res) {
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
+}
+
+async function handleLocations(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
+  const persons = await redis.get('geo_persons') || [];
+  const zones = await redis.get('geo_zones') || [];
+
+  const result = await Promise.all(persons.map(async p => {
+    const loc = await redis.get('person_location:' + p.name.toLowerCase());
+    if (!loc) return { name: p.name, default: !!p.default, location: null };
+
+    const zone = findZone(zones, loc.lat, loc.lon);
+    return {
+      name: p.name,
+      default: !!p.default,
+      location: {
+        lat: loc.lat,
+        lon: loc.lon,
+        place: zone ? zone.name : (loc.address || `${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}`),
+        age: relativeTimeDe(loc.tst),
+        batt: loc.batt,
+      },
+    };
+  }));
+
+  return res.status(200).json(result);
 }
 
 async function handleZones(req, res) {
