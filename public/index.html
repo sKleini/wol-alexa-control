@@ -112,6 +112,57 @@
 
             <a id="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
         </div>
+
+        <div class="glass-card" style="margin-top: 20px;">
+            <h1><i class="fas fa-user"></i> Persons</h1>
+
+            <form id="person-form">
+                <div class="input-group">
+                    <label>Name</label>
+                    <input type="text" id="person-name" placeholder="e.g. Julia" required>
+                </div>
+                <div class="input-group" style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="person-default" style="width: auto;">
+                    <label for="person-default" style="margin: 0;">Default person ("Alexa, wo ist ...?" routine)</label>
+                </div>
+                <button type="submit" class="btn btn-add"><i class="fas fa-plus"></i> Add Person</button>
+            </form>
+
+            <div class="device-list" id="person-list">
+                <!-- Persons loaded here -->
+            </div>
+        </div>
+
+        <div class="glass-card" style="margin-top: 20px;">
+            <h1><i class="fas fa-map-pin"></i> Zones</h1>
+
+            <form id="zone-form">
+                <div class="input-group">
+                    <label>Name (speech-ready, e.g. "zu Hause", "bei der Arbeit")</label>
+                    <input type="text" id="zone-name" placeholder="e.g. zu Hause" required>
+                </div>
+                <div class="input-group" style="display: flex; gap: 10px;">
+                    <div style="flex: 1;">
+                        <label>Latitude</label>
+                        <input type="text" id="zone-lat" placeholder="51.5123" required>
+                    </div>
+                    <div style="flex: 1;">
+                        <label>Longitude</label>
+                        <input type="text" id="zone-lng" placeholder="7.4567" required>
+                    </div>
+                    <div style="flex: 1;">
+                        <label>Radius (m)</label>
+                        <input type="text" id="zone-radius" placeholder="150" required>
+                    </div>
+                </div>
+                <button type="button" class="btn" id="zone-locate" style="background: rgba(255,255,255,0.08);"><i class="fas fa-crosshairs"></i> Use my position</button>
+                <button type="submit" class="btn btn-add"><i class="fas fa-plus"></i> Add Zone</button>
+            </form>
+
+            <div class="device-list" id="zone-list">
+                <!-- Zones loaded here -->
+            </div>
+        </div>
     </main>
 
     <script>
@@ -128,14 +179,14 @@
             if (chunks) e.target.value = chunks.join(':').toLowerCase();
         });
 
-        async function apiRequest(method, body = null) {
+        async function apiRequest(method, body = null, qs = '') {
             const password = localStorage.getItem('admin_password');
             const options = {
                 method,
                 headers: { 'Content-Type': 'application/json', 'x-admin-password': password }
             };
             if (body) options.body = JSON.stringify(body);
-            const res = await fetch('/api/manage', options);
+            const res = await fetch('/api/manage' + qs, options);
             if (res.status === 401) { logout(); return null; }
             return res.json();
         }
@@ -174,6 +225,97 @@
             }
         };
 
+        async function renderPersons() {
+            const persons = await apiRequest('GET', null, '?type=persons');
+            if (!persons) return;
+
+            const container = document.getElementById('person-list');
+            container.innerHTML = persons.length ? '' : '<p style="text-align:center; padding: 20px;">No persons configured.</p>';
+
+            persons.forEach(p => {
+                const item = document.createElement('div');
+                item.className = 'device-item';
+                item.innerHTML = `
+                    <div class="device-info">
+                        <h3>${p.name} ${p.default ? '<i class="fas fa-star" title="Default person"></i>' : ''}</h3>
+                        <p>Standort via Google-Freigabe</p>
+                    </div>
+                    <button class="btn-delete" onclick="deletePerson('${p.name}')">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        window.deletePerson = async (name) => {
+            if (confirm('Delete this person?')) {
+                await apiRequest('DELETE', { name }, '?type=persons');
+                renderPersons();
+            }
+        };
+
+        async function renderZones() {
+            const zones = await apiRequest('GET', null, '?type=zones');
+            if (!zones) return;
+
+            const container = document.getElementById('zone-list');
+            container.innerHTML = zones.length ? '' : '<p style="text-align:center; padding: 20px;">No zones configured.</p>';
+
+            zones.forEach(z => {
+                const item = document.createElement('div');
+                item.className = 'device-item';
+                item.innerHTML = `
+                    <div class="device-info">
+                        <h3>${z.name}</h3>
+                        <p>${z.lat.toFixed(4)}, ${z.lng.toFixed(4)} · ${z.radius} m</p>
+                    </div>
+                    <button class="btn-delete" onclick="deleteZone('${z.name}')">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        window.deleteZone = async (name) => {
+            if (confirm('Delete this zone?')) {
+                await apiRequest('DELETE', { name }, '?type=zones');
+                renderZones();
+            }
+        };
+
+        document.getElementById('person-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('person-name').value;
+            const isDefault = document.getElementById('person-default').checked;
+            await apiRequest('POST', { name, default: isDefault }, '?type=persons');
+            document.getElementById('person-form').reset();
+            renderPersons();
+        });
+
+        document.getElementById('zone-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('zone-name').value;
+            const lat = document.getElementById('zone-lat').value;
+            const lng = document.getElementById('zone-lng').value;
+            const radius = document.getElementById('zone-radius').value;
+            await apiRequest('POST', { name, lat, lng, radius }, '?type=zones');
+            document.getElementById('zone-form').reset();
+            renderZones();
+        });
+
+        document.getElementById('zone-locate').addEventListener('click', () => {
+            if (!navigator.geolocation) return alert('Geolocation not supported by this browser.');
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    document.getElementById('zone-lat').value = pos.coords.latitude.toFixed(6);
+                    document.getElementById('zone-lng').value = pos.coords.longitude.toFixed(6);
+                },
+                () => alert('Could not determine position.')
+            );
+        });
+
         loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const pass = document.getElementById('admin-auth').value;
@@ -183,6 +325,8 @@
                 loginOverlay.style.display = 'none';
                 dashboard.style.display = 'block';
                 renderDevices();
+                renderPersons();
+                renderZones();
             } else {
                 document.getElementById('login-status').innerText = '❌ Incorrect password.';
             }
@@ -205,6 +349,8 @@
                     loginOverlay.style.display = 'none';
                     dashboard.style.display = 'block';
                     renderDevices();
+                    renderPersons();
+                    renderZones();
                 }
             });
         }

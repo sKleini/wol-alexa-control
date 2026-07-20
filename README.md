@@ -13,6 +13,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Secure SHA-256 Bridge**: Encrypted communication between Alexa and your PC using your private hash.
 - **Modern Dashboard**: Sleek *Glassmorphism* interface to manage your devices.
 - **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
+- **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — fed by the MacroDroid app posting the phone's position, no extra server component.
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
 ---
@@ -34,6 +35,10 @@ Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe
 
 Fritzbox LED (optional):
 Alexa ("Fritzbox LED") or GET /api/led → Vercel → ntfy.sh ("led:<on|off>:<password>") → VPS relay (fritzbox-led-relay) → Fritz!Box LED
+
+Location feature (optional): "Alexa, wo ist Julia?"
+Phone (MacroDroid, periodic HTTP POST) → Vercel /api/location → Redis
+Alexa Routine "wo ist Julia" → Custom Skill → Vercel /api/skill → zone match / Nominatim → spoken answer
 ```
 
 > **Note:** The direct voice path works because the skill registers each device with `Alexa.WakeOnLANController`, which lets the Echo device on the local network send the WoL magic packet without any cloud relay. Alexa Routines use the `PowerController` interface instead, so they always go through the relay path — which can be a VPS with WireGuard, or any local device (Raspberry Pi, NAS, etc.) that runs `wol_relay.py` and has access to the local network.
@@ -49,6 +54,8 @@ Alexa ("Fritzbox LED") or GET /api/led → Vercel → ntfy.sh ("led:<on|off>:<pa
 | VPS + WireGuard | Relays "wake" commands from ntfy.sh to Fritz!Box |
 | Fritz!Box TR-064 | Sends WoL magic packet to the PC on the local network |
 | LED relay (optional) | VPS service (`fritzbox-led-relay`) that switches the Fritz!Box LED display |
+| MacroDroid (optional) | Android automation app that posts the phone's location to `/api/location` |
+| Alexa Custom Skill (optional) | Second skill that answers "Wo ist [Person]?" with a spoken location |
 
 ---
 
@@ -72,6 +79,9 @@ Alexa ("Fritzbox LED") or GET /api/led → Vercel → ntfy.sh ("led:<on|off>:<pa
 | `LED_TOPIC` | *(optional, LED feature)* ntfy.sh topic the LED relay listens on |
 | `LED_PASSWORD` | *(optional, LED feature)* Password expected by the LED relay |
 | `LED_CALL_KEY` | *(optional, LED feature)* Secret key for the manual `/api/led` endpoint |
+| `LOCATION_KEY` | *(optional, location feature)* Secret key for the `/api/location` ingest endpoint |
+| `ALEXA_SKILL_ID` | *(optional, location feature)* Skill ID of the custom skill (`amzn1.ask.skill....`) |
+| `DEFAULT_PERSON` | *(optional, location feature)* Fallback person name (e.g. `Julia`) |
 
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
 
@@ -201,6 +211,103 @@ The skill exposes a static virtual device **"Fritzbox LED"** (shown as a light i
   ```
 - Monitor the relay on the VPS: `journalctl -u fritzbox-led-relay -f`
 
+#### 8. (Optional) 📍 Location Feature — "Alexa, wo ist Julia?"
+
+Ask Alexa where a family member currently is and get a spoken answer like *"Julia ist zu Hause, zuletzt aktualisiert vor 5 Minuten."* The location comes from a small automation app ([MacroDroid](https://www.macrodroid.com/)) on their Android phone that posts the position directly to your Vercel app — no cloud service in between, no VPS component, no fragile APIs.
+
+**How it works:** MacroDroid sends the phone's location every few minutes via HTTP POST to `/api/location`, where it is stored in Redis. A second Alexa skill (type **Custom**, since Smart Home skills cannot speak free-form answers) reads it and answers. Named zones ("zu Hause", "bei der Arbeit") are matched by GPS distance; outside all zones the answer falls back to reverse geocoding via OpenStreetMap/Nominatim.
+
+##### 8.1 MacroDroid on the phone
+
+1. Install [MacroDroid](https://play.google.com/store/apps/details?id=com.arlosoft.macrodroid) on the phone of the person to locate (the free tier is enough — this needs 1 of 5 macros).
+2. Grant the location permission (**"Allow all the time"**) and exclude MacroDroid from battery optimization when the app asks — otherwise Android suspends the periodic updates.
+3. Create a macro, e.g. "Standort senden":
+   - **Trigger**: *Interval Timer* — e.g. every 15 minutes.
+   - **Action 1**: *Location → Force Location Update* (ensures a fresh GPS fix).
+   - **Action 2**: *Connectivity → HTTP Request*:
+     - Method: **POST**
+     - URL: `https://your-app.vercel.app/api/location?key=<LOCATION_KEY>&u=Julia`
+     - Content type: `application/json`
+     - Request body (the `[...]` tokens are MacroDroid *magic text* — insert them via the `...` button next to the text field):
+       ```json
+       {"lat": "[last_loc_lat]", "lon": "[last_loc_long]", "acc": "[last_loc_accuracy]", "batt": "[battery]"}
+       ```
+4. Test: run the macro manually (▶ button) — afterwards the dashboard knows the position and the skill can answer.
+
+The `u` parameter must match the person's name in the dashboard (8.2). For more family members, repeat the setup on each phone with its own name. The timestamp is set server-side on arrival, so the spoken "zuletzt aktualisiert vor X Minuten" reflects the last successful upload.
+
+##### 8.2 Vercel & Dashboard
+
+> 💡 Env vars, persons and zones can be created automatically — see **8.5 Automated setup via GitHub Actions**.
+
+- Add the environment variables `LOCATION_KEY`, `ALEXA_SKILL_ID` (see 8.3) and optionally `DEFAULT_PERSON` in Vercel (see step 2) and redeploy.
+- Open the dashboard and add:
+  - **Person**: name (e.g. `Julia`), check **Default person** (this is who the "Alexa, wo ist Julia?" routine will answer about).
+  - **Zones**: speech-ready name (e.g. `zu Hause`, `bei der Arbeit`), latitude/longitude (right-click in Google Maps copies the coordinates, or use the *"Use my position"* button) and a radius of ~100–200 m.
+
+##### 8.3 Alexa Custom Skill
+
+1. [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) → **Create Skill** → type **Custom**, language **German (DE)**, hosting **Provision your own**.
+2. **Invocation name**: e.g. `familien finder`.
+3. Open the **JSON Editor** under *Interaction Model* and paste (add one slot value per person):
+
+```json
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "familien finder",
+      "intents": [
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
+        {
+          "name": "WhereIsPersonIntent",
+          "slots": [{ "name": "person", "type": "PERSON_NAME" }],
+          "samples": [
+            "wo ist {person}",
+            "wo {person} ist",
+            "wo {person} gerade ist",
+            "wo sich {person} befindet",
+            "nach dem standort von {person}",
+            "sag mir wo {person} ist"
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "PERSON_NAME",
+          "values": [{ "name": { "value": "Julia" } }]
+        }
+      ]
+    }
+  }
+}
+```
+
+4. **Build the model**.
+5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"*.
+6. Copy the **Skill ID** (`amzn1.ask.skill....`) into the `ALEXA_SKILL_ID` environment variable in Vercel and redeploy.
+7. The skill works on all Echo devices of the same Amazon account while it stays in **Development** mode — no publishing needed. Test it in the **Test** tab (set to *Development*): type `frag familien finder wo julia ist`.
+
+> The endpoint verifies the skill ID and rejects stale requests. Full Alexa request-signature verification (required for certification) is not implemented — fine for a private skill in development mode.
+
+##### 8.4 Alexa Routine for the exact phrase
+
+To make exactly **"Alexa, wo ist Julia?"** work (without the skill's invocation name):
+
+- Alexa app → **More → Routines → +**
+- **When**: *Voice* → `wo ist julia`
+- **Action**: *Customized → Skills* → open your custom skill
+
+The skill's launch handler then immediately answers with the location of the **default person**. For other persons use: *"Alexa, frag familien finder, wo [Name] ist"*.
+
+##### 8.5 Automated setup via GitHub Actions
+
+The server-side part of step 8.2 lends itself to automation from any repository: the Vercel env vars can be upserted via `POST https://api.vercel.com/v10/projects/<id>/env?upsert=true`, and persons/zones seeded through `POST /api/manage?type=persons|zones` (both endpoints are idempotent upserts, so such a workflow can be re-run at any time). Keep coordinates and keys in repository secrets so they stay out of the repo and masked in logs.
+
+The remaining steps stay manual: the MacroDroid macro on the phone (8.1), creating the custom skill (8.3) and the Alexa routine (8.4).
+
 ---
 
 ### 🗣️ Usage
@@ -210,6 +317,8 @@ The skill exposes a static virtual device **"Fritzbox LED"** (shown as a light i
 | *"Alexa, turn on [Device Name]"* | Sends WoL via VPS → Fritz!Box TR-064 |
 | *"Alexa, turn off [Device Name]"* | Sends shutdown command via ntfy.sh → Windows Agent |
 | *"Alexa, turn on/off Fritzbox LED"* | Switches the Fritz!Box LED display via ntfy.sh → LED relay |
+| *"Alexa, wo ist Julia?"* | Speaks the current location of the default person (via routine, see 8.4) |
+| *"Alexa, frag familien finder, wo [Name] ist"* | Speaks the current location of any configured person |
 
 The Windows Agent supports **Sleep**, **Shutdown**, and **Hibernate** — configurable in the tray app.
 

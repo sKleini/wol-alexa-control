@@ -13,6 +13,9 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized: Incorrect password or not configured on Vercel' });
   }
 
+  if (req.query.type === 'persons') return handlePersons(req, res);
+  if (req.query.type === 'zones') return handleZones(req, res);
+
   if (req.method === 'POST') {
     const { mac, name } = req.body;
     if (!mac || !name) return res.status(400).json({ error: 'Missing data' });
@@ -48,6 +51,71 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json(devices);
+  }
+
+  return res.status(405).json({ error: 'Method not allowed' });
+}
+
+async function handlePersons(req, res) {
+  let persons = await redis.get('geo_persons') || [];
+
+  if (req.method === 'GET') return res.status(200).json(persons);
+
+  if (req.method === 'POST') {
+    const name = (req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Missing data' });
+    const isDefault = !!req.body.default;
+
+    if (isDefault) persons = persons.map(p => ({ ...p, default: false }));
+
+    const index = persons.findIndex(p => p.name.toLowerCase() === name.toLowerCase());
+    const entry = { name, default: isDefault };
+    if (index > -1) persons[index] = entry;
+    else persons.push(entry);
+
+    await redis.set('geo_persons', persons);
+    return res.status(200).json({ success: true, persons });
+  }
+
+  if (req.method === 'DELETE') {
+    const name = (req.body.name || '').trim();
+    persons = persons.filter(p => p.name.toLowerCase() !== name.toLowerCase());
+    await redis.set('geo_persons', persons);
+    await redis.del('person_location:' + name.toLowerCase());
+    return res.status(200).json({ success: true, persons });
+  }
+
+  return res.status(405).json({ error: 'Method not allowed' });
+}
+
+async function handleZones(req, res) {
+  let zones = await redis.get('geo_zones') || [];
+
+  if (req.method === 'GET') return res.status(200).json(zones);
+
+  if (req.method === 'POST') {
+    const name = (req.body.name || '').trim();
+    const lat = parseFloat(req.body.lat);
+    const lng = parseFloat(req.body.lng);
+    const radius = parseFloat(req.body.radius);
+    if (!name || !Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radius)) {
+      return res.status(400).json({ error: 'Missing data' });
+    }
+
+    const index = zones.findIndex(z => z.name.toLowerCase() === name.toLowerCase());
+    const entry = { name, lat, lng, radius };
+    if (index > -1) zones[index] = entry;
+    else zones.push(entry);
+
+    await redis.set('geo_zones', zones);
+    return res.status(200).json({ success: true, zones });
+  }
+
+  if (req.method === 'DELETE') {
+    const name = (req.body.name || '').trim();
+    zones = zones.filter(z => z.name.toLowerCase() !== name.toLowerCase());
+    await redis.set('geo_zones', zones);
+    return res.status(200).json({ success: true, zones });
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
