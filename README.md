@@ -342,35 +342,11 @@ To make exactly **"Alexa, wo ist Julia?"** work (without the skill's invocation 
 
 The skill's launch handler then immediately answers with the location of the **default person**. For other persons use: *"Alexa, frag familien finder, wo [Name] ist"*.
 
-##### 8.6 Automated setup via GitHub Action
+##### 8.6 Automated setup via GitHub Actions
 
-Instead of doing 8.2 (VPS relay) and 8.3 (Vercel env vars, persons, zones) by hand, the workflow **Setup Location Feature** (`.github/workflows/setup-location.yml`) does them for you. It can be re-run at any time — all operations are idempotent upserts.
+Steps 8.2 and 8.3 lend themselves to automation from whatever repository manages your VPS: `google_location_relay.py` reads its entire configuration from environment variables, so a workflow can fetch it from this repo (raw URL), copy it via SSH and write a systemd unit whose `Environment=` lines carry the config from repository secrets — no code injection needed. The Vercel env vars can be upserted via `POST https://api.vercel.com/v10/projects/<id>/env?upsert=true`, and persons/zones seeded through `POST /api/manage?type=persons|zones` (both endpoints are idempotent upserts, so such a workflow can be re-run at any time). Keep coordinates, cookies (`base64 -w0 cookies.txt`) and keys in repository secrets so they stay out of the repo and masked in logs.
 
-**1. Add these secrets** in your fork under *Settings → Secrets and variables → Actions → New repository secret*:
-
-| Secret | Value | Used for |
-|---|---|---|
-| `LOCATION_KEY` | A secret of your choice for the `/api/location` ingest endpoint | Vercel, VPS |
-| `VERCEL_TOKEN` | Vercel account token ([vercel.com → Account Settings → Tokens](https://vercel.com/account/tokens)) | Vercel |
-| `VERCEL_PROJECT_ID` | Project ID (Vercel project → Settings → General) | Vercel |
-| `VERCEL_TEAM_ID` | *(optional)* only for team-scoped projects | Vercel |
-| `VERCEL_DEPLOY_HOOK` | *(optional)* Deploy hook URL (project → Settings → Git → Deploy Hooks) — enables automatic redeploy | Vercel |
-| `ALEXA_SKILL_ID` | *(initially omit)* Skill ID after creating the custom skill (8.4) | Vercel |
-| `ADMIN_PASSWORD` | Your existing dashboard password | Seeding |
-| `VPS_HOST` | IP or hostname of the VPS | VPS |
-| `VPS_USER` | SSH user (e.g. `root`) | VPS |
-| `VPS_PORT` | *(optional)* SSH port, default 22 | VPS |
-| `VPS_SSH_KEY` | Full private SSH key content (e.g. ed25519) authorized on the VPS | VPS |
-| `GOOGLE_EMAIL` | E-mail of the dedicated Google account (8.1) | VPS |
-| `GOOGLE_COOKIES_B64` | `base64 -w0 cookies.txt` of the exported cookies (8.1) | VPS |
-| `PERSONS_MAP` | JSON object mapping Google display name → dashboard name, e.g. `{"Julia Muster": "Julia"}` | VPS, Seeding |
-| `SETUP_ZONES` | JSON array of zones, e.g. `[{"name":"zu Hause","lat":51.5123,"lng":7.4567,"radius":150}]` | Seeding |
-
-Storing coordinates, cookies and keys as secrets keeps them out of the repository and masked in the workflow logs.
-
-**2. Run the workflow**: *Actions → Setup Location Feature → Run workflow*. Enter your Vercel app URL and the default person; the three checkboxes let you run only parts of the setup.
-
-**3. Remaining manual steps** (no APIs exist for these): Google location sharing on the phone + cookie export (8.1), creating the custom skill (8.4 — then add `ALEXA_SKILL_ID` as secret and re-run the workflow with only *Vercel* checked), and the Alexa routine (8.5).
+The remaining steps have no APIs and stay manual: Google location sharing on the phone + cookie export (8.1), creating the custom skill (8.4) and the Alexa routine (8.5).
 
 ---
 
