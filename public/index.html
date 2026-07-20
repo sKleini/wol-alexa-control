@@ -226,19 +226,23 @@
         };
 
         async function renderPersons() {
-            const persons = await apiRequest('GET', null, '?type=persons');
+            const persons = await apiRequest('GET', null, '?type=locations');
             if (!persons) return;
 
             const container = document.getElementById('person-list');
             container.innerHTML = persons.length ? '' : '<p style="text-align:center; padding: 20px;">No persons configured.</p>';
 
             persons.forEach(p => {
+                const loc = p.location;
+                const locLine = loc
+                    ? `📍 <a href="https://maps.google.com/?q=${loc.lat},${loc.lon}" target="_blank" rel="noopener" style="color: inherit;">${loc.place}</a> · ${loc.age}${loc.batt != null ? ` · 🔋 ${loc.batt}%` : ''}`
+                    : 'Noch kein Standort empfangen';
                 const item = document.createElement('div');
                 item.className = 'device-item';
                 item.innerHTML = `
                     <div class="device-info">
                         <h3>${p.name} ${p.default ? '<i class="fas fa-star" title="Default person"></i>' : ''}</h3>
-                        <p>Standort via Google-Freigabe</p>
+                        <p>${locLine}</p>
                     </div>
                     <button class="btn-delete" onclick="deletePerson('${p.name}')">
                         <i class="fas fa-trash"></i>
@@ -247,6 +251,10 @@
                 container.appendChild(item);
             });
         }
+
+        setInterval(() => {
+            if (dashboard.style.display !== 'none') renderPersons();
+        }, 60000);
 
         window.deletePerson = async (name) => {
             if (confirm('Delete this person?')) {
