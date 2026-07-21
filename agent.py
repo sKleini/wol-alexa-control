@@ -104,7 +104,7 @@ class WolAgentApp(ctk.CTk):
         self.log_box.pack(pady=15, padx=20)
         self.log_box.configure(state="disabled")
 
-        self.footer = ctk.CTkLabel(self, text="Built by FlowersPowerz", font=ctk.CTkFont(size=10), text_color="gray")
+        self.footer = ctk.CTkLabel(self, text="Built by Kleini", font=ctk.CTkFont(size=10), text_color="gray")
         self.footer.pack(side="bottom", pady=10)
 
     def add_log(self, text):
