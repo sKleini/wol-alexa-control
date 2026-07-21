@@ -51,7 +51,7 @@ async function handleDiscovery(request, res) {
 
       return {
         endpointId: "endpoint-" + cleanId,
-        manufacturerName: "FlowersPowerz",
+        manufacturerName: "Kleini",
         friendlyName: config.name,
         description: `PC WoL: ${config.name}`,
         displayCategories: ["COMPUTER"],
@@ -95,7 +95,7 @@ async function handleDiscovery(request, res) {
 
     endpoints.push({
       endpointId: "endpoint-fritzbox-led",
-      manufacturerName: "FlowersPowerz",
+      manufacturerName: "Kleini",
       friendlyName: "Fritzbox LED",
       description: "LED-Anzeige der FRITZ!Box",
       displayCategories: ["LIGHT"],
