@@ -13,7 +13,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Secure SHA-256 Bridge**: Encrypted communication between Alexa and your PC using your private hash.
 - **Modern Dashboard**: Sleek *Glassmorphism* interface to manage your devices.
 - **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
-- **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — fed by the MacroDroid app posting the phone's position, no extra server component.
+- **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — fed by a free location-logger app (GPSLogger) posting the phone's position, no extra server component.
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
 ---
@@ -37,7 +37,7 @@ Fritzbox LED (optional):
 Alexa ("Fritzbox LED") or GET /api/led → Vercel → ntfy.sh ("led:<on|off>:<password>") → VPS relay (fritzbox-led-relay) → Fritz!Box LED
 
 Location feature (optional): "Alexa, wo ist Julia?"
-Phone (MacroDroid, periodic HTTP POST) → Vercel /api/location → Redis
+Phone (GPSLogger, periodic HTTP) → Vercel /api/location → Redis
 Alexa Routine "wo ist Julia" → Custom Skill → Vercel /api/skill → zone match / Nominatim → spoken answer
 ```
 
@@ -54,7 +54,7 @@ Alexa Routine "wo ist Julia" → Custom Skill → Vercel /api/skill → zone mat
 | VPS + WireGuard | Relays "wake" commands from ntfy.sh to Fritz!Box |
 | Fritz!Box TR-064 | Sends WoL magic packet to the PC on the local network |
 | LED relay (optional) | VPS service (`fritzbox-led-relay`) that switches the Fritz!Box LED display |
-| MacroDroid (optional) | Android automation app that posts the phone's location to `/api/location` |
+| GPSLogger (optional) | Free Android app that posts the phone's location to `/api/location` |
 | Alexa Custom Skill (optional) | Second skill that answers "Wo ist [Person]?" with a spoken location |
 
 ---
@@ -213,28 +213,27 @@ The skill exposes a static virtual device **"Fritzbox LED"** (shown as a light i
 
 #### 8. (Optional) 📍 Location Feature — "Alexa, wo ist Julia?"
 
-Ask Alexa where a family member currently is and get a spoken answer like *"Julia ist zu Hause, zuletzt aktualisiert vor 5 Minuten."* The location comes from a small automation app ([MacroDroid](https://www.macrodroid.com/)) on their Android phone that posts the position directly to your Vercel app — no cloud service in between, no VPS component, no fragile APIs.
+Ask Alexa where a family member currently is and get a spoken answer like *"Julia ist zu Hause, zuletzt aktualisiert vor 5 Minuten."* The location comes from a free, open-source logger app ([GPSLogger](https://gpslogger.app/)) on their Android phone that posts the position directly to your Vercel app — no cloud service in between, no VPS component, no fragile APIs.
 
-**How it works:** MacroDroid sends the phone's location every few minutes via HTTP POST to `/api/location`, where it is stored in Redis. A second Alexa skill (type **Custom**, since Smart Home skills cannot speak free-form answers) reads it and answers. Named zones ("zu Hause", "bei der Arbeit") are matched by GPS distance; outside all zones the answer falls back to reverse geocoding via OpenStreetMap/Nominatim.
+**How it works:** GPSLogger sends the phone's location every few minutes to `/api/location`, where it is stored in Redis. A second Alexa skill (type **Custom**, since Smart Home skills cannot speak free-form answers) reads it and answers. Named zones ("zu Hause", "bei der Arbeit") are matched by GPS distance; outside all zones the answer falls back to reverse geocoding via OpenStreetMap/Nominatim.
 
-##### 8.1 MacroDroid on the phone
+##### 8.1 GPSLogger on the phone
 
-1. Install [MacroDroid](https://play.google.com/store/apps/details?id=com.arlosoft.macrodroid) on the phone of the person to locate (the free tier is enough — this needs 1 of 5 macros).
-2. Grant the location permission (**"Allow all the time"**) and exclude MacroDroid from battery optimization when the app asks — otherwise Android suspends the periodic updates.
-3. Create a macro, e.g. "Standort senden":
-   - **Trigger**: *Interval Timer* — e.g. every 15 minutes.
-   - **Action 1**: *Location → Force Location Update* (ensures a fresh GPS fix).
-   - **Action 2**: *Connectivity → HTTP Request*:
-     - Method: **POST**
-     - URL: `https://your-app.vercel.app/api/location?key=<LOCATION_KEY>&u=Julia`
-     - Content type: `application/json`
-     - Request body (the `[...]` tokens are MacroDroid *magic text* — insert them via the `...` button next to the text field):
-       ```json
-       {"lat": "[last_loc_lat]", "lon": "[last_loc_long]", "acc": "[last_loc_accuracy]", "batt": "[battery]"}
-       ```
-4. Test: run the macro manually (▶ button) — afterwards the dashboard knows the position and the skill can answer.
+[GPSLogger](https://gpslogger.app/) is free and open source — install it from [F-Droid](https://f-droid.org/packages/com.mendhak.gpslogger/) or the [Play Store](https://play.google.com/store/apps/details?id=com.mendhak.gpslogger). It can log to a custom URL, so it posts directly to your endpoint with no server-side changes.
 
-The `u` parameter must match the person's name in the dashboard (8.2). For more family members, repeat the setup on each phone with its own name. The timestamp is set server-side on arrival, so the spoken "zuletzt aktualisiert vor X Minuten" reflects the last successful upload.
+1. Install GPSLogger, grant the location permission (**"Allow all the time"**) and disable battery optimization for it when prompted — otherwise Android suspends the periodic updates.
+2. **Logging details → Log to custom URL** → enable it and set:
+   - **URL**:
+     ```
+     https://your-app.vercel.app/api/location?key=<LOCATION_KEY>&u=Julia&lat=%LAT&lon=%LON&acc=%ACC&batt=%BATT
+     ```
+     GPSLogger replaces `%LAT`, `%LON`, `%ACC` and `%BATT` with the live values. Leave the HTTP method at the default (GET) — no request body needed.
+3. **Performance** → set a logging interval, e.g. every 900 seconds (15 min); optionally "only log when moved a distance" to save battery.
+4. Start logging (▶). After the first fix the dashboard shows the position and the skill can answer.
+
+The `u` parameter must match the person's name in the dashboard (8.2). For more family members, install GPSLogger on each phone with its own `&u=<name>` in the URL. The timestamp is set server-side on arrival, so the spoken "zuletzt aktualisiert vor X Minuten" reflects the last successful upload.
+
+> The endpoint also accepts a JSON `POST` with a `{"lat":…,"lon":…,"acc":…,"batt":…}` body, so apps like [OwnTracks](https://owntracks.org/) work too — point them at the same URL (without the `lat`/`lon` query params).
 
 ##### 8.2 Vercel & Dashboard
 
@@ -307,7 +306,7 @@ The skill's launch handler then immediately answers with the location of the **d
 
 The server-side part of step 8.2 lends itself to automation from any repository: the Vercel env vars can be upserted via `POST https://api.vercel.com/v10/projects/<id>/env?upsert=true`, and persons/zones seeded through `POST /api/manage?type=persons|zones` (both endpoints are idempotent upserts, so such a workflow can be re-run at any time). Keep coordinates and keys in repository secrets so they stay out of the repo and masked in logs.
 
-The remaining steps stay manual: the MacroDroid macro on the phone (8.1), creating the custom skill (8.3) and the Alexa routine (8.4).
+The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creating the custom skill (8.3) and the Alexa routine (8.4).
 
 ---
 
