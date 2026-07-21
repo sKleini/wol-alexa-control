@@ -244,6 +244,7 @@ The `u` parameter must match the person's name in the dashboard (8.2). For more 
 - Open the dashboard and add:
   - **Person**: name (e.g. `Julia`), check **Default person** (this is who the "Alexa, wo ist Julia?" routine will answer about).
   - **Zones**: speech-ready name (e.g. `zu Hause`, `bei der Arbeit`), latitude/longitude (right-click in Google Maps copies the coordinates, or use the *"Use my position"* button) and a radius of ~100–200 m.
+- Once locations arrive, each person in the dashboard shows their last known position — the matched zone (or address/coordinates), the relative age and the battery level, e.g. *"📍 zu Hause · vor 5 Minuten · 🔋 80 %"* — linked to the exact spot on Google Maps. The card refreshes every 60 seconds while the dashboard is open.
 
 ##### 8.3 Alexa Custom Skill
 
