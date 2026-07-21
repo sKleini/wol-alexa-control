@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Datenschutzerklärung | Familien Finder</title>
+    <style>
+        :root {
+            --primary: #00f2ff;
+            --secondary: #7000ff;
+            --bg: #0a0a0c;
+            --card-bg: rgba(255, 255, 255, 0.05);
+            --text: #ffffff;
+            --muted: rgba(255, 255, 255, 0.7);
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+        body {
+            background-color: var(--bg);
+            background-image: radial-gradient(circle at 50% 0%, #1a1a2e 0%, #0a0a0c 60%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 40px;
+            width: 100%;
+            max-width: 720px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+        h1 {
+            font-size: 2rem;
+            background: linear-gradient(to right, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+        .updated { color: var(--muted); font-size: 0.85rem; margin-bottom: 28px; }
+        h2 { font-size: 1.2rem; color: var(--primary); margin: 28px 0 10px; }
+        p, li { color: var(--muted); margin-bottom: 10px; }
+        ul { padding-left: 22px; }
+        strong { color: var(--text); }
+        a { color: var(--primary); }
+        .footer { margin-top: 32px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem; color: var(--muted); }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Datenschutzerklärung</h1>
+        <div class="updated">Alexa-Skill „Familien Finder" · Stand: Juli 2026</div>
+
+        <p>Der Alexa-Skill „Familien Finder" ist ein privat betriebener Skill für den Einsatz im eigenen Haushalt. Diese Erklärung beschreibt, welche Daten dabei verarbeitet werden.</p>
+
+        <h2>1. Verantwortlicher</h2>
+        <p>Betreiber dieses privaten Skills und der zugehörigen Anwendung:<br>
+        <strong>[Dein Name]</strong>, Kontakt: <strong>[deine-kontakt-email]</strong></p>
+
+        <h2>2. Welche Daten verarbeitet werden</h2>
+        <ul>
+            <li><strong>Standortdaten</strong> (geografische Koordinaten) der Familienmitglieder, die der Anwendung ausdrücklich zugestimmt haben.</li>
+            <li><strong>Akkustand</strong> des jeweiligen Geräts (optional).</li>
+            <li><strong>Zeitpunkt</strong> der letzten Standortmeldung.</li>
+        </ul>
+        <p>Es werden <strong>keine</strong> Kontakte, Nachrichten, Fotos oder sonstigen personenbezogenen Daten erfasst.</p>
+
+        <h2>3. Wie die Daten erhoben werden</h2>
+        <p>Eine Automatisierungs-App auf dem jeweiligen Mobilgerät sendet den Standort in regelmäßigen Abständen an einen <strong>selbst betriebenen Server</strong> des Verantwortlichen. Die Einrichtung erfolgt freiwillig und ausschließlich durch die betroffene Person bzw. mit deren Einverständnis.</p>
+
+        <h2>4. Speicherung und Aufbewahrung</h2>
+        <p>Gespeichert wird jeweils nur die <strong>zuletzt gemeldete Position</strong> pro Person; jede neue Meldung überschreibt die vorherige. Es wird <strong>kein Bewegungsverlauf</strong> angelegt. Die Daten liegen auf der vom Verantwortlichen betriebenen Infrastruktur (Hosting-Plattform und Datenbank).</p>
+
+        <h2>5. Weitergabe an Dritte</h2>
+        <p>Die Standortdaten werden <strong>nicht verkauft und nicht zu Werbezwecken weitergegeben</strong>. Befindet sich eine Person außerhalb der selbst definierten Orte, werden die Koordinaten zur Ermittlung des Straßen-/Ortsnamens an den Dienst <a href="https://openstreetmap.org/">OpenStreetMap/Nominatim</a> übermittelt. Die Sprachverarbeitung erfolgt über Amazon Alexa gemäß den <a href="https://www.amazon.de/gp/help/customer/display.html?nodeId=201909010">Amazon-Datenschutzhinweisen</a>.</p>
+
+        <h2>6. Zweck</h2>
+        <p>Die Verarbeitung dient ausschließlich dazu, auf Nachfrage über Alexa den aktuellen Aufenthaltsort eines einverstandenen Familienmitglieds mitzuteilen.</p>
+
+        <h2>7. Rechte der betroffenen Personen</h2>
+        <p>Jede betroffene Person kann die Standortfreigabe jederzeit beenden (durch Deaktivieren der App auf dem eigenen Gerät) und die Löschung ihrer gespeicherten Position beim Verantwortlichen verlangen.</p>
+
+        <div class="footer">
+            Dieser Skill wird privat und nicht kommerziell betrieben. Bei Fragen zum Datenschutz wende dich an den oben genannten Kontakt.
+        </div>
+    </div>
+</body>
+</html>
