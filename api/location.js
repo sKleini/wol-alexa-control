@@ -13,22 +13,42 @@ export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   if (!process.env.LOCATION_KEY || req.query.key !== process.env.LOCATION_KEY) return res.status(401).end();
 
+  // Prefer JSON body (keeps existing behavior), fall back to query params.
+  const body = req.body || {};
+
+  // OwnTracks posts a JSON body carrying a "_type" discriminator and expects the
+  // HTTP response to be a JSON array of OwnTracks messages ([] = "received, no
+  // commands"). Our default {ok:true} reply has no _type, so OwnTracks fails to
+  // parse it, treats delivery as failed and re-queues the message forever. When
+  // the caller is OwnTracks, answer in its own dialect. GPSLogger ignores the
+  // body and keeps the {ok:true} reply.
+  const isOwnTracks = typeof body._type === 'string';
+  const ackOwnTracks = () => res.status(200).json([]);
+
   const personName = (req.query.u || process.env.DEFAULT_PERSON || '').trim();
-  if (!personName) return res.status(400).json({ error: 'Missing person (u param or DEFAULT_PERSON)' });
+  if (!personName) {
+    if (isOwnTracks) return ackOwnTracks();
+    return res.status(400).json({ error: 'Missing person (u param or DEFAULT_PERSON)' });
+  }
 
   const persons = await redis.get('geo_persons') || [];
   const person = persons.find(p => p.name.toLowerCase() === personName.toLowerCase());
   if (!person) {
     console.warn(`Location update for unknown person: ${personName}`);
+    if (isOwnTracks) return ackOwnTracks();
     return res.status(200).json({ ok: false, error: 'Unknown person' });
   }
 
-  // Prefer JSON body (keeps existing behavior), fall back to query params.
-  const body = req.body || {};
   const pick = (k) => (body[k] ?? req.query[k]);
   const lat = parseFloat(pick('lat'));
   const lon = parseFloat(pick('lon'));
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ error: 'Missing lat/lon' });
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    // OwnTracks legitimately sends messages without coordinates (lwt, status,
+    // waypoints, transitions). Acknowledge them without storing so they are not
+    // re-queued; other sources still get an explicit error.
+    if (isOwnTracks) return ackOwnTracks();
+    return res.status(400).json({ error: 'Missing lat/lon' });
+  }
 
   const tst = parseInt(pick('tst'));
   const location = {
@@ -42,5 +62,6 @@ export default async function handler(req, res) {
   };
 
   await redis.set('person_location:' + person.name.toLowerCase(), location);
+  if (isOwnTracks) return ackOwnTracks();
   return res.status(200).json({ ok: true });
 }
