@@ -336,6 +336,6 @@ The optional LED feature uses its own, fully separated chain: a dedicated ntfy.s
 ---
 
 ### 📜 License
-Licensed under the MIT License. Developed with ❤️ by **Kleini**.
+Licensed under the MIT License. Developed with ❤️ by **FlowersPowerz**.
 
 *If you like this project, please give it a ⭐!*
