@@ -39,6 +39,9 @@ Alexa ("Fritzbox LED") or GET /api/led → Vercel → ntfy.sh ("led:<on|off>:<pa
 Location feature (optional): "Alexa, wo ist Julia?"
 Phone (GPSLogger, periodic HTTP) → Vercel /api/location → Redis
 Alexa Routine "wo ist Julia" → Custom Skill → Vercel /api/skill → zone match / Nominatim → spoken answer
+
+Presence automation (optional): trigger an Alexa routine when everyone is away
+VPS cron (abwesenheit-relay) → GET /api/presence?persons=Julia,Stefan&zone=zu%20Hause → all outside home zone → alexa_remote_control.sh -e automation:'0-auf Wiedersehen'
 ```
 
 > **Note:** The direct voice path works because the skill registers each device with `Alexa.WakeOnLANController`, which lets the Echo device on the local network send the WoL magic packet without any cloud relay. Alexa Routines use the `PowerController` interface instead, so they always go through the relay path — which can be a VPS with WireGuard, or any local device (Raspberry Pi, NAS, etc.) that runs `wol_relay.py` and has access to the local network.
