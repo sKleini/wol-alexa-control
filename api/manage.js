@@ -96,14 +96,24 @@ async function handleLocations(req, res) {
   const persons = await redis.get('geo_persons') || [];
   const zones = await redis.get('geo_zones') || [];
 
+  // Relay reports an expired SmartThings session (JSESSIONID) for the SmartTag
+  // persons it serves; surface it per person so the dashboard can badge it.
+  const relay = await redis.get('relay_status:smarttag');
+  const expiredPersons = (relay && relay.ok === false && relay.reason === 'jsessionid_expired'
+    && Array.isArray(relay.persons))
+    ? relay.persons.map(n => String(n).toLowerCase())
+    : [];
+
   const result = await Promise.all(persons.map(async p => {
+    const sessionExpired = expiredPersons.includes(p.name.toLowerCase());
     const loc = await redis.get('person_location:' + p.name.toLowerCase());
-    if (!loc) return { name: p.name, default: !!p.default, location: null };
+    if (!loc) return { name: p.name, default: !!p.default, location: null, sessionExpired };
 
     const zone = findZone(zones, loc.lat, loc.lon);
     return {
       name: p.name,
       default: !!p.default,
+      sessionExpired,
       location: {
         lat: loc.lat,
         lon: loc.lon,
