@@ -242,9 +242,11 @@
                     : 'Noch kein Standort empfangen';
                 const expiredBadge = p.sessionExpired
                     ? '<div class="session-badge"><i class="fas fa-triangle-exclamation"></i> Samsung-Anmeldung abgelaufen – JSESSIONID erneuern</div>'
-                    : '';
+                    : (p.relaySilent
+                        ? '<div class="session-badge"><i class="fas fa-plug-circle-xmark"></i> SmartTag-Relay meldet sich nicht mehr – VPS/Cron prüfen</div>'
+                        : '');
                 const item = document.createElement('div');
-                item.className = 'device-item' + (p.sessionExpired ? ' session-expired' : '');
+                item.className = 'device-item' + (p.sessionExpired || p.relaySilent ? ' session-expired' : '');
                 item.innerHTML = `
                     <div class="device-info">
                         <h3>${p.name} ${p.default ? '<i class="fas fa-star" title="Default person"></i>' : ''}</h3>

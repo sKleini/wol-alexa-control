@@ -104,20 +104,38 @@ async function handleLocations(req, res) {
     ? relay.persons.map(n => String(n).toLowerCase())
     : [];
 
+  // A relay that stops reporting entirely (cron removed, VPS down) would keep
+  // its last ok:true forever and look healthy. Surface how old the report is so
+  // the dashboard can flag silence.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const relayAgeSec = (relay && Number.isFinite(relay.at)) ? Math.max(0, nowSec - relay.at) : null;
+  const relayPersons = (relay && Array.isArray(relay.persons))
+    ? relay.persons.map(n => String(n).toLowerCase())
+    : [];
+  const RELAY_SILENT_AFTER_SEC = 3 * 3600;
+
   const result = await Promise.all(persons.map(async p => {
-    const sessionExpired = expiredPersons.includes(p.name.toLowerCase());
-    const loc = await redis.get('person_location:' + p.name.toLowerCase());
-    if (!loc) return { name: p.name, default: !!p.default, location: null, sessionExpired };
+    const key = (p.name || '').toLowerCase();
+    const sessionExpired = expiredPersons.includes(key);
+    // Only persons the relay actually serves can be reported as "silent".
+    const relaySilent = relayPersons.includes(key)
+      && relayAgeSec !== null && relayAgeSec > RELAY_SILENT_AFTER_SEC;
+    const loc = await redis.get('person_location:' + key);
+    if (!loc) return { name: p.name, default: !!p.default, location: null, sessionExpired, relaySilent };
 
     const zone = findZone(zones, loc.lat, loc.lon);
+    const hasCoords = Number.isFinite(loc.lat) && Number.isFinite(loc.lon);
     return {
       name: p.name,
       default: !!p.default,
       sessionExpired,
+      relaySilent,
       location: {
         lat: loc.lat,
         lon: loc.lon,
-        place: zone ? zone.name : (loc.address || `${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}`),
+        // Guard toFixed: one malformed record would otherwise 500 the whole list.
+        place: zone ? zone.name
+          : (loc.address || (hasCoords ? `${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}` : 'unbekannte Position')),
         age: relativeTimeDe(loc.tst),
         batt: loc.batt,
       },
