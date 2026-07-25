@@ -22,7 +22,13 @@ export default async function handler(req, res) {
     return res.status(200).json(status || null);
   }
 
-  const body = req.body || {};
+  // Normally Vercel parses application/json for us; fall back for a raw string
+  // body so a wrong Content-Type cannot silently store {ok:false}.
+  let body = req.body || {};
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Invalid JSON body' }); }
+  }
+  if (typeof body !== 'object' || body === null) return res.status(400).json({ error: 'Invalid body' });
   const persons = Array.isArray(body.persons)
     ? body.persons.filter(p => typeof p === 'string' && p.trim()).map(p => p.trim())
     : [];
