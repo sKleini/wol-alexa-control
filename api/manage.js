@@ -6,12 +6,45 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 })
 
+// Ohne Bremse laesst sich das Admin-Passwort unbegrenzt schnell durchprobieren.
+// Zaehler pro IP im ohnehin vorhandenen Redis, Fenster 15 Minuten.
+const MAX_FAILED = 10;
+const WINDOW_SEC = 900;
+
+async function tooManyFailures(req) {
+  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown';
+  const key = `admin_fail:${ip}`;
+  const count = await redis.get(key);
+  return { key, blocked: Number(count) >= MAX_FAILED };
+}
+
 export default async function handler(req, res) {
   const adminPassword = process.env.ADMIN_PASSWORD;
   const providedPassword = req.headers['x-admin-password'];
 
+  let limiter = { key: null, blocked: false };
+  try {
+    limiter = await tooManyFailures(req);
+  } catch (err) {
+    console.error('Rate-limit lookup failed:', err);
+  }
+  if (limiter.blocked) {
+    return res.status(429).json({ error: 'Too many failed attempts, try again later' });
+  }
+
   if (!adminPassword || providedPassword !== adminPassword) {
-    return res.status(401).json({ error: 'Unauthorized: Incorrect password or not configured on Vercel' });
+    if (limiter.key) {
+      try {
+        await redis.incr(limiter.key);
+        await redis.expire(limiter.key, WINDOW_SEC);
+      } catch (err) {
+        console.error('Rate-limit update failed:', err);
+      }
+    }
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (limiter.key) {
+    try { await redis.del(limiter.key); } catch { /* nicht kritisch */ }
   }
 
   if (req.query.type === 'persons') return handlePersons(req, res);
@@ -19,13 +52,22 @@ export default async function handler(req, res) {
   if (req.query.type === 'locations') return handleLocations(req, res);
 
   if (req.method === 'POST') {
-    const { mac, name } = req.body;
+    const { mac, name } = req.body || {};
     if (!mac || !name) return res.status(400).json({ error: 'Missing data' });
+    // Serverseitig validieren und normalisieren: eine krumme MAC erzeugt sonst
+    // eine ungueltige endpointId, an der Alexa die GESAMTE Discovery verwirft.
+    const normalized = String(mac).trim().toLowerCase().replace(/[\s-]/g, ':');
+    if (!/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(normalized)) {
+      return res.status(400).json({ error: 'Invalid MAC address' });
+    }
+    const cleanName = String(name).trim().slice(0, 64);
+    if (!cleanName) return res.status(400).json({ error: 'Missing data' });
     let devices = await redis.get('wol_devices') || [];
 
-    const index = devices.findIndex(d => d.mac === mac);
-    if (index > -1) devices[index] = { mac, name };
-    else devices.push({ mac, name });
+    const index = devices.findIndex(d => (d.mac || '').toLowerCase() === normalized);
+    const entry = { mac: normalized, name: cleanName };
+    if (index > -1) devices[index] = entry;
+    else devices.push(entry);
 
     await redis.set('wol_devices', devices);
     return res.status(200).json({ success: true, devices });
