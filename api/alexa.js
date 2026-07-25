@@ -6,9 +6,24 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 })
 
+// Shared secret between the Alexa Lambda bridge and this endpoint. Without it
+// anyone who knows the deployment URL could POST a crafted directive and wake
+// or shut down the PCs — Alexa itself sends no signature to a Smart Home
+// Lambda, so this header is the only thing standing in front of the actions.
+// Falls back to ADMIN_PASSWORD so no additional secret has to be provisioned.
+function bridgeAuthorized(req) {
+  const expected = process.env.BRIDGE_KEY || process.env.ADMIN_PASSWORD;
+  if (!expected) return false; // fail closed: unconfigured means locked, not open
+  const got = req.headers['x-bridge-key'];
+  if (typeof got !== 'string' || got.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
+}
+
 export default async function handler(req, res) {
+  if (!bridgeAuthorized(req)) return res.status(401).end();
+
   const request = req.body;
-  if (!request || !request.directive) return res.status(400).end();
+  if (!request || !request.directive || !request.directive.header) return res.status(400).end();
 
   const namespace = request.directive.header.namespace;
   const name = request.directive.header.name;
@@ -163,6 +178,7 @@ async function sendWakeViaNtfy(cleanId) {
 
 async function handlePowerControl(request, res) {
   const { header, endpoint } = request.directive;
+  if (!endpoint || typeof endpoint.endpointId !== 'string') return res.status(400).end();
   const correlationToken = header.correlationToken;
   const messageId = header.messageId;
   const endpointId = endpoint.endpointId;
@@ -171,6 +187,30 @@ async function handlePowerControl(request, res) {
   console.log(`Power Control: ${name} for ${endpointId}`);
 
   const cleanId = endpointId.replace('endpoint-', '');
+
+  // Only act on endpoints we actually published. Otherwise this handler would
+  // hash any caller-supplied id together with ADMIN_PASSWORD and publish to the
+  // resulting ntfy topic — effectively an oracle for arbitrary device ids.
+  if (cleanId !== 'fritzbox-led') {
+    const devices = await redis.get('wol_devices') || [];
+    const known = devices.some(d => (d.mac || '').replace(/[: -]/g, '').toLowerCase() === cleanId);
+    if (!known) {
+      console.warn(`Power Control for unknown endpoint: ${endpointId}`);
+      return res.status(200).json({
+        event: {
+          header: {
+            namespace: "Alexa",
+            name: "ErrorResponse",
+            messageId: messageId + "-R",
+            correlationToken: correlationToken,
+            payloadVersion: "3"
+          },
+          endpoint: { endpointId: endpointId },
+          payload: { type: "NO_SUCH_ENDPOINT", message: "Unknown endpoint" }
+        }
+      });
+    }
+  }
 
   if (cleanId === 'fritzbox-led') {
     if (!process.env.LED_TOPIC || !process.env.LED_PASSWORD) {

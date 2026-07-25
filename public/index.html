@@ -199,6 +199,36 @@
             window.location.reload();
         }
 
+        // Alle Werte, die aus der API kommen, sind fremdbestimmt: der Ortsname
+        // stammt z. B. aus dem address-Parameter von /api/location. Ohne
+        // Escaping liesse sich darueber Skriptcode ins Dashboard schreiben und
+        // damit das Admin-Passwort aus dem localStorage abgreifen.
+        const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+        ));
+
+        // Loesch-Button ohne Inline-onclick: ein Name mit Apostroph (z. B.
+        // "O'Brien") wuerde das Attribut sonst zerlegen und der Button
+        // funktionierte stillschweigend nicht mehr.
+        function deleteButton(handler) {
+            const btn = document.createElement('button');
+            btn.className = 'btn-delete';
+            btn.innerHTML = '<i class="fas fa-trash"></i>';
+            btn.addEventListener('click', handler);
+            return btn;
+        }
+
+        function personItem(innerHtml, handler, extraClass = '') {
+            const item = document.createElement('div');
+            item.className = 'device-item' + extraClass;
+            const info = document.createElement('div');
+            info.className = 'device-info';
+            info.innerHTML = innerHtml;
+            item.appendChild(info);
+            item.appendChild(deleteButton(handler));
+            return item;
+        }
+
         async function renderDevices() {
             const devices = await apiRequest('GET');
             if (!devices) return;
@@ -206,17 +236,10 @@
             listContainer.innerHTML = devices.length ? '' : '<p style="text-align:center; padding: 20px;">No devices configured.</p>';
 
             devices.forEach(dev => {
-                const item = document.createElement('div');
-                item.className = 'device-item';
-                item.innerHTML = `
-                    <div class="device-info">
-                        <h3>${dev.name}</h3>
-                        <p>${dev.mac}</p>
-                    </div>
-                    <button class="btn-delete" onclick="deleteDevice('${dev.mac}')">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                `;
+                const item = personItem(
+                    `<h3>${esc(dev.name)}</h3><p>${esc(dev.mac)}</p>`,
+                    () => deleteDevice(dev.mac)
+                );
                 listContainer.appendChild(item);
             });
         }
@@ -237,26 +260,26 @@
 
             persons.forEach(p => {
                 const loc = p.location;
+                // Koordinaten nur als Zahlen in die Maps-URL, place/age als Text.
+                const lat = Number(loc?.lat), lon = Number(loc?.lon);
+                const mapsOk = Number.isFinite(lat) && Number.isFinite(lon);
                 const locLine = loc
-                    ? `📍 <a href="https://maps.google.com/?q=${loc.lat},${loc.lon}" target="_blank" rel="noopener" style="color: inherit;">${loc.place}</a> · ${loc.age}${loc.batt != null ? ` · 🔋 ${loc.batt}%` : ''}`
+                    ? `📍 ${mapsOk
+                          ? `<a href="https://maps.google.com/?q=${lat},${lon}" target="_blank" rel="noopener" style="color: inherit;">${esc(loc.place)}</a>`
+                          : esc(loc.place)} · ${esc(loc.age)}${loc.batt != null ? ` · 🔋 ${esc(loc.batt)}%` : ''}`
                     : 'Noch kein Standort empfangen';
                 const expiredBadge = p.sessionExpired
                     ? '<div class="session-badge"><i class="fas fa-triangle-exclamation"></i> Samsung-Anmeldung abgelaufen – JSESSIONID erneuern</div>'
                     : (p.relaySilent
                         ? '<div class="session-badge"><i class="fas fa-plug-circle-xmark"></i> SmartTag-Relay meldet sich nicht mehr – VPS/Cron prüfen</div>'
                         : '');
-                const item = document.createElement('div');
-                item.className = 'device-item' + (p.sessionExpired || p.relaySilent ? ' session-expired' : '');
-                item.innerHTML = `
-                    <div class="device-info">
-                        <h3>${p.name} ${p.default ? '<i class="fas fa-star" title="Default person"></i>' : ''}</h3>
-                        <p>${locLine}</p>
-                        ${expiredBadge}
-                    </div>
-                    <button class="btn-delete" onclick="deletePerson('${p.name}')">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                `;
+                const item = personItem(
+                    `<h3>${esc(p.name)} ${p.default ? '<i class="fas fa-star" title="Default person"></i>' : ''}</h3>
+                     <p>${locLine}</p>
+                     ${expiredBadge}`,
+                    () => deletePerson(p.name),
+                    p.sessionExpired || p.relaySilent ? ' session-expired' : ''
+                );
                 container.appendChild(item);
             });
         }
@@ -280,17 +303,15 @@
             container.innerHTML = zones.length ? '' : '<p style="text-align:center; padding: 20px;">No zones configured.</p>';
 
             zones.forEach(z => {
-                const item = document.createElement('div');
-                item.className = 'device-item';
-                item.innerHTML = `
-                    <div class="device-info">
-                        <h3>${z.name}</h3>
-                        <p>${z.lat.toFixed(4)}, ${z.lng.toFixed(4)} · ${z.radius} m</p>
-                    </div>
-                    <button class="btn-delete" onclick="deleteZone('${z.name}')">
-                        <i class="fas fa-trash"></i>
-                    </button>
-                `;
+                // toFixed nur auf echten Zahlen: ein defekter Datensatz warf
+                // sonst hier und riss die ganze Liste mit.
+                const coords = (Number.isFinite(z.lat) && Number.isFinite(z.lng))
+                    ? `${z.lat.toFixed(4)}, ${z.lng.toFixed(4)}`
+                    : 'unbekannte Position';
+                const item = personItem(
+                    `<h3>${esc(z.name)}</h3><p>${coords} · ${esc(z.radius)} m</p>`,
+                    () => deleteZone(z.name)
+                );
                 container.appendChild(item);
             });
         }
