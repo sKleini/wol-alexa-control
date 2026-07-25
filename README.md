@@ -42,7 +42,18 @@ Alexa Routine "wo ist Julia" → Custom Skill → Vercel /api/skill → zone mat
 
 Presence automation (optional): trigger an Alexa routine when everyone is away
 VPS cron (abwesenheit-relay) → GET /api/presence?persons=Julia,Stefan&zone=zu%20Hause → all outside home zone → alexa_remote_control.sh -e automation:'0-auf Wiedersehen'
+
+Relay health (optional): let Alexa say why a SmartTag position is stale
+VPS cron (smarttag-relay) → POST /api/relay-status → Redis → "wo ist …?" answers "the Samsung login has expired" + dashboard badge
 ```
+
+**Location-feature endpoints** (all authenticated with `LOCATION_KEY`):
+
+| Endpoint | Purpose |
+|---|---|
+| `POST/GET /api/location` | Ingest: phone apps and the SmartTag relay report positions here |
+| `GET /api/presence` | Read-only: reports per person whether their latest (fresh) fix lies inside a named home zone — used by the away automation |
+| `POST/GET /api/relay-status` | The SmartTag relay reports its health here; an expired SmartThings session makes Alexa say so instead of reading out a stale position, and the dashboard shows a badge |
 
 > **Note:** The direct voice path works because the skill registers each device with `Alexa.WakeOnLANController`, which lets the Echo device on the local network send the WoL magic packet without any cloud relay. Alexa Routines use the `PowerController` interface instead, so they always go through the relay path — which can be a VPS with WireGuard, or any local device (Raspberry Pi, NAS, etc.) that runs `wol_relay.py` and has access to the local network.
 
@@ -78,10 +89,11 @@ VPS cron (abwesenheit-relay) → GET /api/presence?persons=Julia,Stefan&zone=zu%
 |---|---|
 | `UPSTASH_REDIS_REST_URL` | from Upstash |
 | `UPSTASH_REDIS_REST_TOKEN` | from Upstash |
-| `ADMIN_PASSWORD` | A secret password of your choice |
+| `ADMIN_PASSWORD` | A secret password of your choice. Also the fallback shared secret for the Alexa bridge and the seed for the WoL ntfy topics |
+| `BRIDGE_KEY` | *(optional)* Shared secret between the Alexa Lambda and `/api/alexa`. If unset, `ADMIN_PASSWORD` is used instead — either way **the same value must be set as `BRIDGE_KEY` in the Lambda** (see step 3) |
 | `LED_TOPIC` | *(optional, LED feature)* ntfy.sh topic the LED relay listens on |
 | `LED_PASSWORD` | *(optional, LED feature)* Password expected by the LED relay |
-| `LED_CALL_KEY` | *(optional, LED feature)* Secret key for the manual `/api/led` endpoint |
+| `LED_CALL_KEY` | **Required if you use the manual `/api/led` endpoint.** The endpoint fails closed: with this variable unset it always answers `401`. Leave it unset to keep `/api/led` disabled — the Alexa LED command and the LED schedule work independently of it |
 | `LOCATION_KEY` | *(optional, location feature)* Secret key for the `/api/location` ingest endpoint |
 | `ALEXA_SKILL_ID` | *(optional, location feature)* Skill ID of the custom skill (`amzn1.ask.skill....`) |
 | `DEFAULT_PERSON` | *(optional, location feature)* Fallback person name (e.g. `Julia`) |
@@ -91,7 +103,14 @@ VPS cron (abwesenheit-relay) → GET /api/presence?persons=Julia,Stefan&zone=zu%
 #### 3. Alexa & AWS Lambda Integration
 - **AWS Lambda**: Create a new function at the [Lambda Console](https://eu-west-1.console.aws.amazon.com/lambda/home?region=eu-west-1#/functions) (Runtime: Node.js 18+).
 - Copy the code from `/bridge/lambda_bridge.js` and update the `vercelUrl` variable to your Vercel URL.
+- **Set the shared secret** (required — without it Alexa stops working): go to **Configuration → Environment variables** and add
+  `BRIDGE_KEY` with **the same value as `ADMIN_PASSWORD`** in Vercel.
+  Alexa invokes a Smart Home Lambda directly and passes **no verifiable signature** along, so this header is the only thing standing in front of `/api/alexa`. Without it, anyone who knows your Vercel URL could list your devices (including MAC addresses) and switch your PCs on or off. The endpoint fails closed: no matching header → `401`.
 - Add an **Alexa Smart Home** trigger and copy the Lambda **ARN**.
+
+> ⚠️ **If you ever change `ADMIN_PASSWORD` in Vercel, update `BRIDGE_KEY` in the Lambda too** — otherwise `/api/alexa` returns `401` and every voice command fails with a generic "device is not responding". You can also set an independent `BRIDGE_KEY` in Vercel; it takes precedence over `ADMIN_PASSWORD`.
+>
+> **Troubleshooting:** Lambda → *Monitor → View CloudWatch logs*. `HTTP 401` means the keys differ (watch for a stray space or newline when copying); `Antwort war kein JSON` / a timeout usually means `vercelUrl` still points at the placeholder.
 
 - **Alexa Developer Console**: Create a new **Smart Home** skill at the [Alexa Skills Kit Console](https://developer.amazon.com/alexa/console/ask).
   - **Smart Home Service Endpoint**: paste your Lambda ARN.
@@ -334,6 +353,16 @@ All communication between Vercel and your PC/VPS uses [ntfy.sh](https://ntfy.sh)
 The VPS relay uses local TR-064 (HTTP, port 49000) over the WireGuard tunnel — no Fritz!Box external access is required or enabled.
 
 The optional LED feature uses its own, fully separated chain: a dedicated ntfy.sh topic (`LED_TOPIC`) and password (`LED_PASSWORD`) taken directly from the environment variables (no hashing). The LED relay additionally ignores messages older than 60 seconds or with a wrong password.
+
+#### Endpoint protection
+
+- **`/api/alexa` requires the bridge secret.** Every request must carry an `x-bridge-key` header matching `BRIDGE_KEY` (or `ADMIN_PASSWORD` as fallback), compared with `crypto.timingSafeEqual`. Alexa sends no signature to a Smart Home Lambda, so this is the only barrier — see step 3 for the setup. In addition, `endpointId` is validated against the configured devices, so the endpoint can no longer be used as an oracle to derive ntfy topics for arbitrary MAC addresses.
+- **All key checks fail closed.** `/api/led`, `/api/location`, `/api/presence`, `/api/relay-status`, `/api/manage` and `/api/skill` reject the request when their environment variable is missing, instead of comparing `undefined` against `undefined` and letting it pass.
+- **Brute-force protection** on `/api/manage`: after 10 failed attempts per IP the endpoint answers `429` for 15 minutes (counter kept in Redis).
+- **Dashboard XSS protection:** every value coming back from the API is HTML-escaped before rendering, and delete buttons use event listeners instead of inline `onclick`. A `Content-Security-Policy` plus `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy` are set in `vercel.json`.
+- **Account linking:** `/api/auth` only redirects to Amazon domains, so the endpoint cannot be abused as an open redirect.
+
+> **Note:** `/api/token` still issues a static token — it is not the security boundary. Access control happens at `/api/alexa` via the bridge secret described above.
 
 ---
 
