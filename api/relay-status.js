@@ -5,6 +5,7 @@
 // status so Alexa can tell the user the login expired instead of reading a
 // stale position. GET returns the current status (e.g. for a dashboard badge).
 import { Redis } from '@upstash/redis'
+import { keyOk } from '../lib/auth.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -15,7 +16,7 @@ const STATUS_KEY = 'relay_status:smarttag'
 
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
-  if (!process.env.LOCATION_KEY || req.query.key !== process.env.LOCATION_KEY) return res.status(401).end();
+  if (!keyOk(req)) return res.status(401).end();
 
   if (req.method === 'GET') {
     const status = await redis.get(STATUS_KEY);

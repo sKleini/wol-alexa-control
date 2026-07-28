@@ -3,6 +3,7 @@
 // body (POST, e.g. OwnTracks) or from query parameters (GET/POST, e.g.
 // GPSLogger's custom URL with %LAT/%LON/%ACC/%BATT placeholders).
 import { Redis } from '@upstash/redis'
+import { keyOk } from '../lib/auth.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -11,7 +12,7 @@ const redis = new Redis({
 
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
-  if (!process.env.LOCATION_KEY || req.query.key !== process.env.LOCATION_KEY) return res.status(401).end();
+  if (!keyOk(req)) return res.status(401).end();
 
   // Prefer JSON body (keeps existing behavior), fall back to query params.
   const body = req.body || {};

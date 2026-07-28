@@ -10,6 +10,7 @@
 // adds no new secret and no privilege the phones did not already have.
 import { Redis } from '@upstash/redis'
 import { buildLocationList } from '../lib/geo.js'
+import { keyOk } from '../lib/auth.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -21,7 +22,7 @@ export default async function handler(req, res) {
   // Fail-closed: ohne gesetzten LOCATION_KEY wird abgewiesen statt
   // durchgelassen (sonst wuerde ein vergessenes Env-Var die Standorte der
   // ganzen Familie oeffentlich machen).
-  if (!process.env.LOCATION_KEY || req.query.key !== process.env.LOCATION_KEY) {
+  if (!keyOk(req)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

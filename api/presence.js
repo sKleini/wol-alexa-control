@@ -6,6 +6,7 @@
 // person_location / geo_zones data as the "wo ist X" skill.
 import { Redis } from '@upstash/redis'
 import { haversineMeters } from '../lib/geo.js'
+import { keyOk } from '../lib/auth.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -14,7 +15,7 @@ const redis = new Redis({
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!process.env.LOCATION_KEY || req.query.key !== process.env.LOCATION_KEY) return res.status(401).end();
+  if (!keyOk(req)) return res.status(401).end();
 
   // Duplicate names (a typo like "Julia,Julia") would otherwise yield repeated
   // entries, which break the shell caller's per-person jq lookup. Dedupe
