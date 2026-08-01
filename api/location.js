@@ -10,6 +10,28 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 })
 
+/**
+ * Die erlaubten Werte von `ring` - eine feste Liste, kein Durchreichen.
+ *
+ * Der Wert landet in Redis und von dort in der Oberflaeche der Actions-App.
+ * Ein Tippfehler auf der Handy-Seite soll dort als "unbekannt" ankommen und
+ * nicht als eigener, stiller dritter Zustand.
+ */
+const RINGER_MODES = ['normal', 'vibrate', 'silent'];
+
+/**
+ * `dnd` als echtes Tri-State lesen: true, false oder unbekannt.
+ *
+ * Bewusst NICHT `pick('dnd') === '1'`: Das machte aus einem fehlenden Feld ein
+ * "Zugriff fehlt" - und die App wuerde bei jedem OwnTracks-Nutzer behaupten,
+ * das Lautstellen ginge dort nicht.
+ */
+function dndFlag(raw) {
+  if (raw === '1' || raw === 1 || raw === true) return true;
+  if (raw === '0' || raw === 0 || raw === false) return false;
+  return null;
+}
+
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   if (!keyOk(req)) return res.status(401).end();
@@ -59,6 +81,14 @@ export default async function handler(req, res) {
     acc: Number.isFinite(parseFloat(pick('acc'))) ? parseFloat(pick('acc')) : null,
     address: pick('address') || null,
     batt: Number.isFinite(parseFloat(pick('batt'))) ? parseFloat(pick('batt')) : null,
+    // Klingelmodus und "Nicht stoeren"-Zugriff des Geraets. Nur die Mylo-App
+    // schickt beides; OwnTracks und der SmartTag-Relay kennen die Felder nicht.
+    //
+    // Deshalb ist null hier NICHT "normal", sondern "unbekannt" - und muss es
+    // bis in die Oberflaeche bleiben. Ein Standardwert waere eine Behauptung
+    // ueber ein Geraet, von dem wir nichts gehoert haben.
+    ring: RINGER_MODES.includes(pick('ring')) ? pick('ring') : null,
+    dnd: dndFlag(pick('dnd')),
     receivedAt: Math.floor(Date.now() / 1000),
   };
 
