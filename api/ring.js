@@ -33,7 +33,7 @@ export const FCM_KEY_PREFIX = 'person_fcm:';
  * sofort auf (400 statt Zustellung); ein hier zusaetzliches Verb liefe dagegen
  * still ins Leere, weil aeltere Mylo-Fassungen Unbekanntes verwerfen.
  */
-export const BEFEHLE = ['ring', 'unmute', 'vibrate', 'locate'];
+export const BEFEHLE = ['ring', 'unmute', 'vibrate', 'locate', 'silence', 'torch'];
 
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
