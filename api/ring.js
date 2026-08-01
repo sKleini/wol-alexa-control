@@ -26,8 +26,14 @@ const redis = new Redis({
 
 export const FCM_KEY_PREFIX = 'person_fcm:';
 
-/** Die Verben, die die App kennt. Alles andere wird abgewiesen. */
-export const BEFEHLE = ['ring', 'unmute', 'locate'];
+/**
+ * Die Verben, die die App kennt. Alles andere wird abgewiesen.
+ *
+ * Muss zu `BefehlsArt` in beiden Apps passen. Ein hier fehlendes Verb faellt
+ * sofort auf (400 statt Zustellung); ein hier zusaetzliches Verb liefe dagegen
+ * still ins Leere, weil aeltere Mylo-Fassungen Unbekanntes verwerfen.
+ */
+export const BEFEHLE = ['ring', 'unmute', 'vibrate', 'locate'];
 
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
