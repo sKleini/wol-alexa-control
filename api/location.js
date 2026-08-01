@@ -63,6 +63,20 @@ export default async function handler(req, res) {
   };
 
   await redis.set('person_location:' + person.name.toLowerCase(), location);
+
+  // Die Mylo-App haengt ihr FCM-Gerätetoken an jede Standortmeldung – so
+  // braucht es keinen eigenen Registrierungs-Endpunkt, und ein nach einer
+  // Neuinstallation gewechseltes Token erneuert sich von selbst.
+  //
+  // Als Kopfzeile und NICHT als Query-Parameter, aus demselben Grund, aus dem
+  // der LOCATION_KEY dort nicht steht (siehe lib/auth.js): Query-Strings
+  // landen in den Request-Logs. Ein FCM-Token ist eine Zugangsberechtigung –
+  // wer es hat, kann dem Geraet Pushes dieses Projekts schicken.
+  const fcmToken = req.headers?.['x-fcm-token'];
+  if (typeof fcmToken === 'string' && fcmToken.trim()) {
+    await redis.set('person_fcm:' + person.name.toLowerCase(), fcmToken.trim());
+  }
+
   if (isOwnTracks) return ackOwnTracks();
   return res.status(200).json({ ok: true });
 }
