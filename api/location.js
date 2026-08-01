@@ -101,6 +101,10 @@ export default async function handler(req, res) {
     ring: RINGER_MODES.includes(pick('ring')) ? pick('ring') : null,
     dnd: jaNeinFlag(pick('dnd')),
     zen: jaNeinFlag(pick('zen')),
+    // Brennt gerade die Taschenlampe? Der einzige Zustand hier, der von
+    // selbst endet - Mylo schaltet sie nach spaetestens fuenf Minuten ab.
+    // Die Actions-App traut ihm deshalb auch nur so lange.
+    torch: jaNeinFlag(pick('torch')),
     receivedAt: Math.floor(Date.now() / 1000),
   };
 
