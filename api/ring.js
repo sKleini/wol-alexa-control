@@ -1,11 +1,17 @@
-// api/ring.js – /api/ring?u=<person name>
+// api/ring.js – /api/ring?u=<person name>&do=<ring|unmute|locate>
 //
-// Lässt das Handy einer Person klingeln: schickt der Mylo-App einen Push, die
-// daraufhin den Alarmton spielt – auch im Lautlos-Modus. Ausgelöst wird das aus
-// der Actions-Hub-App per langem Tipp auf eine Zeile der Standort-Liste.
+// Schickt der Mylo-App einen Befehl. Ausgelöst wird das aus der
+// Actions-Hub-App per langem Tipp auf eine Zeile der Standort-Liste:
+//
+//   ring    Alarmton spielen, auch im Lautlos-Modus (Vorgabe)
+//   unmute  Klingelmodus wieder auf "normal" und Lautstärke hoch
+//   locate  sofort eine frische Position melden
 //
 // Warum der Umweg über den Server: Der Push braucht den privaten Schlüssel
 // eines Firebase-Dienstkontos (siehe lib/fcm.js). Der darf nicht in eine APK.
+//
+// Der Endpunkt heisst weiterhin /api/ring, obwohl er inzwischen mehr kann:
+// Actions Hub 2.1.0 ist bereits ausgeliefert und ruft genau diesen Pfad.
 //
 // Das Gerätetoken kommt von der App selbst – sie schickt es bei jeder
 // Standortmeldung als Kopfzeile X-Fcm-Token mit (api/location.js).
@@ -20,6 +26,9 @@ const redis = new Redis({
 
 export const FCM_KEY_PREFIX = 'person_fcm:';
 
+/** Die Verben, die die App kennt. Alles andere wird abgewiesen. */
+export const BEFEHLE = ['ring', 'unmute', 'locate'];
+
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   if (!keyOk(req)) return res.status(401).end();
@@ -33,6 +42,14 @@ export default async function handler(req, res) {
 
   const personName = (req.query.u || '').trim();
   if (!personName) return res.status(400).json({ error: 'Missing person (u param)' });
+
+  // Unbekannte Verben werden abgewiesen statt durchgereicht: Sonst kaeme beim
+  // Handy ein Befehl an, den dort niemand kennt - die App wuerde ihn stumm
+  // verwerfen, und der Aufrufer haette "zugestellt" gemeldet.
+  const befehl = (req.query.do || 'ring').trim().toLowerCase();
+  if (!BEFEHLE.includes(befehl)) {
+    return res.status(400).json({ error: `Unknown command '${befehl}' (do param)`, allowed: BEFEHLE });
+  }
 
   // Gleiche Aufloesung wie in api/location.js: Der Name ist der Schluessel
   // ueber alle Stationen hinweg, Gross-/Kleinschreibung egal.
@@ -50,7 +67,17 @@ export default async function handler(req, res) {
 
   // Dieselbe Nutzlast wie ueber ntfy, damit die App nur ein Format kennt.
   const tst = Math.floor(Date.now() / 1000);
-  const ergebnis = await sendeDaten(token, { ring: `ring:${person.name}:${tst}` });
+  const nutzlast = `${befehl}:${person.name}:${tst}`;
+
+  // Zwei Felder, und das ist Absicht: "cmd" ist das neue, "ring" liest Mylo
+  // 2.2.0. Nicht alle Familien-Handys werden gleichzeitig aktualisiert - ohne
+  // das zweite Feld haette ein aelteres Handy nach diesem Deploy aufgehoert zu
+  // klingeln, ohne dass irgendwo ein Fehler erschienen waere. "ring" geht nur
+  // beim Klingeln mit; die neuen Verben kennt die alte Fassung ohnehin nicht.
+  const daten = { cmd: nutzlast };
+  if (befehl === 'ring') daten.ring = nutzlast;
+
+  const ergebnis = await sendeDaten(token, daten);
 
   if (!ergebnis.ok) {
     // Ein abgemeldetes oder ersetztes Geraet meldet UNREGISTERED bzw. 404. Den
@@ -64,5 +91,5 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: false, reason: 'push_failed', status: ergebnis.status });
   }
 
-  return res.status(200).json({ ok: true, person: person.name, tst });
+  return res.status(200).json({ ok: true, person: person.name, do: befehl, tst });
 }
