@@ -108,6 +108,16 @@ function zustandTeil(pick) {
   for (const k of Object.keys(voll)) {
     if (pick(k) !== undefined) out[k] = voll[k];
   }
+  // Ausnahme von der Regel darueber: `ssid` haengt an `net` und wird
+  // mitgeschrieben, sobald `net` mitkam - notfalls als null.
+  //
+  // Sonst ueberlebt ein WLAN-Name den Wechsel des Netzes: Mylo fragt den
+  // Namen nur im WLAN ab, laesst ihn am Mobilfunk also weg, und der alte
+  // stuende weiter im Datensatz. Schlimmer noch im zweiten Fall - im NEUEN
+  // WLAN, dessen Namen Android nicht herausrueckt, faellt das Feld ebenfalls
+  // weg, und die Liste behauptete den Namen des vorigen Netzes. Ein Name, den
+  // wir nicht mehr kennen, ist keine Auskunft.
+  if (pick('net') !== undefined) out.ssid = voll.ssid;
   return out;
 }
 
