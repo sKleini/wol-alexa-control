@@ -20,6 +20,20 @@ const redis = new Redis({
 const RINGER_MODES = ['normal', 'vibrate', 'silent'];
 
 /**
+ * Die erlaubten Werte von `net` - feste Liste, gleiche Ueberlegung wie
+ * [RINGER_MODES] daneben.
+ *
+ * `none` kommt in der Praxis kaum vor: Mylo sendet ueber WorkManager mit der
+ * Bedingung "Netz vorhanden", ohne Netz laeuft der Lauf also gar nicht erst.
+ * Der Wert steht trotzdem hier, weil die Ausschaltmeldung an WorkManager
+ * vorbeigeht und ihn theoretisch tragen kann.
+ */
+const NETZ_ARTEN = ['wifi', 'mobile', 'other', 'none'];
+
+/** Laenge eines WLAN-Namens nach IEEE 802.11. Alles darueber ist kaputt. */
+const SSID_MAX = 32;
+
+/**
  * Ein Ja/Nein-Feld als echtes Tri-State lesen: true, false oder unbekannt.
  *
  * Bewusst NICHT `pick(x) === '1'`: Das machte aus einem fehlenden Feld ein
@@ -40,6 +54,61 @@ function jaNeinFlag(raw) {
   if (raw === '1' || raw === 1 || raw === true) return true;
   if (raw === '0' || raw === 0 || raw === false) return false;
   return null;
+}
+
+/** WLAN-Name saeubern. Leer, zu lang oder Androids Platzhalter -> unbekannt. */
+function ssidOderNull(raw) {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim();
+  if (!v || v === '<unknown ssid>' || v.length > SSID_MAX) return null;
+  return v;
+}
+
+/**
+ * Die Zustandsfelder einer Meldung - vollstaendig, also mit `null` fuer
+ * alles, was nicht mitkam.
+ *
+ * Das ist die Form fuer die **Positionsmeldung**, die den Datensatz ersetzt:
+ * Dort heisst ein fehlendes Feld ausdruecklich "unbekannt", und genau das
+ * soll gespeichert werden. Ein OwnTracks-Nutzer oder ein SmartTag-Traeger
+ * meldet nichts davon, und darueber darf die Oberflaeche nichts behaupten.
+ */
+function zustandVoll(pick) {
+  return {
+    ring: RINGER_MODES.includes(pick('ring')) ? pick('ring') : null,
+    dnd: jaNeinFlag(pick('dnd')),
+    zen: jaNeinFlag(pick('zen')),
+    torch: jaNeinFlag(pick('torch')),
+    chg: jaNeinFlag(pick('chg')),
+    // Verbindungsart und WLAN-Name: erklaeren eine alternde Position
+    // ("war im Funkloch") und sind zugleich ein von GPS unabhaengiger
+    // Hinweis darauf, dass jemand zu Hause ist.
+    net: NETZ_ARTEN.includes(pick('net')) ? pick('net') : null,
+    ssid: ssidOderNull(pick('ssid')),
+    // Flugmodus und Standortdienste beantworten die Frage, die eine
+    // stehengebliebene Position sonst offen laesst: warum kommt nichts Neues?
+    air: jaNeinFlag(pick('air')),
+    gps: jaNeinFlag(pick('gps')),
+  };
+}
+
+/**
+ * Dieselben Felder, aber **nur die tatsaechlich mitgeschickten**.
+ *
+ * Das ist die Form fuer die **Statusmeldung**, die in den bestehenden
+ * Datensatz hineingemischt wird. Der Unterschied ist bedeutungstragend: Ein
+ * Feld, das eine Statusmeldung nicht mitbringt, heisst dort "dazu sage ich
+ * gerade nichts" - und darf einen vorher bekannten Wert nicht loeschen. Mit
+ * [zustandVoll] wuerde die Ausschaltmeldung nebenbei den Klingelmodus
+ * vergessen, nur weil sie ihn nicht wiederholt hat.
+ */
+function zustandTeil(pick) {
+  const voll = zustandVoll(pick);
+  const out = {};
+  for (const k of Object.keys(voll)) {
+    if (pick(k) !== undefined) out[k] = voll[k];
+  }
+  return out;
 }
 
 export default async function handler(req, res) {
@@ -75,7 +144,50 @@ export default async function handler(req, res) {
   const pick = (k) => (body[k] ?? req.query[k]);
   const lat = parseFloat(pick('lat'));
   const lon = parseFloat(pick('lon'));
+  const jetzt = Math.floor(Date.now() / 1000);
+  const redisKey = 'person_location:' + person.name.toLowerCase();
+
+  /**
+   * Neustart und Ausschalten sind **Ereignisse**, keine Momentaufnahmen.
+   * Deshalb als Zeitpunkt gespeichert und nicht als Flag: Ein Flag beantwortet
+   * nur "ist gerade passiert" und waere eine Meldung spaeter wertlos, waehrend
+   * der Zeitpunkt die Aussage "war ab 21:14 aus" bis zum naechsten Ereignis
+   * traegt.
+   */
+  const ereignisse = {};
+  if (jaNeinFlag(pick('boot')) === true) ereignisse.bootedAt = jetzt;
+  if (jaNeinFlag(pick('off')) === true) ereignisse.offAt = jetzt;
+
+  // Der bisherige Datensatz wird auf BEIDEN Wegen gebraucht: die Statusmeldung
+  // mischt sich hinein, und die Positionsmeldung muss bootedAt/offAt daraus
+  // uebernehmen - sonst waere die Aussage "war ab 21:14 aus" beim naechsten
+  // Takt fuenfzehn Minuten spaeter wieder verschwunden.
+  const vorher = (await redis.get(redisKey)) || {};
+
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    // Statusmeldung: eine Meldung ohne Position, die nur den Geraetezustand
+    // nachtraegt. Sie entsteht genau dort, wo Mylo frueher stumm ausstieg -
+    // kein Fix, keine Standortberechtigung, Geraet faehrt herunter. Das ist
+    // der Fall, in dem die Liste eine Erklaerung braucht statt einer
+    // Position, die einfach immer aelter wird.
+    //
+    // `st` ist ein ausdruecklicher Schalter und keine Ableitung aus "lat/lon
+    // fehlen": Der Endpunkt bedient auch GPSLogger, und dort soll eine
+    // vergessene Koordinate weiter den 400er bekommen, statt still als
+    // Statusmeldung durchzurutschen.
+    if (jaNeinFlag(pick('st')) === true) {
+      await redis.set(redisKey, {
+        ...vorher,
+        ...zustandTeil(pick),
+        ...ereignisse,
+        // Nur receivedAt wandert mit, tst nicht: Die Position ist nicht
+        // neuer geworden, der Zustand schon. Genau diese Trennung liest
+        // buildLocationList als ageSec und statusAgeSec wieder aus.
+        receivedAt: jetzt,
+      });
+      await merkeFcmToken(req, person);
+      return res.status(200).json({ ok: true, status: true });
+    }
     // OwnTracks legitimately sends messages without coordinates (lwt, status,
     // waypoints, transitions). Acknowledge them without storing so they are not
     // re-queued; other sources still get an explicit error.
@@ -87,46 +199,53 @@ export default async function handler(req, res) {
   const location = {
     lat,
     lon,
-    tst: Number.isFinite(tst) ? tst : Math.floor(Date.now() / 1000),
+    tst: Number.isFinite(tst) ? tst : jetzt,
     acc: Number.isFinite(parseFloat(pick('acc'))) ? parseFloat(pick('acc')) : null,
     address: pick('address') || null,
     batt: Number.isFinite(parseFloat(pick('batt'))) ? parseFloat(pick('batt')) : null,
-    // Klingelmodus, "Nicht stoeren"-Zugriff und ob "Nicht stoeren" laeuft.
-    // Nur die Mylo-App schickt das; OwnTracks und der SmartTag-Relay kennen
-    // die Felder nicht.
+    // Klingelmodus, "Nicht stoeren", Taschenlampe, Kabel, Netz, Flugmodus,
+    // Standortdienste. Nur die Mylo-App schickt das; OwnTracks und der
+    // SmartTag-Relay kennen die Felder nicht.
     //
     // Deshalb ist null hier NICHT "normal", sondern "unbekannt" - und muss es
     // bis in die Oberflaeche bleiben. Ein Standardwert waere eine Behauptung
-    // ueber ein Geraet, von dem wir nichts gehoert haben.
-    ring: RINGER_MODES.includes(pick('ring')) ? pick('ring') : null,
-    dnd: jaNeinFlag(pick('dnd')),
-    zen: jaNeinFlag(pick('zen')),
-    // Brennt gerade die Taschenlampe? Der einzige Zustand hier, der von
-    // selbst endet - Mylo schaltet sie nach spaetestens fuenf Minuten ab.
-    // Die Actions-App traut ihm deshalb auch nur so lange.
-    torch: jaNeinFlag(pick('torch')),
-    // Haengt das Handy am Kabel? Wechselt selten und haelt stundenlang,
-    // deshalb reist es nur mit dem regulaeren Lauf mit - anders als ring
-    // und torch, die eine Sofortmeldung ausloesen.
-    chg: jaNeinFlag(pick('chg')),
-    receivedAt: Math.floor(Date.now() / 1000),
+    // ueber ein Geraet, von dem wir nichts gehoert haben. Die Liste selbst
+    // steht in zustandVoll.
+    ...zustandVoll(pick),
+    // Die zwei Ereignisse ueberdauern die Positionsmeldung: Ein Neustart ist
+    // vor zehn Minuten passiert und bleibt wahr, auch wenn seitdem drei
+    // Positionen hereinkamen. Ohne das Uebernehmen aus `vorher` loeschte der
+    // naechste regulaere Takt die Angabe, die der Neustart selbst gerade
+    // gesetzt hat - er ist ja ebenfalls eine Positionsmeldung.
+    bootedAt: ereignisse.bootedAt ?? vorher.bootedAt ?? null,
+    offAt: ereignisse.offAt ?? vorher.offAt ?? null,
+    receivedAt: jetzt,
   };
 
-  await redis.set('person_location:' + person.name.toLowerCase(), location);
+  await redis.set(redisKey, location);
+  await merkeFcmToken(req, person);
 
-  // Die Mylo-App haengt ihr FCM-Gerätetoken an jede Standortmeldung – so
-  // braucht es keinen eigenen Registrierungs-Endpunkt, und ein nach einer
-  // Neuinstallation gewechseltes Token erneuert sich von selbst.
-  //
-  // Als Kopfzeile und NICHT als Query-Parameter, aus demselben Grund, aus dem
-  // der LOCATION_KEY dort nicht steht (siehe lib/auth.js): Query-Strings
-  // landen in den Request-Logs. Ein FCM-Token ist eine Zugangsberechtigung –
-  // wer es hat, kann dem Geraet Pushes dieses Projekts schicken.
+  if (isOwnTracks) return ackOwnTracks();
+  return res.status(200).json({ ok: true });
+}
+
+/**
+ * Das FCM-Geraetetoken aus der Kopfzeile mitnehmen, falls eines dabei ist.
+ *
+ * Die Mylo-App haengt es an jede Standortmeldung - so braucht es keinen
+ * eigenen Registrierungs-Endpunkt, und ein nach einer Neuinstallation
+ * gewechseltes Token erneuert sich von selbst. Das gilt fuer die
+ * Statusmeldung genauso: Ein Handy ohne Standortberechtigung soll trotzdem
+ * klingeln koennen, und genau dann ist es das Einzige, was noch hereinkommt.
+ *
+ * Als Kopfzeile und NICHT als Query-Parameter, aus demselben Grund, aus dem
+ * der LOCATION_KEY dort nicht steht (siehe lib/auth.js): Query-Strings landen
+ * in den Request-Logs. Ein FCM-Token ist eine Zugangsberechtigung - wer es
+ * hat, kann dem Geraet Pushes dieses Projekts schicken.
+ */
+async function merkeFcmToken(req, person) {
   const fcmToken = req.headers?.['x-fcm-token'];
   if (typeof fcmToken === 'string' && fcmToken.trim()) {
     await redis.set('person_fcm:' + person.name.toLowerCase(), fcmToken.trim());
   }
-
-  if (isOwnTracks) return ackOwnTracks();
-  return res.status(200).json({ ok: true });
 }
