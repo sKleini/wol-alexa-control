@@ -1,11 +1,16 @@
-// api/ring.js – /api/ring?u=<person name>&do=<ring|unmute|locate>
+// api/ring.js – /api/ring?u=<person name>&do=<verb>
 //
 // Schickt der Mylo-App einen Befehl. Ausgelöst wird das aus der
 // Actions-Hub-App per langem Tipp auf eine Zeile der Standort-Liste:
 //
-//   ring    Alarmton spielen, auch im Lautlos-Modus (Vorgabe)
-//   unmute  Klingelmodus wieder auf "normal" und Lautstärke hoch
-//   locate  sofort eine frische Position melden
+//   ring       Alarmton spielen, auch im Lautlos-Modus (Vorgabe)
+//   silence    laufendes Klingeln UND Licht beenden
+//   torch      Taschenlampe an (Dauerlicht, max. 5 Minuten)
+//   torch-off  nur die Taschenlampe wieder aus
+//   unmute     Klingelmodus wieder auf "normal" und Lautstärke hoch
+//   vibrate    Klingelmodus auf Vibration
+//   dnd-off    "Nicht stören" aufheben
+//   locate     sofort eine frische Position melden
 //
 // Warum der Umweg über den Server: Der Push braucht den privaten Schlüssel
 // eines Firebase-Dienstkontos (siehe lib/fcm.js). Der darf nicht in eine APK.
@@ -35,6 +40,7 @@ export const FCM_KEY_PREFIX = 'person_fcm:';
  */
 export const BEFEHLE = [
   'ring', 'unmute', 'vibrate', 'locate', 'silence', 'torch', 'torch-off',
+  'dnd-off',
 ];
 
 export default async function handler(req, res) {
