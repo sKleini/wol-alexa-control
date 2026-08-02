@@ -10,6 +10,7 @@
 //   unmute     Klingelmodus wieder auf "normal" und Lautstärke hoch
 //   vibrate    Klingelmodus auf Vibration
 //   dnd-off    "Nicht stören" aufheben
+//   dnd-on     "Nicht stören" einschalten (Filter "Prioritär", nicht "Totenstille")
 //   locate     sofort eine frische Position melden
 //
 // Warum der Umweg über den Server: Der Push braucht den privaten Schlüssel
@@ -40,7 +41,7 @@ export const FCM_KEY_PREFIX = 'person_fcm:';
  */
 export const BEFEHLE = [
   'ring', 'unmute', 'vibrate', 'locate', 'silence', 'torch', 'torch-off',
-  'dnd-off',
+  'dnd-off', 'dnd-on',
 ];
 
 export default async function handler(req, res) {
