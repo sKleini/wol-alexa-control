@@ -105,6 +105,10 @@ export default async function handler(req, res) {
     // selbst endet - Mylo schaltet sie nach spaetestens fuenf Minuten ab.
     // Die Actions-App traut ihm deshalb auch nur so lange.
     torch: jaNeinFlag(pick('torch')),
+    // Haengt das Handy am Kabel? Wechselt selten und haelt stundenlang,
+    // deshalb reist es nur mit dem regulaeren Lauf mit - anders als ring
+    // und torch, die eine Sofortmeldung ausloesen.
+    chg: jaNeinFlag(pick('chg')),
     receivedAt: Math.floor(Date.now() / 1000),
   };
 
