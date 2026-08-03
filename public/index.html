@@ -158,6 +158,12 @@
                         <input type="text" id="zone-radius" placeholder="150" required>
                     </div>
                 </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="zone-home" style="width: auto;">
+                        Home zone — the Mylo app puts its geofence around this one
+                    </label>
+                </div>
                 <button type="button" class="btn" id="zone-locate" style="background: rgba(255,255,255,0.08);"><i class="fas fa-crosshairs"></i> Use my position</button>
                 <button type="submit" class="btn btn-add"><i class="fas fa-plus"></i> Add Zone</button>
             </form>
@@ -308,8 +314,11 @@
                 const coords = (Number.isFinite(z.lat) && Number.isFinite(z.lng))
                     ? `${z.lat.toFixed(4)}, ${z.lng.toFixed(4)}`
                     : 'unbekannte Position';
+                // Welche Zone die Mylo-App umzaeunt, gehoert in die Liste -
+                // sonst sieht man es nur, indem man sie neu anlegt.
+                const heim = z.home ? ' · <strong>home zone</strong>' : '';
                 const item = personItem(
-                    `<h3>${esc(z.name)}</h3><p>${coords} · ${esc(z.radius)} m</p>`,
+                    `<h3>${esc(z.name)}</h3><p>${coords} · ${esc(z.radius)} m${heim}</p>`,
                     () => deleteZone(z.name)
                 );
                 container.appendChild(item);
@@ -338,7 +347,8 @@
             const lat = document.getElementById('zone-lat').value;
             const lng = document.getElementById('zone-lng').value;
             const radius = document.getElementById('zone-radius').value;
-            await apiRequest('POST', { name, lat, lng, radius }, '?type=zones');
+            const home = document.getElementById('zone-home').checked;
+            await apiRequest('POST', { name, lat, lng, radius, home }, '?type=zones');
             document.getElementById('zone-form').reset();
             renderZones();
         });

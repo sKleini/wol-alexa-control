@@ -153,9 +153,33 @@ async function handleZones(req, res) {
     }
 
     const index = zones.findIndex(z => z.name.toLowerCase() === name.toLowerCase());
-    const entry = { name, lat, lng, radius };
+
+    // Die Heimzone: Mylo legt seinen Geofence um genau diese Zone (/api/zones).
+    //
+    // Fehlt das Feld im Body, bleibt der bisherige Wert stehen, statt auf false
+    // zu fallen. Ein Aufrufer, der das Feld nicht kennt, soll eine Zone
+    // korrigieren koennen, ohne nebenbei den Geofence auf dem Handy abzuraeumen -
+    // ein Ausfall, den niemand mit der Radius-Aenderung in Verbindung braechte.
+    //
+    // Die Kehrseite: Ein Abwaehlen muss ausdruecklich als `home: false` kommen.
+    // Das Dashboard schickt das Feld deshalb immer mit, und Workflow 18 schreibt
+    // es per `.home = (.home // false)` aus, bevor er die Zonen hochlaedt.
+    const home = 'home' in req.body
+      ? !!req.body.home
+      : (index > -1 ? !!zones[index].home : false);
+
+    const entry = { name, lat, lng, radius, home };
     if (index > -1) zones[index] = entry;
     else zones.push(entry);
+
+    // Genau eine Heimzone - dasselbe Muster wie `default` bei den Personen
+    // oben. Mylo naehme sonst irgendeine der markierten, und ein Zaun um die
+    // falsche Adresse sieht in der App aus wie einer um die richtige.
+    if (home) {
+      zones = zones.map(z =>
+        z.name.toLowerCase() === name.toLowerCase() ? z : { ...z, home: false }
+      );
+    }
 
     await redis.set('geo_zones', zones);
     return res.status(200).json({ success: true, zones });
