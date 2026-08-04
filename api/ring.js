@@ -12,6 +12,7 @@
 //   dnd-off    "Nicht stören" aufheben
 //   dnd-on     "Nicht stören" einschalten (Filter "Prioritär", nicht "Totenstille")
 //   locate     sofort eine frische Position melden
+//   say        einen Text vorlesen (Parameter t=<Text>, sonst Mylos Standardsatz)
 //
 // Warum der Umweg über den Server: Der Push braucht den privaten Schlüssel
 // eines Firebase-Dienstkontos (siehe lib/fcm.js). Der darf nicht in eine APK.
@@ -41,8 +42,39 @@ export const FCM_KEY_PREFIX = 'person_fcm:';
  */
 export const BEFEHLE = [
   'ring', 'unmute', 'vibrate', 'locate', 'silence', 'torch', 'torch-off',
-  'dnd-off', 'dnd-on',
+  'dnd-off', 'dnd-on', 'say',
 ];
+
+/**
+ * Laenge, ab der ein Ansagetext gekuerzt wird.
+ *
+ * Derselbe Wert wie `RingCommand.MAX_TEXT` in der Actions-Hub-App. Die kuerzt
+ * schon selbst; diese Grenze gilt jedem anderen Aufrufer - eine FCM-Nachricht
+ * darf 4 KB gross sein, ein vorgelesener Satz nicht.
+ */
+export const MAX_TEXT = 200;
+
+/**
+ * Haengt den Ansagetext an die Nutzlast - oder gibt sie unveraendert zurueck.
+ *
+ * Format: `<verb>:<Person>:<tst>:=<percent-kodiert>`. Die Marke `=` vor dem
+ * Text ist nicht Zierrat: Ohne sie waere `say:Julia:1700000000:112` zweideutig
+ * - das letzte Feld koennte der Text "112" sein oder der Zeitstempel eines
+ * Namens "Julia:1700000000". `encodeURIComponent` erzeugt niemals ein `=`,
+ * also entscheidet es den Fall.
+ *
+ * **Neu kodieren ist Pflicht, nicht Kosmetik.** `req.query.t` kommt bereits
+ * dekodiert an (`Bitte+melde+dich` -> `Bitte melde dich`); unverandert
+ * angehaengt zerlegte ein Doppelpunkt im Text die Nutzlast. Ob dabei `%20`
+ * oder `+` entsteht, ist gleich - Mylos `URLDecoder` liest beides.
+ *
+ * Reine Funktion und exportiert, damit sie ohne Netz pruefbar bleibt.
+ */
+export function mitText(nutzlast, roh) {
+  const text = (roh || '').trim().slice(0, MAX_TEXT);
+  if (!text) return nutzlast;
+  return `${nutzlast}:=${encodeURIComponent(text)}`;
+}
 
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
@@ -81,8 +113,10 @@ export default async function handler(req, res) {
   }
 
   // Dieselbe Nutzlast wie ueber ntfy, damit die App nur ein Format kennt.
+  // Der Ansagetext haengt als optionales viertes Feld hinten dran; ohne ihn
+  // bleibt es bei der dreiteiligen Form, die jedes aeltere Mylo liest.
   const tst = Math.floor(Date.now() / 1000);
-  const nutzlast = `${befehl}:${person.name}:${tst}`;
+  const nutzlast = mitText(`${befehl}:${person.name}:${tst}`, req.query.t);
 
   // Zwei Felder, und das ist Absicht: "cmd" ist das neue, "ring" liest Mylo
   // 2.2.0. Nicht alle Familien-Handys werden gleichzeitig aktualisiert - ohne
