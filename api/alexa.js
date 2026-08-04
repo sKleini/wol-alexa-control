@@ -36,6 +36,10 @@ export default async function handler(req, res) {
     return handlePowerControl(request, res);
   }
 
+  if (namespace === 'Alexa.SceneController') {
+    return handleSceneControl(request, res);
+  }
+
   return res.status(200).json({
     event: {
       header: {
@@ -143,6 +147,31 @@ async function handleDiscovery(request, res) {
       ]
     });
 
+    // Muelltonne: als Szene und nicht als Schalter, damit "Alexa, Muelltonne"
+    // genuegt statt "Alexa, schalte Muelltonne ein" - es ist ja eine Frage und
+    // kein Schaltvorgang. Ausgeloest wird nur eine Ansage auf dem VPS, es gibt
+    // nichts zurueckzunehmen: supportsDeactivation false.
+    endpoints.push({
+      endpointId: "endpoint-abfall",
+      manufacturerName: "Kleini",
+      friendlyName: "Mülltonne",
+      description: "Sagt die nächste Leerung an",
+      displayCategories: ["SCENE_TRIGGER"],
+      capabilities: [
+        {
+          type: "AlexaInterface",
+          interface: "Alexa.SceneController",
+          version: "3",
+          supportsDeactivation: false
+        },
+        {
+          type: "AlexaInterface",
+          interface: "Alexa",
+          version: "3"
+        }
+      ]
+    });
+
     return res.status(200).json({
       event: {
         header: {
@@ -160,6 +189,78 @@ async function handleDiscovery(request, res) {
     console.error("Discovery Error:", err);
     return res.status(500).json({ error: "Internal Error" });
   }
+}
+
+// "Alexa, Muelltonne" -> Nachricht aufs ntfy-Topic -> abfall-relay auf dem
+// Strato-VPS -> Ansage der naechsten Leerung auf dem zuletzt angesprochenen
+// Echo. Der VPS-Teil steckt in sKleini/wireguard-vps-strato (Workflow 30);
+// hier wird nur veroeffentlicht. Antwort ist bewusst nur die Quittung - die
+// eigentliche Auskunft kommt Sekunden spaeter als Ansage.
+async function handleSceneControl(request, res) {
+  const { header, endpoint } = request.directive;
+  if (!endpoint || typeof endpoint.endpointId !== 'string') return res.status(400).end();
+  const correlationToken = header.correlationToken;
+  const messageId = header.messageId;
+  const endpointId = endpoint.endpointId;
+  const name = header.name;
+
+  const fehler = (type, message) => res.status(200).json({
+    event: {
+      header: {
+        namespace: "Alexa",
+        name: "ErrorResponse",
+        messageId: messageId + "-R",
+        correlationToken: correlationToken,
+        payloadVersion: "3"
+      },
+      endpoint: { endpointId: endpointId },
+      payload: { type: type, message: message }
+    }
+  });
+
+  // Nur auf die eine Szene reagieren, die wir auch veroeffentlicht haben -
+  // dieselbe Vorsicht wie bei handlePowerControl.
+  if (endpointId !== 'endpoint-abfall') {
+    console.warn(`Scene Control for unknown endpoint: ${endpointId}`);
+    return fehler("NO_SUCH_ENDPOINT", "Unknown endpoint");
+  }
+
+  // supportsDeactivation ist false; ein Deactivate sollte gar nicht kommen.
+  if (name !== 'Activate') {
+    return fehler("INVALID_DIRECTIVE", "Only Activate is supported");
+  }
+
+  if (!process.env.ABFALL_TOPIC || !process.env.ABFALL_PASSWORD) {
+    console.error("ABFALL_TOPIC or ABFALL_PASSWORD not configured");
+    return fehler("INTERNAL_ERROR", "ABFALL_TOPIC or ABFALL_PASSWORD not configured");
+  }
+
+  try {
+    await fetch(`https://ntfy.sh/${process.env.ABFALL_TOPIC}`, {
+      method: 'POST',
+      body: `abfall:naechste:${process.env.ABFALL_PASSWORD}`
+    });
+    console.log("Sent abfall command: naechste");
+  } catch (err) {
+    console.error("Error sending abfall command to ntfy:", err);
+  }
+
+  return res.status(200).json({
+    event: {
+      header: {
+        namespace: "Alexa.SceneController",
+        name: "ActivationStarted",
+        messageId: messageId + "-R",
+        correlationToken: correlationToken,
+        payloadVersion: "3"
+      },
+      endpoint: { endpointId: endpointId },
+      payload: {
+        cause: { type: "VOICE_INTERACTION" },
+        timestamp: new Date().toISOString()
+      }
+    }
+  });
 }
 
 async function sendWakeViaNtfy(cleanId) {

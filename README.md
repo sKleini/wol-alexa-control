@@ -13,6 +13,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Secure SHA-256 Bridge**: Encrypted communication between Alexa and your PC using your private hash.
 - **Modern Dashboard**: Sleek *Glassmorphism* interface to manage your devices.
 - **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
+- **Waste Collection (Optional)**: Say *"Alexa, Mülltonne"* and hear which bin goes out next — a scene that triggers a spoken announcement on the Echo you just talked to.
 - **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — fed by a free location-logger app (GPSLogger) posting the phone's position, no extra server component.
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
@@ -35,6 +36,9 @@ Alexa → AWS Lambda → Vercel → ntfy.sh ("off") → Windows Agent (agent.exe
 
 Fritzbox LED (optional):
 Alexa ("Fritzbox LED") or GET /api/led → Vercel → ntfy.sh ("led:<on|off>:<password>") → VPS relay (fritzbox-led-relay) → Fritz!Box LED
+
+Waste collection (optional): "Alexa, Mülltonne"
+Alexa scene → Vercel → ntfy.sh ("abfall:naechste:<password>") → VPS relay (abfall-relay) → announcement via alexa_remote_control.sh
 
 Location feature (optional): "Alexa, wo ist Julia?"
 Phone (GPSLogger, periodic HTTP) → Vercel /api/location → Redis
@@ -95,6 +99,8 @@ VPS cron (smarttag-relay) → POST /api/relay-status → Redis → "wo ist …?"
 | `LED_TOPIC` | *(optional, LED feature)* ntfy.sh topic the LED relay listens on |
 | `LED_PASSWORD` | *(optional, LED feature)* Password expected by the LED relay |
 | `LED_CALL_KEY` | **Required if you use the manual `/api/led` endpoint.** The endpoint fails closed: with this variable unset it always answers `401`. Leave it unset to keep `/api/led` disabled — the Alexa LED command and the LED schedule work independently of it |
+| `ABFALL_TOPIC` | *(optional, waste feature)* ntfy.sh topic the waste relay listens on |
+| `ABFALL_PASSWORD` | *(optional, waste feature)* Password expected by the waste relay |
 | `LOCATION_KEY` | *(optional, location feature)* Secret key for the `/api/location` ingest endpoint |
 | `ALEXA_SKILL_ID` | *(optional, location feature)* Skill ID of the custom skill (`amzn1.ask.skill....`) |
 | `DEFAULT_PERSON` | *(optional, location feature)* Fallback person name (e.g. `Julia`) |
@@ -234,6 +240,25 @@ The skill exposes a static virtual device **"Fritzbox LED"** (shown as a light i
   ```
 - Monitor the relay on the VPS: `journalctl -u fritzbox-led-relay -f`
 
+#### 7b. (Optional) Waste Collection Announcement
+
+The skill exposes a static virtual **scene "Mülltonne"**. Activating it does not switch anything — it asks the VPS to announce the next waste collection. A scene rather than a switch, so that plain *"Alexa, Mülltonne"* works instead of *"Alexa, turn on Mülltonne"*: it is a question, not a switch.
+
+```
+"Alexa, Mülltonne"
+  → Vercel /api/alexa (Alexa.SceneController → Activate)
+  → ntfy.sh "abfall:naechste:<ABFALL_PASSWORD>"
+  → abfall-relay on the VPS
+  → announcement on the Echo you just spoke to
+```
+
+Alexa only acknowledges the activation; the actual answer arrives a few seconds later as a spoken announcement, on the Echo that last heard a command.
+
+- Set the Vercel environment variables `ABFALL_TOPIC` and `ABFALL_PASSWORD` (see step 2).
+- Deploy the relay on the VPS — workflow 30 in [`sKleini/wireguard-vps-strato`](https://github.com/sKleini/wireguard-vps-strato), which also holds the calendar and the announcement itself (workflows 28 and 29). Use the *same* topic and password there.
+- Tell Alexa: **"Alexa, discover my devices"** — "Mülltonne" appears as a scene.
+- Monitor the relay on the VPS: `journalctl -u abfall-relay -f`
+
 #### 8. (Optional) 📍 Location Feature — "Alexa, wo ist Julia?"
 
 Ask Alexa where a family member currently is and get a spoken answer like *"Julia ist zu Hause, zuletzt aktualisiert vor 5 Minuten."* The location comes from a free, open-source logger app ([GPSLogger](https://gpslogger.app/)) on their Android phone that posts the position directly to your Vercel app — no cloud service in between, no VPS component, no fragile APIs.
@@ -340,6 +365,7 @@ The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creatin
 | *"Alexa, turn on [Device Name]"* | Sends WoL via VPS → Fritz!Box TR-064 |
 | *"Alexa, turn off [Device Name]"* | Sends shutdown command via ntfy.sh → Windows Agent |
 | *"Alexa, turn on/off Fritzbox LED"* | Switches the Fritz!Box LED display via ntfy.sh → LED relay |
+| *"Alexa, Mülltonne"* | Announces the next waste collection via ntfy.sh → waste relay |
 | *"Alexa, wo ist Julia?"* | Speaks the current location of the default person (via routine, see 8.4) |
 | *"Alexa, frag familien finder, wo [Name] ist"* | Speaks the current location of any configured person |
 
@@ -354,6 +380,8 @@ All communication between Vercel and your PC/VPS uses [ntfy.sh](https://ntfy.sh)
 The VPS relay uses local TR-064 (HTTP, port 49000) over the WireGuard tunnel — no Fritz!Box external access is required or enabled.
 
 The optional LED feature uses its own, fully separated chain: a dedicated ntfy.sh topic (`LED_TOPIC`) and password (`LED_PASSWORD`) taken directly from the environment variables (no hashing). The LED relay additionally ignores messages older than 60 seconds or with a wrong password.
+
+The optional waste feature works the same way: its own topic (`ABFALL_TOPIC`) and password (`ABFALL_PASSWORD`), separate from LED and WoL, and a relay that ignores messages older than 60 seconds, with a wrong password, with an unknown action or with an already seen ID.
 
 #### Endpoint protection
 
