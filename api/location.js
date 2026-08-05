@@ -65,6 +65,36 @@ function ssidOderNull(raw) {
 }
 
 /**
+ * Laenge, ab der eine Lautstaerke-Angabe nicht mehr plausibel ist.
+ *
+ * Fuenf Kanaele ergeben knapp 60 Zeichen ("media=70,ring=100,notif=50,
+ * alarm=80,system=60"). Das Doppelte laesst Luft fuer Kanaele, die es heute
+ * noch nicht gibt, und zieht trotzdem eine Grenze - der Wert landet in Redis.
+ */
+const VOL_MAX = 120;
+const VOL_FORM = /^[a-z]+=\d{1,3}(,[a-z]+=\d{1,3})*$/;
+
+/**
+ * Die Lautstaerken der Tonkanaele - `media=70,ring=100`, Prozent je Kanal.
+ *
+ * Eine Zeichenkette und nicht fuenf Felder: Sie kommt so von Mylo, geht so an
+ * die Actions-App, und beide lesen sie mit derselben Funktion
+ * (`Lautstaerken.kt`, wortgleich in beiden Apps). Hier wird sie deshalb nur auf
+ * ihre Form geprueft und sonst unveraendert durchgereicht.
+ *
+ * **Unbekannte Kanalnamen duerfen durch** - anders als bei [RINGER_MODES], und
+ * das ist Absicht: Die Apps ueberspringen still, was sie nicht kennen. Eine
+ * feste Kanalliste hier zwaenge dazu, den Server vor den Apps zu aktualisieren,
+ * und genau diese Reihenfolge kann niemand erzwingen.
+ */
+function volOderNull(raw) {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim();
+  if (!v || v.length > VOL_MAX || !VOL_FORM.test(v)) return null;
+  return v;
+}
+
+/**
  * Die Zustandsfelder einer Meldung - vollstaendig, also mit `null` fuer
  * alles, was nicht mitkam.
  *
@@ -79,6 +109,10 @@ function zustandVoll(pick) {
     dnd: jaNeinFlag(pick('dnd')),
     zen: jaNeinFlag(pick('zen')),
     torch: jaNeinFlag(pick('torch')),
+    // Die Lautstaerken aller Tonkanaele. Ohne sie muesste der Regler-Dialog
+    // der Actions-App raten, und ein geratener Regler stellt beim Absenden
+    // Kanaele um, die niemand angefasst hat.
+    vol: volOderNull(pick('vol')),
     chg: jaNeinFlag(pick('chg')),
     // Verbindungsart und WLAN-Name: erklaeren eine alternde Position
     // ("war im Funkloch") und sind zugleich ein von GPS unabhaengiger
