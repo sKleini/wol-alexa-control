@@ -13,6 +13,8 @@
 //   dnd-on     "Nicht stören" einschalten (Filter "Prioritär", nicht "Totenstille")
 //   locate     sofort eine frische Position melden
 //   say        einen Text vorlesen (Parameter t=<Text>, sonst Mylos Standardsatz)
+//   volume     Tonkanaele auf einen Prozentwert stellen
+//              (Parameter t=media=70,ring=100 - ohne ihn passiert nichts)
 //
 // Warum der Umweg über den Server: Der Push braucht den privaten Schlüssel
 // eines Firebase-Dienstkontos (siehe lib/fcm.js). Der darf nicht in eine APK.
@@ -42,7 +44,7 @@ export const FCM_KEY_PREFIX = 'person_fcm:';
  */
 export const BEFEHLE = [
   'ring', 'unmute', 'vibrate', 'locate', 'silence', 'torch', 'torch-off',
-  'dnd-off', 'dnd-on', 'say',
+  'dnd-off', 'dnd-on', 'say', 'volume',
 ];
 
 /**
