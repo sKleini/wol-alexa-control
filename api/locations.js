@@ -11,6 +11,7 @@
 import { Redis } from '@upstash/redis'
 import { buildLocationList } from '../lib/geo.js'
 import { keyOk } from '../lib/auth.js'
+import { merkeHubToken } from '../lib/hub-push.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -27,6 +28,15 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Nebenbei das FCM-Token des Actions Hub mitnehmen, falls eines dabei ist:
+    // So bekommt er Zonenwechsel als Push statt sie im Viertelstundentakt zu
+    // erfragen. Kein eigener Registrierungs-Endpunkt - dieser Abruf laeuft
+    // ohnehin regelmaessig, und genau so haengt Mylo sein Token an die
+    // Standortmeldung (api/location.js). Faengt selbst ab: Ein Token, das
+    // nicht gespeichert werden konnte, ist kein Grund, die Liste zu
+    // verweigern; der naechste Abruf bringt es wieder mit.
+    await merkeHubToken(redis, req).catch(err =>
+      console.warn('Hub-Token nicht gespeichert:', err));
     const persons = await buildLocationList(redis);
     return res.status(200).json({
       now: Math.floor(Date.now() / 1000),
