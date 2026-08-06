@@ -4,6 +4,7 @@
 // GPSLogger's custom URL with %LAT/%LON/%ACC/%BATT placeholders).
 import { Redis } from '@upstash/redis'
 import { keyOk } from '../lib/auth.js'
+import { zonenWechsel, sendeZonenwechsel } from '../lib/hub-push.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -268,9 +269,42 @@ export default async function handler(req, res) {
 
   await redis.set(redisKey, location);
   await merkeFcmToken(req, person);
+  await meldeZonenwechsel(person, vorher, lat, lon, location.tst);
 
   if (isOwnTracks) return ackOwnTracks();
   return res.status(200).json({ ok: true });
+}
+
+/**
+ * Hat die Person eine Zone betreten oder verlassen? Dann die Actions-Hubs wecken.
+ *
+ * **Warum hier und nicht in der App.** Der Hub verglich das bis 3.15.x selbst,
+ * beim Abruf im Viertelstundentakt. Das war die optimistische Rechnung: Android
+ * schiebt die Hintergrundaufgabe einer selten geoeffneten App um acht bis
+ * vierundzwanzig Stunden, und die Meldung kam dann einen halben Tag zu spaet.
+ * Hier ist die Stelle, an der der Uebertritt zuerst bekannt ist.
+ *
+ * **Nur auf dem Positions-Weg.** Die Statusmeldung (`st=1`) traegt keine
+ * Koordinaten und veraendert den Aufenthaltsort nicht - dort gibt es nichts zu
+ * vergleichen.
+ *
+ * Verglichen wird gegen `vorher`, also den Datensatz VOR dem Schreiben. Der
+ * Aufruf steht deshalb nach `redis.set`, arbeitet aber mit dem alten Stand:
+ * Die Position gehoert gespeichert, auch wenn der Push scheitert.
+ *
+ * Faengt alles ab. Ein Push, der nicht rausgeht, darf die Standortmeldung
+ * nicht scheitern lassen - Mylo versuchte sie sonst erneut, obwohl die
+ * Position laengst in Redis steht.
+ */
+async function meldeZonenwechsel(person, vorher, lat, lon, tst) {
+  try {
+    const zones = await redis.get('geo_zones') || [];
+    const wechsel = zonenWechsel(zones, vorher, lat, lon);
+    if (!wechsel) return;
+    await sendeZonenwechsel(redis, person.name, wechsel, tst);
+  } catch (err) {
+    console.warn('Zonenwechsel-Push fehlgeschlagen:', err);
+  }
 }
 
 /**
