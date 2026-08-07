@@ -124,6 +124,12 @@ function zustandVoll(pick) {
     // stehengebliebene Position sonst offen laesst: warum kommt nichts Neues?
     air: jaNeinFlag(pick('air')),
     gps: jaNeinFlag(pick('gps')),
+    // Darf Mylo eine sichtbare Meldung aufziehen ("Ueber anderen Apps
+    // anzeigen")? Die Voraussetzung des show-Befehls, nicht sein Ergebnis -
+    // dieselbe Rolle wie dnd beim Lautstellen. Ohne die Freigabe laeuft show
+    // am Handy ins Leere, und der Hub soll das sagen koennen, BEVOR jemand
+    // ihn schickt.
+    ovl: jaNeinFlag(pick('ovl')),
   };
 }
 
