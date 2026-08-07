@@ -15,6 +15,8 @@
 //   say        einen Text vorlesen (Parameter t=<Text>, sonst Mylos Standardsatz)
 //   volume     Tonkanaele auf einen Prozentwert stellen
 //              (Parameter t=media=70,ring=100 - ohne ihn passiert nichts)
+//   buzz       ruettelt bis zu 30 Sekunden im Muster, ohne jeden Ton
+//   buzz-off   nur das Ruetteln wieder aus
 //
 // Warum der Umweg über den Server: Der Push braucht den privaten Schlüssel
 // eines Firebase-Dienstkontos (siehe lib/fcm.js). Der darf nicht in eine APK.
@@ -44,7 +46,7 @@ export const FCM_KEY_PREFIX = 'person_fcm:';
  */
 export const BEFEHLE = [
   'ring', 'unmute', 'vibrate', 'locate', 'silence', 'torch', 'torch-off',
-  'dnd-off', 'dnd-on', 'say', 'volume',
+  'dnd-off', 'dnd-on', 'say', 'volume', 'buzz', 'buzz-off',
 ];
 
 /**
