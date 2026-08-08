@@ -20,6 +20,8 @@
 //   show       zeigt einen Text gross auf dem Bildschirm, auch im gesperrten
 //              Zustand (Parameter t=<Text> wie bei say). Der sichtbare
 //              Zwilling zu say: Er bleibt stehen, statt vorbei zu sein.
+//              Dazu optional ein Bild: i=<id> aus /api/bild. Das Bild selbst
+//              passt in keine Push-Nutzlast, deshalb nur die Kennung.
 //
 // Warum der Umweg über den Server: Der Push braucht den privaten Schlüssel
 // eines Firebase-Dienstkontos (siehe lib/fcm.js). Der darf nicht in eine APK.
@@ -83,6 +85,28 @@ export function mitText(nutzlast, roh) {
   return `${nutzlast}:=${encodeURIComponent(text)}`;
 }
 
+/**
+ * Haengt die Bild-Kennung an - oder gibt die Nutzlast unveraendert zurueck.
+ *
+ * Format: `<verb>:<Person>:<tst>[:=<Text>]:#<id>`. Die Marke `#` traegt aus
+ * demselben Grund wie das `=` vor dem Text: `encodeURIComponent` erzeugt
+ * niemals ein `#`, das Zeichen kann also nicht aus dem kodierten Text stammen
+ * und entscheidet den Fall eindeutig.
+ *
+ * **Kommt NACH mitText**, nie davor - die Apps schaelen die Felder von rechts
+ * ab und erwarten die Kennung zuletzt.
+ *
+ * Nur Hex wird durchgelassen: Was hier hineinkommt, stammt aus /api/bild und
+ * hat genau diese Form. Alles andere zerlegte im schlimmsten Fall die Nutzlast.
+ *
+ * Reine Funktion und exportiert, damit sie ohne Netz pruefbar bleibt.
+ */
+export function mitBild(nutzlast, roh) {
+  const id = (roh || '').trim();
+  if (!/^[0-9a-f]{16}$/.test(id)) return nutzlast;
+  return `${nutzlast}:#${id}`;
+}
+
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   if (!keyOk(req)) return res.status(401).end();
@@ -123,7 +147,7 @@ export default async function handler(req, res) {
   // Der Ansagetext haengt als optionales viertes Feld hinten dran; ohne ihn
   // bleibt es bei der dreiteiligen Form, die jedes aeltere Mylo liest.
   const tst = Math.floor(Date.now() / 1000);
-  const nutzlast = mitText(`${befehl}:${person.name}:${tst}`, req.query.t);
+  const nutzlast = mitBild(mitText(`${befehl}:${person.name}:${tst}`, req.query.t), req.query.i);
 
   // Zwei Felder, und das ist Absicht: "cmd" ist das neue, "ring" liest Mylo
   // 2.2.0. Nicht alle Familien-Handys werden gleichzeitig aktualisiert - ohne
