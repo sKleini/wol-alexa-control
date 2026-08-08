@@ -1,0 +1,124 @@
+{
+    "interactionModel": {
+        "languageModel": {
+            "invocationName": "familien finder",
+            "intents": [
+                {
+                    "name": "AMAZON.CancelIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.HelpIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.StopIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.NavigateHomeIntent",
+                    "samples": []
+                },
+                {
+                    "name": "WhereIsPersonIntent",
+                    "slots": [
+                        {
+                            "name": "person",
+                            "type": "PERSON_NAME"
+                        }
+                    ],
+                    "samples": [
+                        "wo ist {person}",
+                        "wo {person} ist",
+                        "wo {person} gerade ist",
+                        "wo sich {person} befindet",
+                        "nach dem standort von {person}",
+                        "sag mir wo {person} ist"
+                    ]
+                },
+                {
+                    "name": "RingPersonIntent",
+                    "slots": [
+                        {
+                            "name": "person",
+                            "type": "PERSON_NAME"
+                        }
+                    ],
+                    "samples": [
+                        "ob {person}s handy klingeln kann",
+                        "lass {person}s handy klingeln",
+                        "{person}s handy klingeln zu lassen",
+                        "lass das handy von {person} klingeln",
+                        "ob das handy von {person} klingeln kann",
+                        "klingel {person}s handy"
+                    ]
+                },
+                {
+                    "name": "SilencePersonIntent",
+                    "slots": [
+                        {
+                            "name": "person",
+                            "type": "PERSON_NAME"
+                        }
+                    ],
+                    "samples": [
+                        "lass {person}s handy aufhören",
+                        "ob {person}s handy aufhören kann",
+                        "stoppe {person}s handy",
+                        "{person}s handy soll ruhig sein",
+                        "lass das handy von {person} aufhören"
+                    ]
+                }
+            ],
+            "types": [
+                {
+                    "name": "PERSON_NAME",
+                    "values": [
+                        {
+                            "name": {
+                                "value": "Julia"
+                            }
+                        },
+                        {
+                            "name": {
+                                "value": "Oma Petra"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        "dialog": {
+            "delegationStrategy": "SKILL_RESPONSE",
+            "intents": [
+                {
+                    "name": "RingPersonIntent",
+                    "confirmationRequired": true,
+                    "prompts": {
+                        "confirmation": "Confirm.Intent.RingPerson"
+                    },
+                    "slots": [
+                        {
+                            "name": "person",
+                            "type": "PERSON_NAME",
+                            "confirmationRequired": false,
+                            "elicitationRequired": false,
+                            "prompts": {}
+                        }
+                    ]
+                }
+            ]
+        },
+        "prompts": [
+            {
+                "id": "Confirm.Intent.RingPerson",
+                "variations": [
+                    {
+                        "type": "PlainText",
+                        "value": "Soll {person}s Handy wirklich klingeln?"
+                    }
+                ]
+            }
+        ]
+    }
+}
