@@ -44,39 +44,40 @@ Regel gilt in den Prompts.
 Was der Skill *spricht*, ist davon nicht betroffen: Dort steht „Julias Handy",
 denn das ist gewöhnlicher Text aus `api/skill.js` und kein Sprachmuster.
 
-## Personen pflegen — an zwei Stellen
+## Personen pflegen
 
-Ein Name muss **beides** sein, sonst passiert nichts:
+**Seit den dynamischen Werten reicht das Dashboard.** `api/skill.js` schickt bei
+jeder Antwort eine `Dialog.UpdateDynamicEntities`-Direktive mit den Personen
+aus `geo_persons` — Alexa lernt neue Namen also von selbst, ohne dass jemand
+diese Datei anfassen müsste.
 
-| Stelle | Wozu | Fehlt er dort, sagt Alexa |
-| --- | --- | --- |
-| `PERSON_NAME` in dieser Datei | damit Alexa den Namen überhaupt **hört** | *„Wessen Handy soll klingeln? Ich kenne …"* |
-| Person im Dashboard (`geo_persons`) | damit der Skill weiß, **wen** er erreichen soll | *„Ich habe keine Person namens … gefunden."* |
+Zwei Grenzen gehören dazu, und deshalb bleibt die statische Liste stehen:
 
-Die beiden Meldungen sehen sich ähnlich und meinen Verschiedenes. Die erste ist
-die verwirrendere: Sie klingt, als hätte man keinen Namen gesagt, obwohl man
-einen gesagt hat — Alexa füllt den Slot schlicht nicht, wenn der Name hier
-fehlt, und der Skill bekommt statt „Stefan" gar nichts. **Deshalb zählt die
-Rückfrage die bekannten Namen mit auf**; wer sie hört, sieht den Grund sofort,
-statt denselben Satz noch einmal zu sagen, nur lauter.
+- Die dynamischen Werte gelten **pro Nutzer** und **zeitlich begrenzt**, nicht
+  dauerhaft im Modell. Ein Echo, das den Skill lange nicht benutzt hat, fällt
+  auf die statische Liste zurück.
+- Sie wirken erst **nach** einer Antwort des Skills. Die allererste Frage nach
+  einer eben angelegten Person kann also noch ins Leere gehen; die zweite nicht
+  mehr.
 
-> **Ein Name, der hier fehlt, kann eine Weile trotzdem funktionieren — und
-> genau das ist die Falle.** Ein eigener Slot-Typ ist bei Alexa keine
+Wer die Namen der Familie hier einträgt, bekommt sie also sofort und
+zuverlässig; wer eine Person nur im Dashboard anlegt, bekommt sie ab dem
+zweiten Satz. Beides ist in Ordnung — nur verlassen sollte man sich nicht auf
+die Kulanz, die es früher gab:
+
+> **Ein Name, der nirgends steht, kann eine Weile trotzdem funktionieren — und
+> genau das war die Falle.** Ein eigener Slot-Typ ist bei Alexa keine
 > geschlossene Liste: Unbekanntes kommt gelegentlich als
-> `ER_SUCCESS_NO_MATCH` samt gesprochenem Wort durch, und der Skill kann damit
-> arbeiten. Verlassen darf man sich darauf nicht. Genau so lief *„wo ist
-> Amelia"* monatelang, obwohl Amelia nie im Modell stand — bis ein dritter
-> Wert und zwei weitere Intents am selben Slot-Typ dazukamen und die Erkennung
-> diese Kulanz aufgab. Der Satz hörte auf zu funktionieren, ohne dass jemand
-> ihn angefasst hätte.
->
-> **Wer eine Person anlegt, trägt sie hier mit ein.** Nicht „falls es nicht
-> geht", sondern immer.
+> `ER_SUCCESS_NO_MATCH` samt gesprochenem Wort durch. Genau so lief *„wo ist
+> Amelia"*, obwohl Amelia nie im Modell stand — bis ein dritter Wert und zwei
+> weitere Intents am selben Slot-Typ dazukamen und die Erkennung diese Kulanz
+> aufgab. Der Satz hörte auf zu funktionieren, ohne dass jemand ihn angefasst
+> hätte.
 
-Die aufgezählten Namen kommen aus dem **Dashboard**, nicht aus dieser Datei:
-Sie beantworten „wen kann dieser Skill erreichen", und das ist die Frage
-dahinter. Steht ein Name hier, aber nicht dort, hört Alexa ihn — und der Skill
-sagt dann ehrlich, dass er ihn nicht kennt.
+Kennt der Skill einen Namen gar nicht, sagt er es und zählt auf, wen er kennt
+(*„Wessen Handy soll klingeln? Ich kenne …"*). Die Liste kommt aus dem
+Dashboard, nicht aus dieser Datei: Sie beantwortet „wen kann dieser Skill
+erreichen", und das ist die Frage dahinter.
 
 ## Die Rückfrage vor dem Klingeln
 
