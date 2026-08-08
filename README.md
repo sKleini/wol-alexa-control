@@ -297,68 +297,27 @@ The `u` parameter must match the person's name in the dashboard (8.2). For more 
 
 1. [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) → **Create Skill** → type **Custom**, language **German (DE)**, hosting **Provision your own**.
 2. **Invocation name**: e.g. `familien finder`.
-3. Open the **JSON Editor** under *Interaction Model* and paste (add one slot value per person):
+3. Open the **JSON Editor** under *Interaction Model* and paste the contents of
+   [`alexa/interaction-model.de-DE.json`](alexa/interaction-model.de-DE.json) — **add one slot
+   value under `PERSON_NAME` per person**. A name that is missing there is never recognised, and
+   the skill answers *"Ich habe keine Person namens … gefunden."*
 
-```json
-{
-  "interactionModel": {
-    "languageModel": {
-      "invocationName": "familien finder",
-      "intents": [
-        { "name": "AMAZON.CancelIntent", "samples": [] },
-        { "name": "AMAZON.HelpIntent", "samples": [] },
-        { "name": "AMAZON.StopIntent", "samples": [] },
-        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
-        {
-          "name": "WhereIsPersonIntent",
-          "slots": [{ "name": "person", "type": "PERSON_NAME" }],
-          "samples": [
-            "wo ist {person}",
-            "wo {person} ist",
-            "wo {person} gerade ist",
-            "wo sich {person} befindet",
-            "nach dem standort von {person}",
-            "sag mir wo {person} ist"
-          ]
-        },
-        {
-          "name": "RingPersonIntent",
-          "confirmationRequired": true,
-          "slots": [{ "name": "person", "type": "PERSON_NAME" }],
-          "samples": [
-            "ob {person}s handy klingeln kann",
-            "lass {person}s handy klingeln",
-            "{person}s handy klingeln zu lassen",
-            "lass das handy von {person} klingeln"
-          ]
-        },
-        {
-          "name": "SilencePersonIntent",
-          "slots": [{ "name": "person", "type": "PERSON_NAME" }],
-          "samples": [
-            "lass {person}s handy aufhoeren",
-            "ob {person}s handy aufhoeren kann",
-            "stoppe {person}s handy",
-            "{person}s handy soll ruhig sein"
-          ]
-        }
-      ],
-      "types": [
-        {
-          "name": "PERSON_NAME",
-          "values": [{ "name": { "value": "Julia" } }]
-        }
-      ]
-    }
-  }
-}
-```
+   The model defines three intents: `WhereIsPersonIntent` (speaks the location), `RingPersonIntent`
+   (makes the phone ring) and `SilencePersonIntent` (stops sound, torch and announcement).
 
-> **`"confirmationRequired": true` is the whole safety mechanism** on `RingPersonIntent`: Alexa asks *"Soll Julias Handy wirklich klingeln?"* and only forwards the intent once you answer yes. A phone that goes off in the middle of a meeting because something sounded similar is worse than one you look for by hand. `SilencePersonIntent` deliberately has no confirmation — stopping is harmless, and whoever just found the ringing phone should not have to answer a question first.
+> **The confirmation before ringing lives in the `dialog` section, not next to the intent in
+> `languageModel`.** That is not a matter of taste: in the other place the console accepts the
+> field but never evaluates it — the question would not be asked and the phone would ring straight
+> away, which is exactly what it is there to prevent.
 >
-> If the flag is missing or auto-delegation is off, the skill asks back on its own (`Dialog.ConfirmIntent`) rather than ringing straight away — a configuration slip must not surface as the very thing it is meant to prevent.
-
-> **Add every person as a slot value** under `PERSON_NAME` — the example lists only `Julia`. A name that is not there resolves to nothing, and the skill answers *"Ich habe keine Person namens … gefunden."*
+> `delegationStrategy` is `SKILL_RESPONSE`, so Alexa hands the intent to `api/skill.js`, which
+> answers with a `Dialog.ConfirmIntent` directive carrying the person's name. The question lives in
+> the code, not in two versions in two places. And should the dialog section ever go missing, the
+> skill still asks back on its own rather than ringing — a configuration slip must not surface as
+> the very thing it is meant to prevent.
+>
+> `SilencePersonIntent` deliberately has **no** confirmation: stopping is harmless, and whoever
+> just found the ringing phone should not have to answer a question first.
 
 4. **Build the model**.
 5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"*.
