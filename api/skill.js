@@ -109,13 +109,44 @@ function resolvedSlotValue(slot) {
 
 async function handleWhereIs(intent, res) {
   const value = resolvedSlotValue(intent.slots?.person);
-  if (!value) return speak(res, 'Wen soll ich suchen?', false);
+  if (!value) return frageWer(res, 'Wen soll ich suchen?');
 
   const persons = await redis.get('geo_persons') || [];
   const person = persons.find(p => p.name.toLowerCase() === value.toLowerCase());
   if (!person) return speak(res, `Ich habe keine Person namens ${value} gefunden.`);
 
   return speak(res, await buildLocationSpeech(redis, person));
+}
+
+/**
+ * Zaehlt Namen so auf, wie man sie spricht: "Julia, Oma Petra und Stefan".
+ *
+ * Rein und exportiert, damit die Aufzaehlung ohne Netz pruefbar bleibt.
+ */
+export function aufzaehlung(namen) {
+  const liste = (namen || []).filter(n => typeof n === 'string' && n.trim());
+  if (liste.length === 0) return '';
+  if (liste.length === 1) return liste[0];
+  return `${liste.slice(0, -1).join(', ')} und ${liste[liste.length - 1]}`;
+}
+
+/**
+ * Die Rueckfrage, wenn kein Name ankam - **mit den Namen, die es gibt.**
+ *
+ * Ein blosses "Wessen Handy soll klingeln?" ist genau dann eine Sackgasse,
+ * wenn man gerade einen Namen gesagt hat: Alexa fuellt den Slot nur, wenn der
+ * Name im Sprachmodell unter PERSON_NAME steht, und ein unbekannter kommt hier
+ * als gar nichts an. Die Frage klingt dann, als haette man geschwiegen - und
+ * man sagt denselben Satz noch einmal, lauter.
+ *
+ * Wer die bekannten Namen mitliest, sieht den Grund sofort. Die Liste kommt
+ * dabei aus dem Dashboard und nicht aus dem Sprachmodell: Sie beantwortet
+ * "wen kann dieser Skill erreichen", und das ist die Frage dahinter.
+ */
+async function frageWer(res, satz) {
+  const persons = await redis.get('geo_persons') || [];
+  const namen = aufzaehlung(persons.map(p => p.name));
+  return speak(res, namen ? `${satz} Ich kenne ${namen}.` : satz, false);
 }
 
 /**
@@ -162,7 +193,7 @@ export function ansage(ergebnis, name) {
  */
 async function handleRing(intent, res) {
   const value = resolvedSlotValue(intent.slots?.person);
-  if (!value) return speak(res, 'Wessen Handy soll klingeln?', false);
+  if (!value) return frageWer(res, 'Wessen Handy soll klingeln?');
 
   const persons = await redis.get('geo_persons') || [];
   const person = persons.find(p => p.name.toLowerCase() === value.toLowerCase());
@@ -191,7 +222,7 @@ async function handleRing(intent, res) {
  */
 async function handleSilence(intent, res) {
   const value = resolvedSlotValue(intent.slots?.person);
-  if (!value) return speak(res, 'Wessen Handy soll aufhören?', false);
+  if (!value) return frageWer(res, 'Wessen Handy soll aufhören?');
 
   const persons = await redis.get('geo_persons') || [];
   const person = persons.find(p => p.name.toLowerCase() === value.toLowerCase());

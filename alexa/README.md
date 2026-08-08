@@ -44,11 +44,26 @@ Regel gilt in den Prompts.
 Was der Skill *spricht*, ist davon nicht betroffen: Dort steht „Julias Handy",
 denn das ist gewöhnlicher Text aus `api/skill.js` und kein Sprachmuster.
 
-## Personen pflegen
+## Personen pflegen — an zwei Stellen
 
-Jede Person aus dem Dashboard muss als Wert unter `PERSON_NAME` stehen. Ein
-Name, der dort fehlt, wird nicht erkannt — der Skill antwortet dann
-*„Ich habe keine Person namens … gefunden."*
+Ein Name muss **beides** sein, sonst passiert nichts:
+
+| Stelle | Wozu | Fehlt er dort, sagt Alexa |
+| --- | --- | --- |
+| `PERSON_NAME` in dieser Datei | damit Alexa den Namen überhaupt **hört** | *„Wessen Handy soll klingeln? Ich kenne …"* |
+| Person im Dashboard (`geo_persons`) | damit der Skill weiß, **wen** er erreichen soll | *„Ich habe keine Person namens … gefunden."* |
+
+Die beiden Meldungen sehen sich ähnlich und meinen Verschiedenes. Die erste ist
+die verwirrendere: Sie klingt, als hätte man keinen Namen gesagt, obwohl man
+einen gesagt hat — Alexa füllt den Slot schlicht nicht, wenn der Name hier
+fehlt, und der Skill bekommt statt „Stefan" gar nichts. **Deshalb zählt die
+Rückfrage die bekannten Namen mit auf**; wer sie hört, sieht den Grund sofort,
+statt denselben Satz noch einmal zu sagen, nur lauter.
+
+Die aufgezählten Namen kommen aus dem **Dashboard**, nicht aus dieser Datei:
+Sie beantworten „wen kann dieser Skill erreichen", und das ist die Frage
+dahinter. Steht ein Name hier, aber nicht dort, hört Alexa ihn — und der Skill
+sagt dann ehrlich, dass er ihn nicht kennt.
 
 ## Die Rückfrage vor dem Klingeln
 
