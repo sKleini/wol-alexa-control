@@ -1,0 +1,43 @@
+name: API-Funktionen zaehlen
+
+run-name: API-Funktionen zaehlen (${{ github.event_name }})
+
+# Vercel macht aus jeder Datei unter api/ eine eigene Serverless Function, und
+# der Hobby-Tarif erlaubt zwoelf davon. Die dreizehnte laesst nicht etwa nur
+# sich selbst scheitern, sondern den ganzen Deploy - und zwar erst bei Vercel,
+# also nachdem der Pull Request laengst gruen war und gemergt ist. Genau so ist
+# es einmal passiert (api/bild.js, siehe lib/bild.js).
+#
+# Diese Pruefung holt den Fehler dorthin, wo er hingehoert: in den Pull
+# Request. Wer eine dreizehnte Datei braucht, legt sie nach lib/ und ruft sie
+# aus einer bestehenden Funktion auf - lib/ zaehlt nicht mit, weil es in die
+# aufrufende Funktion hineingebuendelt wird.
+
+on:
+  pull_request:
+    paths:
+      - 'api/**'
+      - '.github/workflows/api-funktionen.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'api/**'
+  workflow_dispatch:
+
+jobs:
+  zaehlen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Hoechstens zwoelf Funktionen unter api/
+        run: |
+          GRENZE=12
+          ANZAHL=$(find api -maxdepth 1 -type f -name '*.js' | wc -l)
+          echo "api/ enthaelt $ANZAHL Funktionen (erlaubt: $GRENZE)"
+          find api -maxdepth 1 -type f -name '*.js' | sort
+          if [ "$ANZAHL" -gt "$GRENZE" ]; then
+            echo "::error::$ANZAHL Serverless Functions - der Hobby-Tarif erlaubt $GRENZE. Der Vercel-Deploy wuerde scheitern. Neue Logik gehoert nach lib/ und wird aus einer bestehenden api/-Datei aufgerufen."
+            exit 1
+          fi
