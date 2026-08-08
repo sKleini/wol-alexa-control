@@ -14,7 +14,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Modern Dashboard**: Sleek *Glassmorphism* interface to manage your devices.
 - **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
 - **Waste Collection (Optional)**: Say *"Alexa, Mülltonne"* and hear which bin goes out next — a scene that triggers a spoken announcement on the Echo you just talked to.
-- **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — fed by a free location-logger app (GPSLogger) posting the phone's position, no extra server component.
+- **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — or have the phone ring, after Alexa asks you to confirm — fed by a free location-logger app (GPSLogger) posting the phone's position, no extra server component.
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
 ---
@@ -320,6 +320,27 @@ The `u` parameter must match the person's name in the dashboard (8.2). For more 
             "nach dem standort von {person}",
             "sag mir wo {person} ist"
           ]
+        },
+        {
+          "name": "RingPersonIntent",
+          "confirmationRequired": true,
+          "slots": [{ "name": "person", "type": "PERSON_NAME" }],
+          "samples": [
+            "ob {person}s handy klingeln kann",
+            "lass {person}s handy klingeln",
+            "{person}s handy klingeln zu lassen",
+            "lass das handy von {person} klingeln"
+          ]
+        },
+        {
+          "name": "SilencePersonIntent",
+          "slots": [{ "name": "person", "type": "PERSON_NAME" }],
+          "samples": [
+            "lass {person}s handy aufhoeren",
+            "ob {person}s handy aufhoeren kann",
+            "stoppe {person}s handy",
+            "{person}s handy soll ruhig sein"
+          ]
         }
       ],
       "types": [
@@ -332,6 +353,12 @@ The `u` parameter must match the person's name in the dashboard (8.2). For more 
   }
 }
 ```
+
+> **`"confirmationRequired": true` is the whole safety mechanism** on `RingPersonIntent`: Alexa asks *"Soll Julias Handy wirklich klingeln?"* and only forwards the intent once you answer yes. A phone that goes off in the middle of a meeting because something sounded similar is worse than one you look for by hand. `SilencePersonIntent` deliberately has no confirmation — stopping is harmless, and whoever just found the ringing phone should not have to answer a question first.
+>
+> If the flag is missing or auto-delegation is off, the skill asks back on its own (`Dialog.ConfirmIntent`) rather than ringing straight away — a configuration slip must not surface as the very thing it is meant to prevent.
+
+> **Add every person as a slot value** under `PERSON_NAME` — the example lists only `Julia`. A name that is not there resolves to nothing, and the skill answers *"Ich habe keine Person namens … gefunden."*
 
 4. **Build the model**.
 5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"*.
@@ -368,6 +395,8 @@ The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creatin
 | *"Alexa, Mülltonne"* | Announces the next waste collection via ntfy.sh → waste relay |
 | *"Alexa, wo ist Julia?"* | Speaks the current location of the default person (via routine, see 8.4) |
 | *"Alexa, frag familien finder, wo [Name] ist"* | Speaks the current location of any configured person |
+| *"Alexa, frag familien finder, ob [Name]s Handy klingeln kann"* | **Asks back first**, then makes the phone ring (Mylo app required) |
+| *"Alexa, frag familien finder, lass [Name]s Handy aufhören"* | Stops sound, torch and announcement — no confirmation |
 
 The Windows Agent supports **Sleep**, **Shutdown**, and **Hibernate** — configurable in the tray app.
 

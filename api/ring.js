@@ -36,85 +36,28 @@
 // Der Endpunkt heisst weiterhin /api/ring, obwohl er inzwischen mehr kann:
 // Actions Hub 2.1.0 ist bereits ausgeliefert und ruft genau diesen Pfad.
 //
+// **Die Zustellung selbst steht in lib/ring.js**, seit es zwei Absender gibt:
+// diesen Endpunkt und die Sprachbefehle in api/skill.js. Hier bleibt nur, was
+// zu HTTP gehoert - Schluessel pruefen, Parameter lesen, das Ergebnis in die
+// JSON-Antwort uebersetzen, die beide Apps seit 2.1.0 lesen.
+//
 // Das Gerätetoken kommt von der App selbst – sie schickt es bei jeder
 // Standortmeldung als Kopfzeile X-Fcm-Token mit (api/location.js).
 import { Redis } from '@upstash/redis'
 import { keyOk } from '../lib/auth.js'
-import { fcmKonfiguriert, sendeDaten } from '../lib/fcm.js'
+import { fcmKonfiguriert } from '../lib/fcm.js'
 import { bildHandler, istBildAnfrage } from '../lib/bild.js'
+import { BEFEHLE, befehlAnPerson } from '../lib/ring.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 })
 
-export const FCM_KEY_PREFIX = 'person_fcm:';
-
-/**
- * Die Verben, die die App kennt. Alles andere wird abgewiesen.
- *
- * Muss zu `BefehlsArt` in beiden Apps passen. Ein hier fehlendes Verb faellt
- * sofort auf (400 statt Zustellung); ein hier zusaetzliches Verb liefe dagegen
- * still ins Leere, weil aeltere Mylo-Fassungen Unbekanntes verwerfen.
- */
-export const BEFEHLE = [
-  'ring', 'unmute', 'vibrate', 'locate', 'silence', 'torch', 'torch-off',
-  'dnd-off', 'dnd-on', 'say', 'volume', 'buzz', 'buzz-off', 'show',
-];
-
-/**
- * Laenge, ab der ein Ansagetext gekuerzt wird.
- *
- * Derselbe Wert wie `RingCommand.MAX_TEXT` in der Actions-Hub-App. Die kuerzt
- * schon selbst; diese Grenze gilt jedem anderen Aufrufer - eine FCM-Nachricht
- * darf 4 KB gross sein, ein vorgelesener Satz nicht.
- */
-export const MAX_TEXT = 200;
-
-/**
- * Haengt den Ansagetext an die Nutzlast - oder gibt sie unveraendert zurueck.
- *
- * Format: `<verb>:<Person>:<tst>:=<percent-kodiert>`. Die Marke `=` vor dem
- * Text ist nicht Zierrat: Ohne sie waere `say:Julia:1700000000:112` zweideutig
- * - das letzte Feld koennte der Text "112" sein oder der Zeitstempel eines
- * Namens "Julia:1700000000". `encodeURIComponent` erzeugt niemals ein `=`,
- * also entscheidet es den Fall.
- *
- * **Neu kodieren ist Pflicht, nicht Kosmetik.** `req.query.t` kommt bereits
- * dekodiert an (`Bitte+melde+dich` -> `Bitte melde dich`); unverandert
- * angehaengt zerlegte ein Doppelpunkt im Text die Nutzlast. Ob dabei `%20`
- * oder `+` entsteht, ist gleich - Mylos `URLDecoder` liest beides.
- *
- * Reine Funktion und exportiert, damit sie ohne Netz pruefbar bleibt.
- */
-export function mitText(nutzlast, roh) {
-  const text = (roh || '').trim().slice(0, MAX_TEXT);
-  if (!text) return nutzlast;
-  return `${nutzlast}:=${encodeURIComponent(text)}`;
-}
-
-/**
- * Haengt die Bild-Kennung an - oder gibt die Nutzlast unveraendert zurueck.
- *
- * Format: `<verb>:<Person>:<tst>[:=<Text>]:#<id>`. Die Marke `#` traegt aus
- * demselben Grund wie das `=` vor dem Text: `encodeURIComponent` erzeugt
- * niemals ein `#`, das Zeichen kann also nicht aus dem kodierten Text stammen
- * und entscheidet den Fall eindeutig.
- *
- * **Kommt NACH mitText**, nie davor - die Apps schaelen die Felder von rechts
- * ab und erwarten die Kennung zuletzt.
- *
- * Nur Hex wird durchgelassen: Was hier hineinkommt, stammt aus dem
- * Zwischenlager (lib/bild.js) und hat genau diese Form. Alles andere zerlegte
- * im schlimmsten Fall die Nutzlast.
- *
- * Reine Funktion und exportiert, damit sie ohne Netz pruefbar bleibt.
- */
-export function mitBild(nutzlast, roh) {
-  const id = (roh || '').trim();
-  if (!/^[0-9a-f]{16}$/.test(id)) return nutzlast;
-  return `${nutzlast}:#${id}`;
-}
+// Weiterhin exportiert, damit vorhandene Aufrufer und Pruefungen nichts
+// merken - die Liste selbst wohnt jetzt in lib/ring.js, weil auch der
+// Alexa-Skill sie braucht.
+export { BEFEHLE };
 
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
@@ -124,65 +67,68 @@ export default async function handler(req, res) {
   // ein Verb, und sie braucht auch kein Firebase - sie legt nur ab oder holt.
   if (istBildAnfrage(req.query)) return bildHandler(req, res);
 
+  // **Diese Pruefung steht hier und nicht erst in lib/ring.js**, obwohl sie
+  // dort noch einmal vorkommt: Sie stand vor dem Umbau an genau dieser Stelle,
+  // also VOR dem Lesen von "u" und "do". Ein unkonfiguriertes Firebase
+  // antwortet damit weiterhin mit fcm_not_configured statt mit einem 400 -
+  // eine Reihenfolge, an der eine ausgelieferte App haengen koennte, aendert
+  // man nicht nebenbei bei einem Umbau, der nichts aendern soll.
+  //
+  // Kein Fehler, sondern ein Zustand: Ohne die drei FCM_*-Variablen gibt es
+  // diesen Weg schlicht nicht, und die App faellt auf ntfy zurueck. Ein 500
+  // wuerde dort als Stoerung erscheinen, obwohl alles wie eingerichtet ist.
   if (!fcmKonfiguriert()) {
-    // Kein Fehler, sondern ein Zustand: Ohne die drei FCM_*-Variablen gibt es
-    // diesen Weg schlicht nicht, und die App faellt auf ntfy zurueck. Ein 500
-    // wuerde dort als Stoerung erscheinen, obwohl alles wie eingerichtet ist.
     return res.status(200).json({ ok: false, reason: 'fcm_not_configured' });
   }
 
   const personName = (req.query.u || '').trim();
   if (!personName) return res.status(400).json({ error: 'Missing person (u param)' });
 
+  const befehl = (req.query.do || 'ring').trim().toLowerCase();
   // Unbekannte Verben werden abgewiesen statt durchgereicht: Sonst kaeme beim
   // Handy ein Befehl an, den dort niemand kennt - die App wuerde ihn stumm
   // verwerfen, und der Aufrufer haette "zugestellt" gemeldet.
-  const befehl = (req.query.do || 'ring').trim().toLowerCase();
   if (!BEFEHLE.includes(befehl)) {
     return res.status(400).json({ error: `Unknown command '${befehl}' (do param)`, allowed: BEFEHLE });
   }
 
-  // Gleiche Aufloesung wie in api/location.js: Der Name ist der Schluessel
-  // ueber alle Stationen hinweg, Gross-/Kleinschreibung egal.
-  const persons = await redis.get('geo_persons') || [];
-  const person = persons.find(p => p.name.toLowerCase() === personName.toLowerCase());
-  if (!person) return res.status(200).json({ ok: false, reason: 'unknown_person' });
+  // Ohne ntfy-Rueckfall, und das ist wichtig: Der Actions Hub schickt seine
+  // Zeile gleich nach diesem Aufruf selbst. Zwei Veroeffentlichungen mit
+  // leicht verschiedenen Zeitstempeln laegen im Topic nebeneinander, und Mylos
+  // Dublettenschutz hielte die zweite fuer neuer.
+  const ergebnis = await befehlAnPerson(redis, personName, befehl, {
+    text: req.query.t,
+    bild: req.query.i,
+  });
 
-  const token = await redis.get(FCM_KEY_PREFIX + person.name.toLowerCase());
-  if (!token) {
-    // Der haeufigste Fall beim ersten Einrichten: Die App hat noch nie
-    // gemeldet. Eigener Grund statt eines nichtssagenden Fehlers, damit man
-    // weiss, dass man in Mylo einmal "Jetzt senden" druecken muss.
-    return res.status(200).json({ ok: false, reason: 'no_token' });
+  // Die Antwort ist Zeichen fuer Zeichen die von vorher - beide Apps lesen
+  // "ok" und "reason", und eine umbenannte Zeile hier waere ein stiller
+  // Ausfall dort.
+  if (ergebnis.ok) {
+    return res.status(200).json({
+      ok: true,
+      person: ergebnis.person,
+      do: befehl,
+      tst: Math.floor(Date.now() / 1000),
+    });
   }
-
-  // Dieselbe Nutzlast wie ueber ntfy, damit die App nur ein Format kennt.
-  // Der Ansagetext haengt als optionales viertes Feld hinten dran; ohne ihn
-  // bleibt es bei der dreiteiligen Form, die jedes aeltere Mylo liest.
-  const tst = Math.floor(Date.now() / 1000);
-  const nutzlast = mitBild(mitText(`${befehl}:${person.name}:${tst}`, req.query.t), req.query.i);
-
-  // Zwei Felder, und das ist Absicht: "cmd" ist das neue, "ring" liest Mylo
-  // 2.2.0. Nicht alle Familien-Handys werden gleichzeitig aktualisiert - ohne
-  // das zweite Feld haette ein aelteres Handy nach diesem Deploy aufgehoert zu
-  // klingeln, ohne dass irgendwo ein Fehler erschienen waere. "ring" geht nur
-  // beim Klingeln mit; die neuen Verben kennt die alte Fassung ohnehin nicht.
-  const daten = { cmd: nutzlast };
-  if (befehl === 'ring') daten.ring = nutzlast;
-
-  const ergebnis = await sendeDaten(token, daten);
-
-  if (!ergebnis.ok) {
-    // Ein abgemeldetes oder ersetztes Geraet meldet UNREGISTERED bzw. 404. Den
-    // toten Token wegwerfen: Sonst scheitert jeder weitere Versuch an
-    // derselben Leiche, und die naechste Standortmeldung legt ohnehin einen
-    // frischen ab.
-    if (ergebnis.status === 404 || /UNREGISTERED|INVALID_ARGUMENT/.test(ergebnis.body)) {
-      await redis.del(FCM_KEY_PREFIX + person.name.toLowerCase());
-    }
-    console.warn(`FCM-Push an ${person.name} fehlgeschlagen (HTTP ${ergebnis.status}): ${ergebnis.body}`);
-    return res.status(200).json({ ok: false, reason: 'push_failed', status: ergebnis.status });
+  switch (ergebnis.grund) {
+    case 'kein_fcm':
+      // Oben schon abgefangen; steht hier fuer den Fall, dass die Pruefung
+      // dort einmal verschwindet, damit dann nicht "push_failed" herauskommt.
+      return res.status(200).json({ ok: false, reason: 'fcm_not_configured' });
+    case 'unbekannte_person':
+      return res.status(200).json({ ok: false, reason: 'unknown_person' });
+    case 'kein_token':
+      // Der haeufigste Fall beim ersten Einrichten: Die App hat noch nie
+      // gemeldet. Eigener Grund statt eines nichtssagenden Fehlers, damit man
+      // weiss, dass man in Mylo einmal "Jetzt senden" druecken muss.
+      return res.status(200).json({ ok: false, reason: 'no_token' });
+    default:
+      return res.status(200).json({
+        ok: false,
+        reason: 'push_failed',
+        status: ergebnis.status,
+      });
   }
-
-  return res.status(200).json({ ok: true, person: person.name, do: befehl, tst });
 }
