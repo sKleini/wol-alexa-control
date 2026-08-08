@@ -45,12 +45,12 @@
                         }
                     ],
                     "samples": [
-                        "ob {person}s handy klingeln kann",
-                        "lass {person}s handy klingeln",
-                        "{person}s handy klingeln zu lassen",
-                        "lass das handy von {person} klingeln",
                         "ob das handy von {person} klingeln kann",
-                        "klingel {person}s handy"
+                        "lass das handy von {person} klingeln",
+                        "das handy von {person} klingeln zu lassen",
+                        "klingel das handy von {person}",
+                        "lass {person} klingeln",
+                        "ob {person} klingeln kann"
                     ]
                 },
                 {
@@ -62,11 +62,11 @@
                         }
                     ],
                     "samples": [
-                        "lass {person}s handy aufhören",
-                        "ob {person}s handy aufhören kann",
-                        "stoppe {person}s handy",
-                        "{person}s handy soll ruhig sein",
-                        "lass das handy von {person} aufhören"
+                        "lass das handy von {person} aufhören",
+                        "ob das handy von {person} aufhören kann",
+                        "stoppe das handy von {person}",
+                        "das handy von {person} soll ruhig sein",
+                        "lass {person} aufhören"
                     ]
                 }
             ],
@@ -115,7 +115,7 @@
                 "variations": [
                     {
                         "type": "PlainText",
-                        "value": "Soll {person}s Handy wirklich klingeln?"
+                        "value": "Soll das Handy von {person} wirklich klingeln?"
                     }
                 ]
             }
