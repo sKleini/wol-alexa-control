@@ -60,6 +60,19 @@ fehlt, und der Skill bekommt statt „Stefan" gar nichts. **Deshalb zählt die
 Rückfrage die bekannten Namen mit auf**; wer sie hört, sieht den Grund sofort,
 statt denselben Satz noch einmal zu sagen, nur lauter.
 
+> **Ein Name, der hier fehlt, kann eine Weile trotzdem funktionieren — und
+> genau das ist die Falle.** Ein eigener Slot-Typ ist bei Alexa keine
+> geschlossene Liste: Unbekanntes kommt gelegentlich als
+> `ER_SUCCESS_NO_MATCH` samt gesprochenem Wort durch, und der Skill kann damit
+> arbeiten. Verlassen darf man sich darauf nicht. Genau so lief *„wo ist
+> Amelia"* monatelang, obwohl Amelia nie im Modell stand — bis ein dritter
+> Wert und zwei weitere Intents am selben Slot-Typ dazukamen und die Erkennung
+> diese Kulanz aufgab. Der Satz hörte auf zu funktionieren, ohne dass jemand
+> ihn angefasst hätte.
+>
+> **Wer eine Person anlegt, trägt sie hier mit ein.** Nicht „falls es nicht
+> geht", sondern immer.
+
 Die aufgezählten Namen kommen aus dem **Dashboard**, nicht aus dieser Datei:
 Sie beantworten „wen kann dieser Skill erreichen", und das ist die Frage
 dahinter. Steht ein Name hier, aber nicht dort, hört Alexa ihn — und der Skill
