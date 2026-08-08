@@ -96,6 +96,38 @@ function volOderNull(raw) {
 }
 
 /**
+ * Laenge und Form einer Fassungsnummer.
+ *
+ * "3.14.0" sind sechs Zeichen; 20 lassen Luft fuer Zusaetze wie "3.14.0-rc1",
+ * ohne dass hier ein ganzer Satz durchkaeme. Erlaubt sind Ziffern, Buchstaben,
+ * Punkt, Bindestrich und Plus - genau das, was in einem versionName steht.
+ */
+const VER_MAX = 20;
+const VER_FORM = /^[0-9A-Za-z.+-]+$/;
+
+/**
+ * Die Fassung der Mylo-App auf dem meldenden Geraet - "3.14.0".
+ *
+ * **Warum das geprueft wird, obwohl es vom eigenen Handy kommt:** Der Wert
+ * landet in Redis und von dort unveraendert in einer Oberflaeche. Was in eine
+ * Anzeige wandert, wird hier geprueft und nicht dort - dieselbe Linie wie beim
+ * WLAN-Namen, der aus demselben Grund [ssidOderNull] durchlaeuft.
+ *
+ * Ohne Inhaltsurteil: Ob "3.14.0" neuer ist als "3.9.0", entscheidet niemand
+ * hier. Der Server gibt weiter, was gemeldet wurde; die Oberflaeche zeigt es.
+ * Ein Vergleich waere eine Behauptung, und Behauptungen sind in diesem Projekt
+ * schon zweimal teuer gewesen.
+ *
+ * Rein und exportiert, damit die Form ohne Netz pruefbar bleibt.
+ */
+export function versionOderNull(raw) {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim();
+  if (!v || v.length > VER_MAX || !VER_FORM.test(v)) return null;
+  return v;
+}
+
+/**
  * Die Zustandsfelder einer Meldung - vollstaendig, also mit `null` fuer
  * alles, was nicht mitkam.
  *
@@ -130,6 +162,11 @@ function zustandVoll(pick) {
     // am Handy ins Leere, und der Hub soll das sagen koennen, BEVOR jemand
     // ihn schickt.
     ovl: jaNeinFlag(pick('ovl')),
+    // Die Fassung der App auf dem Geraet. Kein Zustand im engeren Sinn - sie
+    // aendert sich nur beim Update -, aber sie reist auf demselben Weg, gilt
+    // fuer dieselbe Meldung und faellt derselben Verfallsregel anheim. Ein
+    // eigener Kanal dafuer waere eine zweite Buchhaltung fuer eine Zeile.
+    ver: versionOderNull(pick('ver')),
   };
 }
 
