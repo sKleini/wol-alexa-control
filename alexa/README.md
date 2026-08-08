@@ -19,6 +19,31 @@ selben Diff.
 2. Inhalt dieser Datei einfügen
 3. **Build model** (dauert ein bis zwei Minuten)
 
+Vorher lohnt sich
+
+```bash
+node alexa/pruefe-modell.mjs
+```
+
+— dieselbe Prüfung, die die CI fährt. Sie ersetzt den Build in der Konsole
+nicht, kennt aber die Fehler, die hier schon vorgekommen sind.
+
+## Ein Slot ist ein eigenes Wort
+
+`{person}s handy` ist **kein gültiger Satz**. Genau daran ist der erste Build
+gescheitert, mit acht Beanstandungen auf einmal:
+
+```
+Parsing error in sample: "RingPersonIntent: ob {person}s handy klingeln kann"
+```
+
+Der deutsche Genitiv lässt sich so nicht bilden. Es heißt deshalb überall
+**„das handy von {person}"** — umständlicher zu lesen, aber es baut. Dieselbe
+Regel gilt in den Prompts.
+
+Was der Skill *spricht*, ist davon nicht betroffen: Dort steht „Julias Handy",
+denn das ist gewöhnlicher Text aus `api/skill.js` und kein Sprachmuster.
+
 ## Personen pflegen
 
 Jede Person aus dem Dashboard muss als Wert unter `PERSON_NAME` stehen. Ein

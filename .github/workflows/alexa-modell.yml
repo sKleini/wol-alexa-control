@@ -1,0 +1,42 @@
+name: Alexa-Sprachmodell pruefen
+
+run-name: Alexa-Sprachmodell pruefen (${{ github.event_name }})
+
+# Das Interaction Model wird von Hand in die Developer Console eingefuegt und
+# dort gebaut - was daran nicht stimmt, faellt also erst nach dem Einfuegen auf,
+# ein paar Minuten spaeter und ausserhalb jedes Logs. Genau so ist es passiert:
+# acht Beanstandungen auf einmal, weil "{person}s handy" kein gueltiger Satz
+# ist (ein Slot muss ein eigenes Wort sein).
+#
+# Diese Pruefung holt das in den Pull Request. Sie ersetzt den Build in der
+# Konsole nicht - sie kennt die Fehler, die hier vorgekommen sind oder die
+# stillbleiben wuerden, allen voran ein Intent, den api/skill.js behandelt und
+# das Modell nicht kennt.
+
+on:
+  pull_request:
+    paths:
+      - 'alexa/**'
+      - 'api/skill.js'
+      - '.github/workflows/alexa-modell.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'alexa/**'
+      - 'api/skill.js'
+  workflow_dispatch:
+
+jobs:
+  pruefen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Node einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Modell und Skill gegeneinander pruefen
+        run: node alexa/pruefe-modell.mjs
