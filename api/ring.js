@@ -20,8 +20,15 @@
 //   show       zeigt einen Text gross auf dem Bildschirm, auch im gesperrten
 //              Zustand (Parameter t=<Text> wie bei say). Der sichtbare
 //              Zwilling zu say: Er bleibt stehen, statt vorbei zu sein.
-//              Dazu optional ein Bild: i=<id> aus /api/bild. Das Bild selbst
-//              passt in keine Push-Nutzlast, deshalb nur die Kennung.
+//              Dazu optional ein Bild: i=<id> aus dem Zwischenlager. Das Bild
+//              selbst passt in keine Push-Nutzlast, deshalb nur die Kennung.
+//
+// Mit dem Parameter `bild` ist dieselbe Adresse ausserdem das Zwischenlager
+// fuer genau dieses Bild (POST legt ab, GET holt; siehe lib/bild.js). Das ist
+// keine Eleganz, sondern eine Auflage: Vercel macht aus jeder Datei unter
+// `api/` eine Serverless Function, und der Hobby-Tarif erlaubt zwoelf. Ein
+// eigenes `api/bild.js` waere die dreizehnte gewesen und liess den Deploy
+// scheitern. Der Zusammenhang stimmt trotzdem - das Bild gehoert zum Befehl.
 //
 // Warum der Umweg über den Server: Der Push braucht den privaten Schlüssel
 // eines Firebase-Dienstkontos (siehe lib/fcm.js). Der darf nicht in eine APK.
@@ -34,6 +41,7 @@
 import { Redis } from '@upstash/redis'
 import { keyOk } from '../lib/auth.js'
 import { fcmKonfiguriert, sendeDaten } from '../lib/fcm.js'
+import { bildHandler, istBildAnfrage } from '../lib/bild.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -96,8 +104,9 @@ export function mitText(nutzlast, roh) {
  * **Kommt NACH mitText**, nie davor - die Apps schaelen die Felder von rechts
  * ab und erwarten die Kennung zuletzt.
  *
- * Nur Hex wird durchgelassen: Was hier hineinkommt, stammt aus /api/bild und
- * hat genau diese Form. Alles andere zerlegte im schlimmsten Fall die Nutzlast.
+ * Nur Hex wird durchgelassen: Was hier hineinkommt, stammt aus dem
+ * Zwischenlager (lib/bild.js) und hat genau diese Form. Alles andere zerlegte
+ * im schlimmsten Fall die Nutzlast.
  *
  * Reine Funktion und exportiert, damit sie ohne Netz pruefbar bleibt.
  */
@@ -110,6 +119,10 @@ export function mitBild(nutzlast, roh) {
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   if (!keyOk(req)) return res.status(401).end();
+
+  // Vor allem anderen abzweigen: Die Bild-Anfrage hat weder eine Person noch
+  // ein Verb, und sie braucht auch kein Firebase - sie legt nur ab oder holt.
+  if (istBildAnfrage(req.query)) return bildHandler(req, res);
 
   if (!fcmKonfiguriert()) {
     // Kein Fehler, sondern ein Zustand: Ohne die drei FCM_*-Variablen gibt es
