@@ -92,13 +92,21 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Unknown command '${befehl}' (do param)`, allowed: BEFEHLE });
   }
 
-  // Ohne ntfy-Rueckfall, und das ist wichtig: Der Actions Hub schickt seine
-  // Zeile gleich nach diesem Aufruf selbst. Zwei Veroeffentlichungen mit
-  // leicht verschiedenen Zeitstempeln laegen im Topic nebeneinander, und Mylos
-  // Dublettenschutz hielte die zweite fuer neuer.
+  // `r=1` heisst "veroeffentliche den Rueckfall selbst". Der Actions Hub
+  // schickte seine ntfy-Zeile bis hierher gleich nach diesem Aufruf selbst;
+  // zwei Veroeffentlichungen mit leicht verschiedenen Zeitstempeln laegen dann
+  // im Topic nebeneinander, und Mylos Dublettenschutz hielte die zweite fuer
+  // neuer. Seit er es nicht mehr tut, sagt er es mit diesem Parameter - und
+  // ein aelterer Hub, der ihn nicht kennt, veroeffentlicht wie gehabt selbst.
+  // So gibt es zu jeder Zeit genau einen Absender, ohne Absprache.
+  //
+  // Hinterlegt wird der Befehl ohnehin und unabhaengig davon (lib/ring.js):
+  // Das ist der Weg fuer jedes Mylo, das den Rueckfall aus der Antwort auf
+  // seine Standortmeldung liest, und er kostet dort keinen eigenen Request.
   const ergebnis = await befehlAnPerson(redis, personName, befehl, {
     text: req.query.t,
     bild: req.query.i,
+    rueckfall: req.query.r === '1',
   });
 
   // Die Antwort ist Zeichen fuer Zeichen die von vorher - beide Apps lesen
