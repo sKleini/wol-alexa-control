@@ -5,6 +5,7 @@
 import { Redis } from '@upstash/redis'
 import { keyOk } from '../lib/auth.js'
 import { zonenWechsel, sendeZonenwechsel } from '../lib/hub-push.js'
+import { CMD_KEY_PREFIX } from '../lib/ring.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -199,6 +200,34 @@ function zustandTeil(pick) {
   return out;
 }
 
+/**
+ * Die Antwort an Mylo - und der Rueckfall, der darin mitreist.
+ *
+ * **`q: 1` steht immer da, auch ohne wartenden Befehl.** Es ist keine Zierde,
+ * sondern die Auskunft „dieses Backend kann den Rueckfall": Mylo schaltet
+ * genau daran seinen ntfy-Poll ab (siehe `Sendetakt.pollNoetig` dort). Ein
+ * Backend ohne dieses Feld ist ein aelteres, und dann pollt die App weiter wie
+ * bisher - der Zustand wird nachgewiesen, nicht eingestellt.
+ *
+ * **Der Schluessel wird nicht geloescht.** Die TTL raeumt ihn weg (siehe
+ * `CMD_TTL_SEK`). Loeschte diese Antwort ihn, waere der Befehl verloren, sobald
+ * genau sie unterwegs abreisst - und das ist der Fall, fuer den es einen
+ * Rueckfall gibt. Zweimal ankommen kann er dadurch schon; das faengt Mylos
+ * Dublettenschutz ab, der denselben Dienst seit jeher fuer ntfy tut.
+ *
+ * Fehler beim Lesen werden geschluckt: Eine Standortmeldung darf nicht daran
+ * scheitern, dass die Zugabe nicht zu haben war.
+ */
+async function mitBefehl(personName, rumpf) {
+  try {
+    const cmd = await redis.get(CMD_KEY_PREFIX + personName.toLowerCase());
+    return cmd ? { ...rumpf, q: 1, cmd } : { ...rumpf, q: 1 };
+  } catch (err) {
+    console.warn('Hinterlegten Befehl konnte nicht gelesen werden:', err);
+    return { ...rumpf, q: 1 };
+  }
+}
+
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   if (!keyOk(req)) return res.status(401).end();
@@ -274,7 +303,7 @@ export default async function handler(req, res) {
         receivedAt: jetzt,
       });
       await merkeFcmToken(req, person);
-      return res.status(200).json({ ok: true, status: true });
+      return res.status(200).json(await mitBefehl(person.name, { ok: true, status: true }));
     }
     // OwnTracks legitimately sends messages without coordinates (lwt, status,
     // waypoints, transitions). Acknowledge them without storing so they are not
@@ -314,8 +343,12 @@ export default async function handler(req, res) {
   await merkeFcmToken(req, person);
   await meldeZonenwechsel(person, vorher, lat, lon, location.tst);
 
+  // ackOwnTracks bleibt aussen vor: OwnTracks erwartet ein Array in seiner
+  // eigenen Sprache, und ein Feld mehr im falschen Dialekt liesse es die
+  // Zustellung fuer gescheitert halten und die Nachricht ewig neu einstellen.
+  // Dieselbe Ruecksicht, aus der `st` ein ausdruecklicher Schalter ist.
   if (isOwnTracks) return ackOwnTracks();
-  return res.status(200).json({ ok: true });
+  return res.status(200).json(await mitBefehl(person.name, { ok: true }));
 }
 
 /**
