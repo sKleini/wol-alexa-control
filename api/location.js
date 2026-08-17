@@ -150,6 +150,27 @@ export function taktOderNull(raw) {
 }
 
 /**
+ * Wie viele Zonen das Geraet kennt - oder `null`.
+ *
+ * **Die Null ist ein gueltiger Wert und muss durch**: Ein Geraet ohne Zaeune
+ * meldet 0, und genau das ist die Auskunft, um die es geht. Ein `!n` als
+ * Pruefung haette sie verschluckt und aus "keine Zaeune" ein "weiss ich nicht"
+ * gemacht - also ausgerechnet den Fall unsichtbar, fuer den dieses Feld
+ * eingefuehrt wurde.
+ *
+ * Die Obergrenze ist Mylos eigene (`Zonen.MAX_ZONEN`). Sie klemmt nicht,
+ * sondern weist ab - dieselbe Ueberlegung wie bei [taktOderNull]: Was darueber
+ * liegt, stammt nicht von Mylo.
+ *
+ * Rein und exportiert, damit die Form ohne Netz pruefbar bleibt.
+ */
+export function zonenOderNull(raw) {
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0 || n > 20) return null;
+  return n;
+}
+
+/**
  * Die Zustandsfelder einer Meldung - vollstaendig, also mit `null` fuer
  * alles, was nicht mitkam.
  *
@@ -194,6 +215,10 @@ function zustandVoll(pick) {
     // eine Einstellung verstellt, und ohne diese Zahl sieht ein ausgefuehrter
     // Befehl genauso aus wie ein verschluckter.
     takt: taktOderNull(pick('takt')),
+    // Wie viele Zaeune auf dem Geraet stehen. Der Gegenpart zum Verb `zones`:
+    // Der Abruf meldet nichts zurueck, und ohne diese Zahl sieht ein Handy
+    // ohne Zaeune aus wie eines mit.
+    zonen: zonenOderNull(pick('zonen')),
   };
 }
 
