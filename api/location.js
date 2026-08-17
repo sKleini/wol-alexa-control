@@ -129,6 +129,27 @@ export function versionOderNull(raw) {
 }
 
 /**
+ * Der gemeldete Sendetakt in Minuten - oder `null`.
+ *
+ * Geprueft aus demselben Grund wie [versionOderNull]: Der Wert landet in Redis
+ * und von dort unveraendert in einer Oberflaeche.
+ *
+ * Die Grenzen sind Mylos eigene (`Prefs.MIN_INTERVAL`/`MAX_INTERVAL`, 15 bis
+ * 720), und hier stehen sie ein zweites Mal - nicht um zu klemmen, sondern um
+ * Unsinn abzuweisen. Der Unterschied ist wichtig: Mylo rueckt eine 5 auf 15
+ * zurecht und meldet dann 15; kaeme hier trotzdem eine 5 an, stammt sie nicht
+ * von Mylo, und dann ist `null` ("dazu weiss ich nichts") die ehrliche Antwort
+ * statt einer Zahl, die niemand gesetzt hat.
+ *
+ * Rein und exportiert, damit die Form ohne Netz pruefbar bleibt.
+ */
+export function taktOderNull(raw) {
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 15 || n > 720) return null;
+  return n;
+}
+
+/**
  * Die Zustandsfelder einer Meldung - vollstaendig, also mit `null` fuer
  * alles, was nicht mitkam.
  *
@@ -168,6 +189,11 @@ function zustandVoll(pick) {
     // fuer dieselbe Meldung und faellt derselben Verfallsregel anheim. Ein
     // eigener Kanal dafuer waere eine zweite Buchhaltung fuer eine Zeile.
     ver: versionOderNull(pick('ver')),
+    // Wie oft das Geraet von selbst meldet. Aus demselben Grund dabei wie ovl
+    // weiter oben: "Sendetakt aendern" ist der einzige Fernbefehl, der drueben
+    // eine Einstellung verstellt, und ohne diese Zahl sieht ein ausgefuehrter
+    // Befehl genauso aus wie ein verschluckter.
+    takt: taktOderNull(pick('takt')),
   };
 }
 
