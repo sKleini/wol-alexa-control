@@ -22,6 +22,11 @@
 //              Zwilling zu say: Er bleibt stehen, statt vorbei zu sein.
 //              Dazu optional ein Bild: i=<id> aus dem Zwischenlager. Das Bild
 //              selbst passt in keine Push-Nutzlast, deshalb nur die Kennung.
+//   interval   Mylos Sendetakt setzen (Parameter t=<Minuten>, ohne ihn faellt
+//              das Handy auf "automatisch" zurueck und rechnet den Takt selbst.
+//              Mylo klemmt die Zahl auf 15 bis 720 Minuten). Der einzige
+//              Befehl, der drueben eine Einstellung verstellt statt etwas
+//              auszuloesen - deshalb gilt er, bis ihn jemand wieder aendert.
 //
 // Mit dem Parameter `bild` ist dieselbe Adresse ausserdem das Zwischenlager
 // fuer genau dieses Bild (POST legt ab, GET holt; siehe lib/bild.js). Das ist
