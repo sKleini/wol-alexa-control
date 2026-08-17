@@ -22,6 +22,10 @@
 //              Zwilling zu say: Er bleibt stehen, statt vorbei zu sein.
 //              Dazu optional ein Bild: i=<id> aus dem Zwischenlager. Das Bild
 //              selbst passt in keine Push-Nutzlast, deshalb nur die Kennung.
+//   zones      die Zonen sofort neu holen, statt auf den Sechs-Stunden-Zyklus
+//              zu warten. Schickt api/manage.js von selbst an alle Personen,
+//              sobald sich eine Zone aendert; hier steht das Verb fuer den Fall,
+//              dass ein Handy den Push verpasst hat.
 //   interval   Mylos Sendetakt setzen (Parameter t=<Minuten>, ohne ihn faellt
 //              das Handy auf "automatisch" zurueck und rechnet den Takt selbst.
 //              Mylo klemmt die Zahl auf 15 bis 720 Minuten). Der einzige
