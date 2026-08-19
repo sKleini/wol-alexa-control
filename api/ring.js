@@ -31,6 +31,12 @@
 //              Mylo klemmt die Zahl auf 15 bis 720 Minuten). Der einzige
 //              Befehl, der drueben eine Einstellung verstellt statt etwas
 //              auszuloesen - deshalb gilt er, bis ihn jemand wieder aendert.
+//   pause      Mylos Uebermittlung anhalten. Das Handy schickt vorher noch
+//              eine letzte Statusmeldung mit `pause=1`; ohne die saehe es in
+//              der Liste aus wie ein leeres oder eines im Funkloch.
+//   resume     die Uebermittlung wieder aufnehmen. Kommt an, weil der Push
+//              auch bei angehaltener Uebermittlung ausgefuehrt wird - die
+//              erste Meldung danach loescht die `pause`-Markierung von selbst.
 //
 // Mit dem Parameter `bild` ist dieselbe Adresse ausserdem das Zwischenlager
 // fuer genau dieses Bild (POST legt ab, GET holt; siehe lib/bild.js). Das ist

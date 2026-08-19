@@ -325,12 +325,32 @@ export default async function handler(req, res) {
   const ereignisse = {};
   if (jaNeinFlag(pick('boot')) === true) ereignisse.bootedAt = jetzt;
   if (jaNeinFlag(pick('off')) === true) ereignisse.offAt = jetzt;
+  if (jaNeinFlag(pick('pause')) === true) ereignisse.pausedAt = jetzt;
 
   // Der bisherige Datensatz wird auf BEIDEN Wegen gebraucht: die Statusmeldung
   // mischt sich hinein, und die Positionsmeldung muss bootedAt/offAt daraus
   // uebernehmen - sonst waere die Aussage "war ab 21:14 aus" beim naechsten
   // Takt fuenfzehn Minuten spaeter wieder verschwunden.
   const vorher = (await redis.get(redisKey)) || {};
+
+  /**
+   * Die Pause-Markierung - **anders gebaut als bootedAt/offAt**, und das mit
+   * Absicht.
+   *
+   * Jene beiden bleiben stehen, bis das Gegenereignis kommt. Diese hier
+   * loescht **jede Meldung ohne `pause=1`**: Das Geraet redet ja gerade, also
+   * ist die Uebermittlung offensichtlich wieder an, und ein "aus seit 14:30"
+   * daneben waere schlicht falsch. Ein eigenes `resume=1` braucht es dafuer
+   * nicht - die erste Meldung nach dem Wiedereinschalten ist der Beweis.
+   *
+   * Kommt `pause=1` erneut, bleibt der **erste** Zeitpunkt stehen. Gefragt ist
+   * "aus seit wann", und die Abschiedsmeldung ist nicht die einzige mit dem
+   * Flag: Rotiert das FCM-Token waehrend der Pause, meldet Mylo das ebenfalls
+   * mit `pause=1`, und dieser Nebenweg darf die Uhr nicht neu stellen.
+   */
+  const pausedAt = ereignisse.pausedAt
+    ? (vorher.pausedAt ?? ereignisse.pausedAt)
+    : null;
 
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     // Statusmeldung: eine Meldung ohne Position, die nur den Geraetezustand
@@ -348,6 +368,10 @@ export default async function handler(req, res) {
         ...vorher,
         ...zustandTeil(pick),
         ...ereignisse,
+        // Nach den Ereignissen und nicht darin: pausedAt muss auch dann
+        // geschrieben werden, wenn es null ist - `...vorher` traegt sonst
+        // eine alte Markierung durch, die diese Meldung gerade widerlegt.
+        pausedAt,
         // Nur receivedAt wandert mit, tst nicht: Die Position ist nicht
         // neuer geworden, der Zustand schon. Genau diese Trennung liest
         // buildLocationList als ageSec und statusAgeSec wieder aus.
@@ -387,6 +411,10 @@ export default async function handler(req, res) {
     // gesetzt hat - er ist ja ebenfalls eine Positionsmeldung.
     bootedAt: ereignisse.bootedAt ?? vorher.bootedAt ?? null,
     offAt: ereignisse.offAt ?? vorher.offAt ?? null,
+    // Kein Uebernehmen aus `vorher`: Eine Positionsmeldung traegt nie ein
+    // `pause=1`, also raeumt sie die Markierung weg. Wer eine Position
+    // schickt, uebermittelt - das ist der ganze Beweis.
+    pausedAt,
     receivedAt: jetzt,
   };
 
