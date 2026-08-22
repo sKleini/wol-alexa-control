@@ -32,6 +32,9 @@ const RINGER_MODES = ['normal', 'vibrate', 'silent'];
  */
 const NETZ_ARTEN = ['wifi', 'mobile', 'other', 'none'];
 
+/** Die erlaubten Werte von `mov` - die Begruendung steht bei [bewegungOderNull]. */
+const BEWEGUNGS_LAGEN = ['unterwegs', 'ruhend'];
+
 /** Laenge eines WLAN-Namens nach IEEE 802.11. Alles darueber ist kaputt. */
 const SSID_MAX = 32;
 
@@ -171,6 +174,28 @@ export function zonenOderNull(raw) {
 }
 
 /**
+ * Die gemeldete Bewegungslage - oder `null`.
+ *
+ * Feste Liste statt Durchreichen, dieselbe Ueberlegung wie bei [RINGER_MODES]
+ * und [NETZ_ARTEN]: Der Wert landet in Redis und von dort unveraendert in der
+ * Standort-Liste des Actions Hub. Ein Tippfehler auf der Handy-Seite soll dort
+ * als "unbekannt" ankommen und nicht als stiller dritter Zustand.
+ *
+ * **`unbekannt` ist bewusst kein gueltiger Wert.** Mylo laesst das Feld dann
+ * weg, und ein fehlendes Feld heisst hier ohnehin "weiss ich nicht" - ein
+ * eigenes Wort dafuer waere ein zweiter Weg zu derselben Aussage. Beim
+ * Statusbericht ([zustandTeil]) waere es sogar ein bedeutungstragend anderer:
+ * Dort loescht ein mitgeschicktes `null` einen bekannten Wert, ein fehlendes
+ * Feld laesst ihn stehen.
+ *
+ * Rein und exportiert, damit die Form ohne Netz pruefbar bleibt - wie
+ * [versionOderNull], [taktOderNull] und [zonenOderNull] darueber.
+ */
+export function bewegungOderNull(raw) {
+  return BEWEGUNGS_LAGEN.includes(raw) ? raw : null;
+}
+
+/**
  * Die Zustandsfelder einer Meldung - vollstaendig, also mit `null` fuer
  * alles, was nicht mitkam.
  *
@@ -219,6 +244,14 @@ function zustandVoll(pick) {
     // Der Abruf meldet nichts zurueck, und ohne diese Zahl sieht ein Handy
     // ohne Zaeune aus wie eines mit.
     zonen: zonenOderNull(pick('zonen')),
+    // Bewegt sich das Geraet gerade, oder liegt es? Das Feld, das eine alte
+    // Position erklaert: Seit Mylo den Sendetakt nach der Bewegung richtet
+    // (15 Min. unterwegs, 120 Min. im Stillstand), heisst "vor 2 Std."
+    // entweder "liegt still, meldet planmaessig selten" oder "meldet nicht
+    // mehr" - und in der Standort-Liste sah beides gleich aus. Dieselbe
+    // Blindheit, die takt= und zonen= darueber je einmal geschlossen haben,
+    // nur an der Stelle, auf die man am haeufigsten schaut.
+    mov: bewegungOderNull(pick('mov')),
   };
 }
 
