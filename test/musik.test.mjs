@@ -70,6 +70,15 @@ function intent(name, slotWert) {
   return req;
 }
 
+/**
+ * Der Ein-Satz-Aufruf, so wie er wirklich ankommt: Ein AMAZON.SearchQuery-Slot
+ * heisst `suche` und bringt **keine** resolutions mit - Entity Resolution gibt
+ * es fuer diesen Typ nicht, es kommt nur der gehoerte Text.
+ */
+function sucheIntent(wert) {
+  return { type: 'IntentRequest', intent: { name: 'SuchePlaylistIntent', slots: { suche: { name: 'suche', value: wert } } } };
+}
+
 async function skill(request, opts = {}, playlists = [KINDER, EINZEL]) {
   const res = antwortFaenger();
   await handleSkill(anfrage(request, opts), res, redisMit({ [REDIS_KEY]: playlists }));
@@ -317,6 +326,36 @@ test('Ein lesbarer Redis-Fehler bricht den Skill nicht', async () => {
   await handleSkill(anfrage({ type: 'LaunchRequest' }), res, kaputt);
   assert.equal(res.statusCode, 200);
   assert.match(res.body.response.outputSpeech.text, /keine Playlist angelegt/);
+});
+
+// --- Der Name aus freiem Text (AMAZON.SearchQuery) ---------------------------------
+
+test('SuchePlaylistIntent spielt einen Namen, der im Modell nirgends steht', async () => {
+  const neu = { name: 'Taschenlampe', titel: [{ url: 'https://example.org/t.mp3', name: 't' }] };
+  const r = await skill(sucheIntent('taschenlampe'), {}, [KINDER, neu]);
+  assert.equal(r.outputSpeech.text, 'Ich spiele Taschenlampe.');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Taschenlampe|0|0');
+});
+
+test('SuchePlaylistIntent uebersteht Fuellwoerter im freien Text', async () => {
+  const neu = { name: 'Taschenlampe', titel: [{ url: 'https://example.org/t.mp3', name: 't' }] };
+  for (const gesagt of ['die taschenlampe', 'mal die taschenlampe bitte', 'taschen lampe']) {
+    const r = await skill(sucheIntent(gesagt), {}, [KINDER, neu]);
+    assert.equal(r.directives?.[0]?.audioItem.stream.token, 'Taschenlampe|0|0', gesagt);
+  }
+});
+
+test('SuchePlaylistIntent fragt nach, wenn wirklich nichts passt', async () => {
+  const r = await skill(sucheIntent('Bundesliga'));
+  assert.match(r.outputSpeech.text, /keine Playlist namens Bundesliga/);
+  assert.equal(r.shouldEndSession, false);
+});
+
+test('Beide Intents fuehren zum selben Ergebnis', async () => {
+  const ueberSuche = await skill(sucheIntent('kinderlieder'));
+  const ueberSlot = await skill(intent('PlayPlaylistIntent', 'kinderlieder'));
+  assert.deepEqual(ueberSuche.directives, ueberSlot.directives);
+  assert.equal(ueberSuche.outputSpeech.text, ueberSlot.outputSpeech.text);
 });
 
 // --- Wiederholung -----------------------------------------------------------------

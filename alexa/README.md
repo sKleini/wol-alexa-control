@@ -108,36 +108,54 @@ dahinter.
 
 ## Playlists pflegen (musik box)
 
-**Eine neue Playlist gehört an zwei Orte**, sonst versteht Alexa den Namen im
-Ein-Satz-Aufruf nicht: ins Dashboard (damit der Skill sie abspielen kann) und
-unter `types` → `PLAYLIST_NAME` → `values` in
-`interaction-model-musik.de-DE.json` (damit Alexa den Namen überhaupt hört),
-danach **Build Model** in der Konsole.
+**Eine neue Playlist gehört nur ins Dashboard.** Am Sprachmodell ist dafür
+nichts mehr zu tun — seit `SuchePlaylistIntent` nimmt der Ein-Satz-Aufruf
+(*„öffne musik box und spiele Taschenlampe"*) einen `AMAZON.SearchQuery`-Slot,
+also freien Text, und erkennt damit jeden Namen.
 
-Die dynamischen Werte aus `lib/musik.js` nehmen einem das nicht ab — sie wirken
-erst **nach** einer Antwort des Skills. Zweistufig gesprochen kommt man also
-ohne Modelländerung durch:
+### Warum es zwei Intents sind
 
-> „Alexa, öffne musik box" → Rückfrage → „Zähne putzen"
+`AMAZON.SearchQuery` allein reicht nicht, denn ein Sample mit diesem Typ darf
+**nicht** aus dem Slot allein bestehen und braucht ein Trägerwort davor. Genau
+das verlangt aber die Antwort auf die Rückfrage:
 
-In einem Satz („öffne musik box und spiele Zähne putzen") ist es die erste
-Äußerung der Sitzung, und da gibt es noch keine dynamischen Werte.
+> „Alexa, öffne musik box" → *„Welche Playlist soll ich spielen?"* → „Taschenlampe"
 
-**Woran es wirklich hängt, ist die Ähnlichkeit.** Ein eigener Slot-Typ ist bei
-Alexa keine geschlossene Liste, aber er erkennt Unbekanntes nur, wenn es den
-eingetragenen Werten ähnelt. Genau daran ist *„spiele Zähne putzen"*
-gescheitert, während im Modell nur `Kinderlieder` und `Hörspiele` standen: Eine
-**Verbphrase** ähnelt zwei Substantiven nicht. Ein Name wie `Schlaflieder` wäre
-womöglich durchgekommen — verlassen sollte man sich darauf nicht.
+Deshalb teilen sich zwei Intents die Arbeit, und ihre Satzmuster überschneiden
+sich bewusst nicht:
 
-Am Handler liegt es dabei nie. `findePlaylist` normalisiert Groß- und
-Kleinschreibung, Umlaute und Leerzeichen und trifft auch auf Teilwörter
-(*„spiele Zähne"* startet *Zähne putzen*). Kommt der Name an, wird er gefunden;
-kommt er nicht an, fehlt der Slot-Wert im Modell.
+| Intent | Slot-Typ | Sätze | wofür |
+|---|---|---|---|
+| `SuchePlaylistIntent` | `AMAZON.SearchQuery` | immer mit Trägerwort, Slot am Ende (`spiele {suche}`) | der Ein-Satz-Aufruf, beliebige Namen |
+| `PlayPlaylistIntent` | `PLAYLIST_NAME` | `{playlist}` allein | die Antwort auf die Rückfrage |
 
-**Der dauerhafte Ausweg wäre `AMAZON.SearchQuery`** als Slot-Typ: Der nimmt
-freien Text und bräuchte diese Pflege nicht mehr. Er ist hier nicht gewählt,
-weil ein Sample dann nicht mehr allein aus dem Slot bestehen darf — die Antwort
-auf die Rückfrage („Zähne putzen") verlangte einen zweiten Intent mit dem
-bisherigen Typ, und vier der jetzigen Beispielsätze müssten weichen. Wer die
-Pflege leid ist, macht diesen Umbau; bis dahin ist der Eintrag hier eine Zeile.
+Beide landen in derselben Funktion; welcher Slot ankommt, ist dem Rest egal.
+`findePlaylist` normalisiert Groß- und Kleinschreibung, Umlaute und Leerzeichen
+und trifft auch durch Füllwörter hindurch (*„mal die taschenlampe bitte"*).
+
+### Was der Umbau gekostet hat
+
+Drei Satzmuster mussten weichen, weil der Slot bei `AMAZON.SearchQuery` am Ende
+stehen muss: *„Taschenlampe abspielen"*, *„Taschenlampe zu spielen"* und *„ich
+möchte Taschenlampe hören"*. Wer eine dieser Formen vermisst, kann sie nicht
+zurückholen — die Regel ist Amazons, nicht unsere.
+
+### Die Werte unter PLAYLIST_NAME
+
+Sie werden nicht mehr gebraucht, damit ein Name erkannt wird, und sind trotzdem
+keine Altlast: Sie tragen die Rückfrage, und `api/skill.js` schiebt die echten
+Namen aus dem Dashboard bei jeder Antwort als dynamische Werte nach. Die Liste
+im Modell ist der Grundstock, falls ein Echo den Skill lange nicht benutzt hat.
+
+### Woran es vorher hing (zweimal, mit Ansage)
+
+Ein eigener Slot-Typ ist bei Alexa keine geschlossene Liste, aber er erkennt
+Unbekanntes nur, wenn es den eingetragenen Werten **ähnelt**. Daran sind
+nacheinander *„spiele Zähne putzen"* und *„spiele Taschenlampe"* gescheitert,
+während im Modell nur `Kinderlieder` und `Hörspiele` standen. Die dynamischen
+Werte fangen das nicht auf: Sie wirken erst **nach** einer Antwort des Skills,
+und der Ein-Satz-Aufruf ist die erste Äußerung der Sitzung.
+
+Am Handler lag es dabei nie — kommt der Name an, wird er gefunden. Das ist auch
+die Probe, wenn wieder etwas nicht erkannt wird: Klappt es zweistufig
+(erst öffnen, dann den Namen sagen) und in einem Satz nicht, liegt es am Modell.

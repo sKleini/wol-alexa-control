@@ -390,7 +390,11 @@ Everything goes through `/api/manage?type=playlists` (`GET`, `POST {name, urls, 
 
 Development mode is enough: the skill works on every Echo of your Amazon account without certification or publishing.
 
-**Playlist names and the model.** `PLAYLIST_NAME` in the model carries two example values; the skill pushes the real names from the dashboard as **dynamic entities** with every answer, so a new playlist is understood from the second sentence of a session on (*"öffne musik box"* → *"spiele Neue Playlist"*). To say it in one go (*"öffne musik box und spiele Neue Playlist"*) add the name under `PLAYLIST_NAME` → `values` in the JSON editor and rebuild — the same rule as for persons in the familien finder. The skill is forgiving with what it hears: *"spiele Kinder"* starts *Kinderlieder*.
+**Playlist names need no model changes.** A new playlist goes into the dashboard and nothing else — the one-shot call (*"öffne musik box und spiele Taschenlampe"*) reaches an `AMAZON.SearchQuery` slot, which takes free text and so recognises any name.
+
+That takes two intents, because a `SearchQuery` sample may not consist of the slot alone and always needs a carrier word in front of it — which is exactly what answering the skill's own question requires. So `SuchePlaylistIntent` (free text, always with a carrier word) handles the one-shot call, and `PlayPlaylistIntent` (the `PLAYLIST_NAME` slot, sample `{playlist}`) handles *"Welche Playlist?"* → *"Taschenlampe"*. Both end up in the same handler.
+
+Three phrasings had to go for this, since the slot must sit at the end: *"Taschenlampe abspielen"*, *"Taschenlampe zu spielen"* and *"ich möchte Taschenlampe hören"*. The skill is forgiving with the rest: *"spiele Kinder"* starts *Kinderlieder*, and filler words do not matter.
 
 **While playing:** *"Alexa, nächster Titel"*, *"voriger Titel"*, *"Pause"*, *"weiter"*, *"von vorn"* and *"Stopp"* work as usual, as do the buttons on Echo Show and in the Alexa app. Asking Alexa to repeat reports how the running playlist is set and points at the dashboard — the skill deliberately does not flip the switch by voice, since that would change the playlist for good and for everyone. Shuffle is not implemented yet. A track that fails to load is skipped; if every track of a round fails, playback stops instead of circling forever.
 

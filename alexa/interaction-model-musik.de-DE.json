@@ -72,17 +72,26 @@
                         }
                     ],
                     "samples": [
-                        "spiele {playlist}",
-                        "spiel {playlist}",
-                        "spiele die playlist {playlist}",
-                        "spiel die playlist {playlist}",
-                        "starte {playlist}",
-                        "starte die playlist {playlist}",
-                        "die playlist {playlist}",
-                        "{playlist} abspielen",
-                        "{playlist} zu spielen",
-                        "ich möchte {playlist} hören",
-                        "{playlist}"
+                        "{playlist}",
+                        "die playlist {playlist}"
+                    ]
+                },
+                {
+                    "name": "SuchePlaylistIntent",
+                    "slots": [
+                        {
+                            "name": "suche",
+                            "type": "AMAZON.SearchQuery"
+                        }
+                    ],
+                    "samples": [
+                        "spiele {suche}",
+                        "spiel {suche}",
+                        "spiele mir {suche}",
+                        "spiele die playlist {suche}",
+                        "spiel die playlist {suche}",
+                        "starte {suche}",
+                        "starte die playlist {suche}"
                     ]
                 },
                 {
