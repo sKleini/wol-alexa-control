@@ -1,9 +1,12 @@
-# Sprachmodell des Custom Skills
+# Sprachmodelle der Custom Skills
 
 `interaction-model.de-DE.json` ist das Interaction Model des Skills
 **familien finder** — dasselbe, das im **JSON Editor** der
 [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) unter
-*Interaction Model* steht.
+*Interaction Model* steht. `interaction-model-musik.de-DE.json` ist das Modell
+des zweiten Skills **musik box** (README, Abschnitt 9); seine Gegenseite ist
+`lib/musik.js`, nicht `api/skill.js` — beide Skills teilen sich den Endpunkt
+`/api/skill`, der nach der Skill-ID verzweigt.
 
 **Warum es hier liegt, obwohl es nicht von hier deployt wird.** Das Modell lebt
 in der Konsole; es gibt keinen Automatismus, der diese Datei dorthin bringt.
@@ -23,10 +26,15 @@ Vorher lohnt sich
 
 ```bash
 node alexa/pruefe-modell.mjs
+node alexa/pruefe-modell.mjs alexa/interaction-model-musik.de-DE.json lib/musik.js PLAYLIST_NAME
 ```
 
-— dieselbe Prüfung, die die CI fährt. Sie ersetzt den Build in der Konsole
-nicht, kennt aber die Fehler, die hier schon vorgekommen sind.
+— dieselbe Prüfung, die die CI fährt (die erste Zeile für *familien finder*,
+die zweite für *musik box*). Sie ersetzt den Build in der Konsole nicht, kennt
+aber die Fehler, die hier schon vorgekommen sind — seit dem AudioPlayer auch
+einen eingebauten Intent, den der Code behandelt und das Modell nicht führt:
+`AMAZON.PauseIntent` und `AMAZON.ResumeIntent` verlangt die Konsole, sobald das
+AudioPlayer-Interface eingeschaltet ist.
 
 ## Ein Slot ist ein eigenes Wort
 

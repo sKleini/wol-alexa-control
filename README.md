@@ -15,6 +15,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
 - **Waste Collection (Optional)**: Say *"Alexa, Mülltonne"* and hear which bin goes out next — a scene that triggers a spoken announcement on the Echo you just talked to.
 - **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — or have the phone ring, after Alexa asks you to confirm — fed by a free location-logger app (GPSLogger) posting the phone's position, no extra server component.
+- **Musik Box (Optional)**: Say *"Alexa, öffne musik box und spiele Kinderlieder"* and the Echo plays a playlist you manage in the dashboard — a name plus a list of MP3 URLs — in order, repeating forever. No media server, no NAS: the Echo streams straight from the URLs.
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
 ---
@@ -49,6 +50,10 @@ VPS cron (abwesenheit-relay) → GET /api/presence?persons=Julia,Stefan&zone=zu%
 
 Relay health (optional): let Alexa say why a SmartTag position is stale
 VPS cron (smarttag-relay) → POST /api/relay-status → Redis → "wo ist …?" answers "the Samsung login has expired" + dashboard badge
+
+Musik Box (optional): "Alexa, öffne musik box und spiele Kinderlieder"
+Dashboard → POST /api/manage?type=playlists → Redis (name + MP3 URLs)
+Custom Skill "musik box" → /api/skill (same endpoint, routed by skill ID) → AudioPlayer.Play → Echo streams the MP3 from its URL
 ```
 
 **Location-feature endpoints** (all authenticated with `LOCATION_KEY`):
@@ -75,6 +80,7 @@ VPS cron (smarttag-relay) → POST /api/relay-status → Redis → "wo ist …?"
 | LED relay (optional) | VPS service (`fritzbox-led-relay`) that switches the Fritz!Box LED display |
 | GPSLogger (optional) | Free Android app that posts the phone's location to `/api/location` |
 | Alexa Custom Skill (optional) | Second skill that answers "Wo ist [Person]?" with a spoken location |
+| Musik Box skill (optional) | Third skill (Custom, AudioPlayer) that plays the MP3 playlists from the dashboard — shares the `/api/skill` endpoint |
 
 ---
 
@@ -104,6 +110,7 @@ VPS cron (smarttag-relay) → POST /api/relay-status → Redis → "wo ist …?"
 | `LOCATION_KEY` | *(optional, location feature)* Secret key for the `/api/location` ingest endpoint |
 | `ALEXA_SKILL_ID` | *(optional, location feature)* Skill ID of the custom skill (`amzn1.ask.skill....`) |
 | `DEFAULT_PERSON` | *(optional, location feature)* Fallback person name (e.g. `Julia`) |
+| `MUSIK_SKILL_ID` | *(optional, Musik Box)* Skill ID of the **musik box** custom skill (`amzn1.ask.skill....`, see section 9). Both custom skills point at `/api/skill`; this ID is how the endpoint tells them apart |
 
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
 
@@ -342,6 +349,59 @@ The server-side part of step 8.2 lends itself to automation from any repository:
 
 The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creating the custom skill (8.3) and the Alexa routine (8.4).
 
+#### 9. (Optional) 🎵 Musik Box — "Alexa, öffne musik box und spiele Kinderlieder"
+
+Play your own MP3s on any Echo: a playlist is a **name plus a list of URLs**, managed in the dashboard. The Echo streams each file straight from its URL, so there is no media server, no NAS access and no VPS component — only the URLs have to be reachable from the internet. After the last track the playlist starts over and keeps going until you say *"Alexa, Stopp"*.
+
+**How it works:** the dashboard stores playlists in Redis (`musik_playlists`). A third Alexa skill (type **Custom**, with the **AudioPlayer** interface) reads them and answers every `PlayPlaylistIntent` with an `AudioPlayer.Play` directive. Shortly before a track ends Alexa asks the skill (`PlaybackNearlyFinished`) and gets the next track enqueued — after the last one, the first again. The state lives in the stream token (`<playlist>|<track>|<round>`), not in the database, so nothing can go stale.
+
+> **Why the skill shares `/api/skill` with "familien finder".** Vercel's Hobby plan allows twelve serverless functions and `api/` has exactly twelve (the `API-Funktionen zaehlen` workflow enforces it). The logic therefore lives in `lib/musik.js`; `api/skill.js` routes by skill ID and `api/manage.js` serves the dashboard under `?type=playlists`.
+
+##### 9.1 Where the MP3s can live
+
+Alexa fetches the files itself — without your login, without cookies. Every URL must therefore be
+
+- **`https://`** on port 443 with a certificate from a public CA (no self-signed, no plain `http://`),
+- a **direct link to the file** (`Content-Type: audio/mpeg`), not a preview or share page: Dropbox needs `?dl=1`, Nextcloud share links need `/download` appended, Google Drive shares usually fail,
+- ideally on a host that answers **range requests** (`206 Partial Content`) — without them *"Alexa, weiter"* after a pause restarts the track from the beginning.
+
+Your own web space, a Nextcloud/ownCloud, an S3 bucket or any static file host works. The dashboard's **Check URLs** button fetches every link the way the Echo does and reports status, content type and range support, so you see problems before Alexa turns them into silence.
+
+##### 9.2 Dashboard
+
+- Open the dashboard → **Playlists** → enter a **speech-ready name** (this is what you say: `Kinderlieder`, `Hörspiele`) and the **URLs, one per line**. Optionally add a display title after a pipe: `https://…/01.mp3 | Hallo Welt` — it appears on Echo Show and in the Alexa app; otherwise the file name is used.
+- **Save** upserts by name (case-insensitive). **Edit** loads a playlist back into the form, **Check URLs** tests every link, the trash icon deletes.
+- Blank lines are ignored; anything that is not an `https://` URL is rejected with its line number. Up to 200 tracks per playlist.
+
+Everything goes through `/api/manage?type=playlists` (`GET`, `POST {name, urls}`, `DELETE {name}`, `GET &pruefen=1&name=…` for the check), protected by `ADMIN_PASSWORD` like the rest of the dashboard — so it can be scripted from a workflow just like persons and zones (8.5).
+
+##### 9.3 Alexa Custom Skill
+
+1. [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) → **Create Skill** → name `Musik Box`, locale **German (DE)**, type of experience **Other**, model **Custom**, hosting **Provision your own**, template **Start from Scratch**.
+2. **Invocation name**: `musik box` (lower case, two words).
+3. **Interfaces** → enable **Audio Player** and **Playback Controller** → *Save Interfaces*. (Pause/Resume become mandatory intents once AudioPlayer is on — the model below already contains them.)
+4. **Interaction Model → JSON Editor** → paste [`alexa/interaction-model-musik.de-DE.json`](alexa/interaction-model-musik.de-DE.json) → **Save Model** → **Build Model**. Run `node alexa/pruefe-modell.mjs alexa/interaction-model-musik.de-DE.json lib/musik.js PLAYLIST_NAME` first — the same check the CI runs.
+5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` (**the same URL as the familien finder skill**) → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"* → *Save Endpoints*.
+6. Copy the **Skill ID** into the `MUSIK_SKILL_ID` environment variable in Vercel and redeploy. Until then the endpoint answers `401` and Alexa says there was a problem with the skill's response.
+7. **Test** tab → *Development* → type `öffne musik box` — Alexa asks which playlist and lists the ones from the dashboard — then `spiele kinderlieder`. The simulator does not play audio but shows the `AudioPlayer.Play` directive with the stream URL on the right. Then on an Echo: *"Alexa, öffne musik box und spiele Kinderlieder."*
+
+Development mode is enough: the skill works on every Echo of your Amazon account without certification or publishing.
+
+**Playlist names and the model.** `PLAYLIST_NAME` in the model carries two example values; the skill pushes the real names from the dashboard as **dynamic entities** with every answer, so a new playlist is understood from the second sentence of a session on (*"öffne musik box"* → *"spiele Neue Playlist"*). To say it in one go (*"öffne musik box und spiele Neue Playlist"*) add the name under `PLAYLIST_NAME` → `values` in the JSON editor and rebuild — the same rule as for persons in the familien finder. The skill is forgiving with what it hears: *"spiele Kinder"* starts *Kinderlieder*.
+
+**While playing:** *"Alexa, nächster Titel"*, *"voriger Titel"*, *"Pause"*, *"weiter"*, *"von vorn"* and *"Stopp"* work as usual, as do the buttons on Echo Show and in the Alexa app. Loop is always on (the skill says so if you ask to turn it off); shuffle is not implemented yet. A track that fails to load is skipped; if every track of a round fails, playback stops instead of circling forever.
+
+**Alexa routine** (optional): *Mehr → Routinen → +* → *Wenn: Sprache* `musik an` → *Aktion: Angepasst → Skills → Musik Box*. A routine cannot pass a parameter, so it opens the skill and Alexa asks which playlist.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "Es gab ein Problem mit der Antwort des Skills" | `MUSIK_SKILL_ID` missing or wrong → `401` | step 6, redeploy |
+| Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
+| First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |
+| "Weiter" restarts the track | host without range support | **Check URLs** shows ⚠️ — pick another host |
+| Playlist not understood | new name, first sentence of the session | open the skill first, then say the name; or add the value to the model |
+| Model build fails: `AMAZON.PauseIntent required` | AudioPlayer enabled, intent missing | use the JSON from the repo |
+
 ---
 
 ### 🗣️ Usage
@@ -356,6 +416,8 @@ The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creatin
 | *"Alexa, frag familien finder, wo [Name] ist"* | Speaks the current location of any configured person |
 | *"Alexa, frag familien finder, ob [Name]s Handy klingeln kann"* | **Asks back first**, then makes the phone ring (Mylo app required) |
 | *"Alexa, frag familien finder, lass [Name]s Handy aufhören"* | Stops sound, torch and announcement — no confirmation |
+| *"Alexa, öffne musik box und spiele [Playlist]"* | Plays the MP3 URLs of that playlist in order, repeating forever (section 9) |
+| *"Alexa, frag musik box, welche playlists es gibt"* | Lists the playlists from the dashboard |
 
 The Windows Agent supports **Sleep**, **Shutdown**, and **Hibernate** — configurable in the tray app.
 
@@ -374,7 +436,8 @@ The optional waste feature works the same way: its own topic (`ABFALL_TOPIC`) an
 #### Endpoint protection
 
 - **`/api/alexa` requires the bridge secret.** Every request must carry an `x-bridge-key` header matching `BRIDGE_KEY` (or `ADMIN_PASSWORD` as fallback), compared with `crypto.timingSafeEqual`. Alexa sends no signature to a Smart Home Lambda, so this is the only barrier — see step 3 for the setup. In addition, `endpointId` is validated against the configured devices, so the endpoint can no longer be used as an oracle to derive ntfy topics for arbitrary MAC addresses.
-- **All key checks fail closed.** `/api/led`, `/api/location`, `/api/locations`, `/api/presence`, `/api/relay-status`, `/api/manage`, `/api/skill` and `/api/zones` reject the request when their environment variable is missing, instead of comparing `undefined` against `undefined` and letting it pass.
+- **All key checks fail closed.** `/api/led`, `/api/location`, `/api/locations`, `/api/presence`, `/api/relay-status`, `/api/manage`, `/api/skill` and `/api/zones` reject the request when their environment variable is missing, instead of comparing `undefined` against `undefined` and letting it pass. `/api/skill` serves two skills and matches the incoming skill ID against `ALEXA_SKILL_ID` and `MUSIK_SKILL_ID` separately — an unset variable never matches.
+- **The playlist URL check cannot be used as a probe.** `GET /api/manage?type=playlists&pruefen=1` fetches the stored URLs server-side (the dashboard's CSP forbids the browser to do it). It only follows `https://`, refuses hosts that resolve to private, loopback or link-local addresses, follows at most three redirects and gives up after four seconds per URL.
 - **`/api/zones` is read-only and behind `LOCATION_KEY`, not `ADMIN_PASSWORD`.** The phones need the home zone to place their geofence, and they already carry that key to post positions; the admin password would additionally unlock device management and wake-on-LAN. Writing zones stays on `/api/manage`.
 - **Brute-force protection** on `/api/manage`: after 10 failed attempts per IP the endpoint answers `429` for 15 minutes (counter kept in Redis).
 - **Dashboard XSS protection:** every value coming back from the API is HTML-escaped before rendering, and delete buttons use event listeners instead of inline `onclick`. A `Content-Security-Policy` plus `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy` are set in `vercel.json`.

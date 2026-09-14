@@ -46,8 +46,9 @@
 
         .input-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 6px; color: rgba(255,255,255,0.8); font-size: 0.9rem; }
-        input { width: 100%; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 12px; color: white; outline: none; transition: 0.3s; }
-        input:focus { border-color: var(--primary); background: rgba(255,255,255,0.07); }
+        input, textarea { width: 100%; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 12px; color: white; outline: none; transition: 0.3s; }
+        input:focus, textarea:focus { border-color: var(--primary); background: rgba(255,255,255,0.07); }
+        textarea { min-height: 140px; resize: vertical; font-family: monospace; font-size: 0.85rem; line-height: 1.5; }
 
         .btn { width: 100%; padding: 14px; border-radius: 12px; border: none; color: white; font-weight: 600; cursor: pointer; transition: 0.3s; }
         .btn-add { background: linear-gradient(135deg, var(--primary), var(--secondary)); margin-top: 10px; }
@@ -71,6 +72,20 @@
 
         .btn-delete { width: 40px; height: 40px; background: rgba(255,77,77,0.1); color: #ff4d4d; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
         .btn-delete:hover { background: #ff4d4d; color: white; }
+
+        .item-actions { display: flex; gap: 8px; flex-shrink: 0; margin-left: 10px; }
+        .btn-icon { width: 40px; height: 40px; background: rgba(0,242,255,0.1); color: var(--primary); border-radius: 10px; display: flex; align-items: center; justify-content: center; border: none; cursor: pointer; }
+        .btn-icon:hover { background: var(--primary); color: #0a0a0c; }
+        .btn-icon:disabled { opacity: 0.5; cursor: wait; }
+
+        .hint { font-size: 0.8rem; color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.03); border-left: 3px solid var(--primary); border-radius: 8px; padding: 10px 12px; margin-bottom: 15px; line-height: 1.5; }
+        .hint code { font-family: monospace; color: rgba(255,255,255,0.85); }
+        .form-status { font-size: 0.85rem; margin-top: 10px; min-height: 1.2em; }
+        .form-status.error { color: #ff8080; }
+        .form-status.ok { color: #7dffb3; }
+
+        .check-list { margin-top: 10px; font-size: 0.75rem; font-family: monospace; color: rgba(255,255,255,0.7); word-break: break-all; }
+        .check-list div { padding: 3px 0; border-top: 1px solid rgba(255,255,255,0.05); }
 
         .device-item.session-expired { border-color: rgba(255,77,77,0.4); background: rgba(255,77,77,0.06); }
         .session-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 5px 10px; border-radius: 999px; background: rgba(255,77,77,0.15); color: #ff8080; font-size: 0.75rem; font-weight: 600; }
@@ -170,6 +185,33 @@
 
             <div class="device-list" id="zone-list">
                 <!-- Zones loaded here -->
+            </div>
+        </div>
+
+        <div class="glass-card" style="margin-top: 20px;">
+            <h1><i class="fas fa-music"></i> Playlists</h1>
+
+            <div class="hint">
+                <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order and starts over after the last one.<br>
+                Every URL must be <strong>https://</strong> and deliver the MP3 <strong>directly</strong> (no preview page, no login): Dropbox links need <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive shares usually do not work.
+                <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "resume" restarts the track).
+            </div>
+
+            <form id="playlist-form">
+                <div class="input-group">
+                    <label>Name (speech-ready, this is what you say to Alexa)</label>
+                    <input type="text" id="playlist-name" placeholder="e.g. Kinderlieder" maxlength="64" required>
+                </div>
+                <div class="input-group">
+                    <label>MP3 URLs, one per line — optionally <code>URL | Title</code></label>
+                    <textarea id="playlist-urls" placeholder="https://example.org/musik/01-hallo.mp3&#10;https://example.org/musik/02-tschuess.mp3 | Tschüss" required spellcheck="false"></textarea>
+                </div>
+                <button type="submit" class="btn btn-add"><i class="fas fa-save"></i> Save Playlist</button>
+                <div class="form-status" id="playlist-status"></div>
+            </form>
+
+            <div class="device-list" id="playlist-list">
+                <!-- Playlists loaded here -->
             </div>
         </div>
     </main>
@@ -332,6 +374,125 @@
             }
         };
 
+        // --- Playlists (Musik-Box) ---------------------------------------------
+        //
+        // Anders als die anderen Karten hat diese drei Knoepfe: bearbeiten
+        // (fuellt das Formular mit dem Bestand, Speichern unter demselben Namen
+        // ueberschreibt), pruefen und loeschen. Die Pruefung laeuft auf dem
+        // Server - die CSP (connect-src 'self') laesst den Browser fremde URLs
+        // gar nicht erst abrufen, und der Echo holt sie ohnehin von dort.
+        function iconButton(icon, title, handler) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn-icon';
+            btn.title = title;
+            btn.innerHTML = `<i class="fas fa-${icon}"></i>`;
+            btn.addEventListener('click', handler);
+            return btn;
+        }
+
+        function playlistStatus(text, kind = '') {
+            const el = document.getElementById('playlist-status');
+            el.textContent = text;
+            el.className = 'form-status ' + kind;
+        }
+
+        async function renderPlaylists() {
+            const playlists = await apiRequest('GET', null, '?type=playlists');
+            if (!playlists) return;
+
+            const container = document.getElementById('playlist-list');
+            container.innerHTML = playlists.length ? '' : '<p style="text-align:center; padding: 20px;">No playlists configured.</p>';
+
+            playlists.forEach(pl => {
+                const titel = Array.isArray(pl.titel) ? pl.titel : [];
+                const item = document.createElement('div');
+                item.className = 'device-item';
+                item.style.flexWrap = 'wrap';
+
+                const info = document.createElement('div');
+                info.className = 'device-info';
+                info.style.flex = '1';
+                info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${titel.length} ${titel.length === 1 ? 'track' : 'tracks'} · repeats forever</p>`;
+                item.appendChild(info);
+
+                const actions = document.createElement('div');
+                actions.className = 'item-actions';
+                actions.appendChild(iconButton('pen', 'Edit', () => editPlaylist(pl)));
+                const checkBtn = iconButton('stethoscope', 'Check URLs', () => checkPlaylist(pl.name, item, checkBtn));
+                actions.appendChild(checkBtn);
+                actions.appendChild(deleteButton(() => deletePlaylist(pl.name)));
+                item.appendChild(actions);
+
+                container.appendChild(item);
+            });
+        }
+
+        function editPlaylist(pl) {
+            document.getElementById('playlist-name').value = pl.name;
+            document.getElementById('playlist-urls').value = (pl.titel || [])
+                .map(t => t.name ? `${t.url} | ${t.name}` : t.url)
+                .join('\n');
+            playlistStatus(`Editing "${pl.name}" — Save overwrites it.`);
+            document.getElementById('playlist-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // Pruefung in Haeppchen: Vercel gibt einer Function zehn Sekunden, also
+        // liefert der Server hoechstens zwanzig Titel je Aufruf und sagt mit
+        // `weiter`, wo es weitergeht.
+        async function checkPlaylist(name, item, btn) {
+            btn.disabled = true;
+            let list = item.querySelector('.check-list');
+            if (!list) {
+                list = document.createElement('div');
+                list.className = 'check-list';
+                list.style.flexBasis = '100%';
+                item.appendChild(list);
+            }
+            list.innerHTML = '<div>Checking…</div>';
+            const lines = [];
+            let ab = 0;
+            try {
+                while (ab !== null) {
+                    const qs = `?type=playlists&pruefen=1&name=${encodeURIComponent(name)}&ab=${ab}`;
+                    const r = await apiRequest('GET', null, qs);
+                    if (!r || r.error) { lines.push(`❌ ${esc(r?.error || 'check failed')}`); break; }
+                    for (const e of r.ergebnisse) {
+                        const icon = e.fehler ? '❌' : (e.range ? '✅' : '⚠️');
+                        const detail = e.fehler
+                            ? e.fehler
+                            : `${e.status} ${e.contentType || ''}${e.range ? '' : ' · no range support'}`;
+                        lines.push(`${icon} ${esc(e.url)} — ${esc(detail)}`);
+                    }
+                    ab = r.weiter;
+                    list.innerHTML = lines.map(l => `<div>${l}</div>`).join('') + (ab !== null ? '<div>…</div>' : '');
+                }
+            } catch (err) {
+                lines.push(`❌ ${esc(err.message)}`);
+            }
+            list.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+            btn.disabled = false;
+        }
+
+        window.deletePlaylist = async (name) => {
+            if (confirm('Delete this playlist?')) {
+                await apiRequest('DELETE', { name }, '?type=playlists');
+                renderPlaylists();
+            }
+        };
+
+        document.getElementById('playlist-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('playlist-name').value;
+            const urls = document.getElementById('playlist-urls').value;
+            const r = await apiRequest('POST', { name, urls }, '?type=playlists');
+            if (!r) return;
+            if (r.error) { playlistStatus(r.error, 'error'); return; }
+            playlistStatus(`Saved "${name.trim()}".`, 'ok');
+            document.getElementById('playlist-form').reset();
+            renderPlaylists();
+        });
+
         document.getElementById('person-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const name = document.getElementById('person-name').value;
@@ -375,6 +536,7 @@
                 renderDevices();
                 renderPersons();
                 renderZones();
+                renderPlaylists();
             } else {
                 document.getElementById('login-status').innerText = '❌ Incorrect password.';
             }
@@ -399,6 +561,7 @@
                     renderDevices();
                     renderPersons();
                     renderZones();
+                    renderPlaylists();
                 }
             });
         }

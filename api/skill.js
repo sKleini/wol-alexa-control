@@ -18,6 +18,17 @@
 import { Redis } from '@upstash/redis'
 import { buildLocationSpeech } from '../lib/geo.js'
 import { befehlAnPerson } from '../lib/ring.js'
+import { handleSkill as musikBox } from '../lib/musik.js'
+import {
+  speak,
+  resolvedSlotValue,
+  aufzaehlung,
+  dynamischeEntitaeten as dynamischeWerte,
+} from '../lib/alexa.js'
+
+// Weitergereicht, damit bestehende Aufrufer die Helfer weiter hier finden -
+// sie wohnen jetzt in lib/alexa.js, weil lib/musik.js sie ebenfalls braucht.
+export { resolvedSlotValue, aufzaehlung }
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -32,11 +43,20 @@ export default async function handler(req, res) {
   // Not a substitute for full Alexa request-signature verification (certification).
   const appId = body.context?.System?.application?.applicationId
     || body.session?.application?.applicationId;
-  if (!process.env.ALEXA_SKILL_ID || appId !== process.env.ALEXA_SKILL_ID) {
-    return res.status(401).end();
-  }
   const ts = Date.parse(body.request.timestamp);
   if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > 150000) {
+    return res.status(401).end();
+  }
+
+  // **Zwei Skills, ein Endpunkt.** Der Vercel-Hobby-Tarif erlaubt zwoelf
+  // Functions, und api/ hat zwoelf. Die Musik Box zeigt deshalb in der
+  // Developer Console auf dieselbe URL wie der Familien-Finder; welcher Skill
+  // spricht, sagt die Skill-ID. Beide Pruefungen sind fail-closed: ohne
+  // gesetzte Env-Var passt keine ID.
+  if (appId && process.env.MUSIK_SKILL_ID && appId === process.env.MUSIK_SKILL_ID) {
+    return musikBox(body, res, redis);
+  }
+  if (!process.env.ALEXA_SKILL_ID || appId !== process.env.ALEXA_SKILL_ID) {
     return res.status(401).end();
   }
 
@@ -95,15 +115,6 @@ export default async function handler(req, res) {
   }
 }
 
-function speak(res, text, endSession = true, direktiven = []) {
-  const response = {
-    outputSpeech: { type: 'PlainText', text },
-    shouldEndSession: endSession,
-  };
-  if (direktiven.length) response.directives = direktiven;
-  return res.status(200).json({ version: '1.0', response });
-}
-
 /** Rein: Wen der Skill meint, wenn niemand genannt wurde. */
 function standardPerson(personen) {
   return personen.find(p => p.default)
@@ -113,67 +124,16 @@ function standardPerson(personen) {
 }
 
 /**
- * Der aufgeloeste Slot-Wert – **ueber alle Autoritaeten hinweg.**
- *
- * Frueher stand hier `resolutionsPerAuthority?.[0]`, und das war genau so
- * lange richtig, wie es nur eine Autoritaet gab. Mit den dynamischen Werten
- * (siehe [dynamischeEntitaeten]) sind es zwei: die statische Liste aus dem
- * Sprachmodell und die zur Laufzeit nachgeschobene. Fuer eine frisch angelegte
- * Person meldet die statische `ER_SUCCESS_NO_MATCH` - und stuende sie vorn,
- * fiele der Treffer der dynamischen unter den Tisch. Der ganze Nutzen der
- * Dynamik haenge dann daran, in welcher Reihenfolge Alexa die beiden schickt.
- *
- * Deshalb: die erste Autoritaet mit Treffer gewinnt, egal an welcher Stelle
- * sie steht. Ohne Treffer bleibt der gesprochene Wert - die Kulanz, auf die
- * sich dieser Skill nicht mehr verlaesst, die aber auch nicht schadet.
- *
- * Rein und exportiert, damit sich das ohne Netz pruefen laesst.
- */
-export function resolvedSlotValue(slot) {
-  if (!slot) return null;
-  for (const a of slot.resolutions?.resolutionsPerAuthority || []) {
-    if (a?.status?.code === 'ER_SUCCESS_MATCH') {
-      return a.values?.[0]?.value?.name || slot.value;
-    }
-  }
-  return slot.value || null;
-}
-
-/**
  * Schiebt die Personen aus dem Dashboard zur Laufzeit ins Sprachmodell.
  *
- * **Damit muss eine neue Person nicht mehr in die Developer Console.** Bisher
- * war jeder Name doppelt zu pflegen: als Person im Dashboard und als Wert
- * unter `PERSON_NAME` im Modell. Wer das zweite vergass, bekam eine Rueckfrage,
- * die klang, als haette er geschwiegen - und genau das ist mit „wo ist Amelia"
- * passiert.
- *
- * Ersetzt werden nur die **dynamischen** Werte; die Liste im Modell bleibt
- * unberuehrt und traegt weiter. Beides zusammen ist Absicht: Die statischen
- * Namen gelten sofort und fuer jeden, die dynamischen fangen alles ab, was
- * seither dazugekommen ist.
- *
- * **Zwei Grenzen, die dazugehoeren:**
- *   - Sie gelten pro Nutzer und zeitlich begrenzt, nicht dauerhaft im Modell.
- *   - Sie wirken erst NACH dieser Antwort. Die allererste Frage nach einer
- *     eben angelegten Person kann also noch ins Leere gehen; die zweite nicht
- *     mehr.
- *
- * Deshalb bleibt die statische Liste der Grundstock und wird nicht ersetzt.
+ * **Damit muss eine neue Person nicht mehr in die Developer Console** - die
+ * Grenzen und der Grund stehen bei [dynamischeWerte] in lib/alexa.js. Hier
+ * bleibt nur die Wahl des Slot-Typs.
  *
  * Rein und exportiert, damit die Form ohne Netz pruefbar bleibt.
  */
 export function dynamischeEntitaeten(personen) {
-  const werte = (personen || [])
-    .map(p => (p?.name || '').trim())
-    .filter(Boolean)
-    .map(name => ({ id: name.toLowerCase().replace(/\s+/g, '-'), name: { value: name } }));
-  if (werte.length === 0) return [];
-  return [{
-    type: 'Dialog.UpdateDynamicEntities',
-    updateBehavior: 'REPLACE',
-    types: [{ name: 'PERSON_NAME', values: werte }],
-  }];
+  return dynamischeWerte('PERSON_NAME', (personen || []).map(p => p?.name));
 }
 
 async function handleWhereIs(intent, res, personen, direktiven) {
@@ -184,18 +144,6 @@ async function handleWhereIs(intent, res, personen, direktiven) {
   if (!person) return speak(res, `Ich habe keine Person namens ${value} gefunden.`, true, direktiven);
 
   return speak(res, await buildLocationSpeech(redis, person), true, direktiven);
-}
-
-/**
- * Zaehlt Namen so auf, wie man sie spricht: "Julia, Oma Petra und Stefan".
- *
- * Rein und exportiert, damit die Aufzaehlung ohne Netz pruefbar bleibt.
- */
-export function aufzaehlung(namen) {
-  const liste = (namen || []).filter(n => typeof n === 'string' && n.trim());
-  if (liste.length === 0) return '';
-  if (liste.length === 1) return liste[0];
-  return `${liste.slice(0, -1).join(', ')} und ${liste[liste.length - 1]}`;
 }
 
 /**

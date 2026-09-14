@@ -18,12 +18,18 @@ on:
     paths:
       - 'alexa/**'
       - 'api/skill.js'
+      - 'lib/musik.js'
+      - 'lib/alexa.js'
+      - 'test/**'
       - '.github/workflows/alexa-modell.yml'
   push:
     branches: [main]
     paths:
       - 'alexa/**'
       - 'api/skill.js'
+      - 'lib/musik.js'
+      - 'lib/alexa.js'
+      - 'test/**'
   workflow_dispatch:
 
 jobs:
@@ -38,5 +44,13 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Modell und Skill gegeneinander pruefen
+      - name: Modell und Skill gegeneinander pruefen (familien finder)
         run: node alexa/pruefe-modell.mjs
+
+      - name: Modell und Skill gegeneinander pruefen (musik box)
+        run: node alexa/pruefe-modell.mjs alexa/interaction-model-musik.de-DE.json lib/musik.js PLAYLIST_NAME
+
+      # Die Musik-Box ohne Netz und ohne Redis: Token, Umbruch, Validierung,
+      # der Skill-Handler mit einem Redis-Stellvertreter (test/musik.test.mjs).
+      - name: Tests
+        run: node --test

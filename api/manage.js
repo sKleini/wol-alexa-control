@@ -1,6 +1,7 @@
 import { Redis } from '@upstash/redis'
 import { buildLocationList } from '../lib/geo.js'
 import { befehlAnPerson } from '../lib/ring.js'
+import { handleManage as handlePlaylists } from '../lib/musik.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -51,6 +52,7 @@ export default async function handler(req, res) {
   if (req.query.type === 'persons') return handlePersons(req, res);
   if (req.query.type === 'zones') return handleZones(req, res);
   if (req.query.type === 'locations') return handleLocations(req, res);
+  if (req.query.type === 'playlists') return handlePlaylists(req, res, redis);
 
   if (req.method === 'POST') {
     const { mac, name } = req.body || {};

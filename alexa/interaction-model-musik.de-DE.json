@@ -1,0 +1,119 @@
+{
+    "interactionModel": {
+        "languageModel": {
+            "invocationName": "musik box",
+            "intents": [
+                {
+                    "name": "AMAZON.CancelIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.HelpIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.StopIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.NavigateHomeIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.FallbackIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.PauseIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.ResumeIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.NextIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.PreviousIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.StartOverIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.LoopOnIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.LoopOffIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.RepeatIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.ShuffleOnIntent",
+                    "samples": []
+                },
+                {
+                    "name": "AMAZON.ShuffleOffIntent",
+                    "samples": []
+                },
+                {
+                    "name": "PlayPlaylistIntent",
+                    "slots": [
+                        {
+                            "name": "playlist",
+                            "type": "PLAYLIST_NAME"
+                        }
+                    ],
+                    "samples": [
+                        "spiele {playlist}",
+                        "spiel {playlist}",
+                        "spiele die playlist {playlist}",
+                        "spiel die playlist {playlist}",
+                        "starte {playlist}",
+                        "starte die playlist {playlist}",
+                        "die playlist {playlist}",
+                        "{playlist} abspielen",
+                        "{playlist} zu spielen",
+                        "ich möchte {playlist} hören",
+                        "{playlist}"
+                    ]
+                },
+                {
+                    "name": "ListPlaylistsIntent",
+                    "samples": [
+                        "welche playlists gibt es",
+                        "welche playlists kennst du",
+                        "was kannst du spielen",
+                        "was gibt es",
+                        "liste die playlists auf",
+                        "nach den playlists"
+                    ]
+                }
+            ],
+            "types": [
+                {
+                    "name": "PLAYLIST_NAME",
+                    "values": [
+                        {
+                            "name": {
+                                "value": "Kinderlieder"
+                            }
+                        },
+                        {
+                            "name": {
+                                "value": "Hörspiele"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}
