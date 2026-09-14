@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="ground" cx="50%" cy="36%" r="78%">
+      <stop offset="0%" stop-color="#17434a"/>
+      <stop offset="62%" stop-color="#0c2429"/>
+      <stop offset="100%" stop-color="#06161a"/>
+    </radialGradient>
+    <linearGradient id="brass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffcb73"/>
+      <stop offset="45%" stop-color="#f0a742"/>
+      <stop offset="100%" stop-color="#c9791d"/>
+    </linearGradient>
+    <linearGradient id="tube" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7fe9dc"/>
+      <stop offset="100%" stop-color="#2aa79a"/>
+    </linearGradient>
+    <linearGradient id="disc" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#20343a"/>
+      <stop offset="100%" stop-color="#0b1c21"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#ground)"/>
+
+  <!-- Korpus der Musikbox: Bogen oben, gerader Sockel unten -->
+  <path d="M138 436 L138 238 A118 118 0 0 1 374 238 L374 436 Z" fill="url(#brass)"/>
+
+  <!-- Neonroehren links und rechts, wie an einer Jukebox -->
+  <path d="M160 428 L160 242 A96 96 0 0 1 188 175" fill="none" stroke="url(#tube)" stroke-width="17" stroke-linecap="round"/>
+  <path d="M352 428 L352 242 A96 96 0 0 0 324 175" fill="none" stroke="url(#tube)" stroke-width="17" stroke-linecap="round"/>
+
+  <!-- Schallplatte im Bogenfeld -->
+  <circle cx="256" cy="247" r="88" fill="url(#disc)"/>
+  <circle cx="256" cy="247" r="88" fill="none" stroke="#0a181c" stroke-width="5"/>
+  <circle cx="256" cy="247" r="62" fill="none" stroke="#4b7d85" stroke-width="5" opacity="0.9"/>
+  <circle cx="256" cy="247" r="40" fill="none" stroke="#4b7d85" stroke-width="5" opacity="0.65"/>
+  <circle cx="256" cy="247" r="23" fill="#f0a742"/>
+  <circle cx="256" cy="247" r="7" fill="#0b1c21"/>
+
+  <!-- Lautsprechergitter im Sockel -->
+  <rect x="188" y="360" width="140" height="15" rx="7.5" fill="#8e5416" opacity="0.72"/>
+  <rect x="188" y="388" width="140" height="15" rx="7.5" fill="#8e5416" opacity="0.72"/>
+</svg>
