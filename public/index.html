@@ -192,7 +192,7 @@
             <h1><i class="fas fa-music"></i> Playlists</h1>
 
             <div class="hint">
-                <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order and starts over after the last one.<br>
+                <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. With <em>Repeat</em> on it starts over after the last track; with it off the playlist ends there.<br>
                 Every URL must be <strong>https://</strong> and deliver the MP3 <strong>directly</strong> (no preview page, no login): Dropbox links need <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive shares usually do not work.
                 <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "resume" restarts the track).
             </div>
@@ -205,6 +205,12 @@
                 <div class="input-group">
                     <label>MP3 URLs, one per line — optionally <code>URL | Title</code></label>
                     <textarea id="playlist-urls" placeholder="https://example.org/musik/01-hallo.mp3&#10;https://example.org/musik/02-tschuess.mp3 | Tschüss" required spellcheck="false"></textarea>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="playlist-repeat" style="width: auto;" checked>
+                        Repeat — start over after the last track instead of stopping
+                    </label>
                 </div>
                 <button type="submit" class="btn btn-add"><i class="fas fa-save"></i> Save Playlist</button>
                 <div class="form-status" id="playlist-status"></div>
@@ -413,7 +419,11 @@
                 const info = document.createElement('div');
                 info.className = 'device-info';
                 info.style.flex = '1';
-                info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${titel.length} ${titel.length === 1 ? 'track' : 'tracks'} · repeats forever</p>`;
+                // Ein fehlendes Feld heisst "wiederholt sich" - genau wie im
+                // Backend, sonst zeigte die Liste fuer alte Playlists das
+                // Gegenteil dessen an, was der Skill tut.
+                const wiederholt = pl.wiederholen !== false;
+                info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${titel.length} ${titel.length === 1 ? 'track' : 'tracks'} · ${wiederholt ? 'repeats' : 'plays once'}</p>`;
                 item.appendChild(info);
 
                 const actions = document.createElement('div');
@@ -430,6 +440,7 @@
 
         function editPlaylist(pl) {
             document.getElementById('playlist-name').value = pl.name;
+            document.getElementById('playlist-repeat').checked = pl.wiederholen !== false;
             document.getElementById('playlist-urls').value = (pl.titel || [])
                 .map(t => t.name ? `${t.url} | ${t.name}` : t.url)
                 .join('\n');
@@ -485,7 +496,11 @@
             e.preventDefault();
             const name = document.getElementById('playlist-name').value;
             const urls = document.getElementById('playlist-urls').value;
-            const r = await apiRequest('POST', { name, urls }, '?type=playlists');
+            // Das Feld geht immer mit: Im Backend laesst ein fehlendes
+            // `wiederholen` den bisherigen Wert stehen, ein Abwaehlen muss also
+            // ausdruecklich als false ankommen.
+            const wiederholen = document.getElementById('playlist-repeat').checked;
+            const r = await apiRequest('POST', { name, urls, wiederholen }, '?type=playlists');
             if (!r) return;
             if (r.error) { playlistStatus(r.error, 'error'); return; }
             playlistStatus(`Saved "${name.trim()}".`, 'ok');

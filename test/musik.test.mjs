@@ -17,6 +17,7 @@ import {
   schritt,
   playDirektive,
   istPrivateAdresse,
+  wiederholtSich,
   handleSkill,
   handleManage,
   REDIS_KEY,
@@ -50,6 +51,7 @@ const KINDER = {
   ],
 };
 const EINZEL = { name: 'Solo', titel: [{ url: 'https://example.org/solo.mp3', name: 'solo' }] };
+const EINMAL = { name: 'Einmal', wiederholen: false, titel: KINDER.titel };
 
 function anfrage(request, { token, offset = 0 } = {}) {
   const body = {
@@ -298,8 +300,7 @@ test('PlaybackFailed springt weiter, aber nicht ueber das Ende der Runde hinaus'
   assert.deepEqual(ende.directives, [{ type: 'AudioPlayer.Stop' }]);
 });
 
-test('Loop und Shuffle antworten mit einem Satz', async () => {
-  assert.match((await skill(intent('AMAZON.LoopOffIntent'))).outputSpeech.text, /wiederholt jede Playlist immer/);
+test('Shuffle antwortet mit einem Satz', async () => {
   assert.match((await skill(intent('AMAZON.ShuffleOnIntent'))).outputSpeech.text, /Zufallswiedergabe/);
 });
 
@@ -314,6 +315,55 @@ test('Ein lesbarer Redis-Fehler bricht den Skill nicht', async () => {
   await handleSkill(anfrage({ type: 'LaunchRequest' }), res, kaputt);
   assert.equal(res.statusCode, 200);
   assert.match(res.body.response.outputSpeech.text, /keine Playlist angelegt/);
+});
+
+// --- Wiederholung -----------------------------------------------------------------
+
+test('wiederholtSich: nur ein ausdrueckliches false schaltet ab', () => {
+  assert.equal(wiederholtSich({ wiederholen: true }), true);
+  assert.equal(wiederholtSich({ wiederholen: false }), false);
+  assert.equal(wiederholtSich({}), true, 'fehlendes Feld heisst ja');
+  assert.equal(wiederholtSich(null), true, 'neue Playlist wiederholt sich');
+});
+
+test('validierePlaylist: fehlendes Feld nimmt den Bestand, sonst die Vorgabe', () => {
+  const zeile = 'https://h.de/1.mp3';
+  assert.equal(validierePlaylist({ name: 'A', urls: zeile }).playlist.wiederholen, true);
+  assert.equal(validierePlaylist({ name: 'A', urls: zeile, wiederholen: false }).playlist.wiederholen, false);
+  // Ohne Feld bleibt der gespeicherte Wert stehen - eine Titelkorrektur darf
+  // die Einstellung nicht nebenbei umlegen.
+  assert.equal(validierePlaylist({ name: 'A', urls: zeile }, { wiederholen: false }).playlist.wiederholen, false);
+  assert.equal(validierePlaylist({ name: 'A', urls: zeile, wiederholen: true }, { wiederholen: false }).playlist.wiederholen, true);
+});
+
+test('Ohne Wiederholung wird hinter dem letzten Titel nichts angehaengt', async () => {
+  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Einmal|2|0' }, { token: 'Einmal|2|0' }, [EINMAL]);
+  // Kein Stop: Der letzte Titel laeuft noch und soll zu Ende spielen.
+  assert.deepEqual(r, {});
+});
+
+test('Ohne Wiederholung laeuft die Playlist bis dahin normal weiter', async () => {
+  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Einmal|0|0' }, { token: 'Einmal|0|0' }, [EINMAL]);
+  assert.equal(r.directives[0].audioItem.stream.token, 'Einmal|1|0');
+});
+
+test('Ohne Wiederholung stoppt naechster Titel am Ende und bleibt am Anfang stehen', async () => {
+  const ende = await skill(intent('AMAZON.NextIntent'), { token: 'Einmal|2|0' }, [EINMAL]);
+  assert.deepEqual(ende.directives, [{ type: 'AudioPlayer.Stop' }]);
+
+  const anfang = await skill(intent('AMAZON.PreviousIntent'), { token: 'Einmal|0|0' }, [EINMAL]);
+  assert.equal(anfang.directives[0].audioItem.stream.token, 'Einmal|0|0');
+});
+
+test('Loop-Befehle geben Auskunft, statt etwas zu behaupten oder umzuschalten', async () => {
+  const aus = await skill(intent('AMAZON.LoopOffIntent'), { token: 'Einmal|0|0' }, [EINMAL]);
+  assert.match(aus.outputSpeech.text, /Einmal wiederholt sich nicht.*Dashboard/);
+
+  const an = await skill(intent('AMAZON.LoopOnIntent'), { token: 'Kinderlieder|0|0' });
+  assert.match(an.outputSpeech.text, /Kinderlieder wiederholt sich\./);
+
+  const ohne = await skill(intent('AMAZON.RepeatIntent'));
+  assert.match(ohne.outputSpeech.text, /Dashboard/);
 });
 
 // --- Verwaltung -------------------------------------------------------------------
@@ -339,6 +389,23 @@ test('handleManage legt an, ueberschreibt nach Name und loescht', async () => {
   res = antwortFaenger();
   await handleManage({ method: 'DELETE', query: {}, body: { name: 'KINDER' } }, res, redis);
   assert.deepEqual(redis.speicher[REDIS_KEY], []);
+});
+
+test('handleManage haelt die Wiederholung ueber eine Titelaenderung hinweg', async () => {
+  const redis = redisMit();
+  const post = (body) => handleManage({ method: 'POST', query: {}, body }, antwortFaenger(), redis);
+
+  await post({ name: 'Einmal', urls: 'https://h.de/1.mp3', wiederholen: false });
+  assert.equal(redis.speicher[REDIS_KEY][0].wiederholen, false);
+
+  // Zweiter Aufruf ohne das Feld: die Einstellung bleibt stehen.
+  await post({ name: 'Einmal', urls: 'https://h.de/1.mp3\nhttps://h.de/2.mp3' });
+  assert.equal(redis.speicher[REDIS_KEY][0].titel.length, 2);
+  assert.equal(redis.speicher[REDIS_KEY][0].wiederholen, false);
+
+  // Ausdruecklich wieder an.
+  await post({ name: 'Einmal', urls: 'https://h.de/1.mp3', wiederholen: true });
+  assert.equal(redis.speicher[REDIS_KEY][0].wiederholen, true);
 });
 
 test('handleManage weist eine kaputte Playlist mit 400 und Zeilennummer ab', async () => {
