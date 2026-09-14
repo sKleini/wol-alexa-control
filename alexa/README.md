@@ -105,3 +105,39 @@ wenn `confirmationRequired` gesetzt ist.
 und wer das Handy gerade gefunden hat, während es Alarm schlägt, soll nicht
 erst eine Frage beantworten. Die Vorsicht gehört vor das Geräusch, nicht
 dahinter.
+
+## Playlists pflegen (musik box)
+
+**Eine neue Playlist gehört an zwei Orte**, sonst versteht Alexa den Namen im
+Ein-Satz-Aufruf nicht: ins Dashboard (damit der Skill sie abspielen kann) und
+unter `types` → `PLAYLIST_NAME` → `values` in
+`interaction-model-musik.de-DE.json` (damit Alexa den Namen überhaupt hört),
+danach **Build Model** in der Konsole.
+
+Die dynamischen Werte aus `lib/musik.js` nehmen einem das nicht ab — sie wirken
+erst **nach** einer Antwort des Skills. Zweistufig gesprochen kommt man also
+ohne Modelländerung durch:
+
+> „Alexa, öffne musik box" → Rückfrage → „Zähne putzen"
+
+In einem Satz („öffne musik box und spiele Zähne putzen") ist es die erste
+Äußerung der Sitzung, und da gibt es noch keine dynamischen Werte.
+
+**Woran es wirklich hängt, ist die Ähnlichkeit.** Ein eigener Slot-Typ ist bei
+Alexa keine geschlossene Liste, aber er erkennt Unbekanntes nur, wenn es den
+eingetragenen Werten ähnelt. Genau daran ist *„spiele Zähne putzen"*
+gescheitert, während im Modell nur `Kinderlieder` und `Hörspiele` standen: Eine
+**Verbphrase** ähnelt zwei Substantiven nicht. Ein Name wie `Schlaflieder` wäre
+womöglich durchgekommen — verlassen sollte man sich darauf nicht.
+
+Am Handler liegt es dabei nie. `findePlaylist` normalisiert Groß- und
+Kleinschreibung, Umlaute und Leerzeichen und trifft auch auf Teilwörter
+(*„spiele Zähne"* startet *Zähne putzen*). Kommt der Name an, wird er gefunden;
+kommt er nicht an, fehlt der Slot-Wert im Modell.
+
+**Der dauerhafte Ausweg wäre `AMAZON.SearchQuery`** als Slot-Typ: Der nimmt
+freien Text und bräuchte diese Pflege nicht mehr. Er ist hier nicht gewählt,
+weil ein Sample dann nicht mehr allein aus dem Slot bestehen darf — die Antwort
+auf die Rückfrage („Zähne putzen") verlangte einen zweiten Intent mit dem
+bisherigen Typ, und vier der jetzigen Beispielsätze müssten weichen. Wer die
+Pflege leid ist, macht diesen Umbau; bis dahin ist der Eintrag hier eine Zeile.

@@ -103,12 +103,17 @@
                     "values": [
                         {
                             "name": {
+                                "value": "Hörspiele"
+                            }
+                        },
+                        {
+                            "name": {
                                 "value": "Kinderlieder"
                             }
                         },
                         {
                             "name": {
-                                "value": "Hörspiele"
+                                "value": "Zähne putzen"
                             }
                         }
                     ]
