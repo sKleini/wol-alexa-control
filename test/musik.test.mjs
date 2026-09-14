@@ -225,7 +225,8 @@ test('LaunchRequest ohne Playlists verweist aufs Dashboard', async () => {
 
 test('PlayPlaylistIntent startet den ersten Titel', async () => {
   const r = await skill(intent('PlayPlaylistIntent', 'kinderlieder'));
-  assert.equal(r.outputSpeech.text, 'Ich spiele Kinderlieder, 3 Titel.');
+  // Ohne Titelzahl: Die Ansage steht vor der Musik und bleibt deshalb kurz.
+  assert.equal(r.outputSpeech.text, 'Ich spiele Kinderlieder.');
   assert.equal(r.shouldEndSession, true);
   assert.equal(r.directives.length, 1);
   assert.equal(r.directives[0].playBehavior, 'REPLACE_ALL');
