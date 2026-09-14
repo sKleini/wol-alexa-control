@@ -18,6 +18,7 @@ import {
   playDirektive,
   istPrivateAdresse,
   wiederholtSich,
+  sagtAn,
   handleSkill,
   handleManage,
   REDIS_KEY,
@@ -52,6 +53,7 @@ const KINDER = {
 };
 const EINZEL = { name: 'Solo', titel: [{ url: 'https://example.org/solo.mp3', name: 'solo' }] };
 const EINMAL = { name: 'Einmal', wiederholen: false, titel: KINDER.titel };
+const STILL = { name: 'Leise', ansage: false, titel: KINDER.titel };
 
 function anfrage(request, { token, offset = 0 } = {}) {
   const body = {
@@ -319,21 +321,55 @@ test('Ein lesbarer Redis-Fehler bricht den Skill nicht', async () => {
 
 // --- Wiederholung -----------------------------------------------------------------
 
-test('wiederholtSich: nur ein ausdrueckliches false schaltet ab', () => {
-  assert.equal(wiederholtSich({ wiederholen: true }), true);
-  assert.equal(wiederholtSich({ wiederholen: false }), false);
-  assert.equal(wiederholtSich({}), true, 'fehlendes Feld heisst ja');
-  assert.equal(wiederholtSich(null), true, 'neue Playlist wiederholt sich');
+test('Beide Schalter: nur ein ausdrueckliches false schaltet ab', () => {
+  for (const [name, fn, feld] of [['wiederholtSich', wiederholtSich, 'wiederholen'], ['sagtAn', sagtAn, 'ansage']]) {
+    assert.equal(fn({ [feld]: true }), true, name);
+    assert.equal(fn({ [feld]: false }), false, name);
+    assert.equal(fn({}), true, `${name}: fehlendes Feld heisst ja`);
+    assert.equal(fn(null), true, `${name}: neue Playlist steht auf an`);
+  }
+  // Die Schalter sind unabhaengig voneinander.
+  assert.equal(wiederholtSich({ ansage: false }), true);
+  assert.equal(sagtAn({ wiederholen: false }), true);
 });
 
 test('validierePlaylist: fehlendes Feld nimmt den Bestand, sonst die Vorgabe', () => {
   const zeile = 'https://h.de/1.mp3';
-  assert.equal(validierePlaylist({ name: 'A', urls: zeile }).playlist.wiederholen, true);
-  assert.equal(validierePlaylist({ name: 'A', urls: zeile, wiederholen: false }).playlist.wiederholen, false);
-  // Ohne Feld bleibt der gespeicherte Wert stehen - eine Titelkorrektur darf
-  // die Einstellung nicht nebenbei umlegen.
-  assert.equal(validierePlaylist({ name: 'A', urls: zeile }, { wiederholen: false }).playlist.wiederholen, false);
-  assert.equal(validierePlaylist({ name: 'A', urls: zeile, wiederholen: true }, { wiederholen: false }).playlist.wiederholen, true);
+  for (const feld of ['wiederholen', 'ansage']) {
+    assert.equal(validierePlaylist({ name: 'A', urls: zeile }).playlist[feld], true, feld);
+    assert.equal(validierePlaylist({ name: 'A', urls: zeile, [feld]: false }).playlist[feld], false, feld);
+    // Ohne Feld bleibt der gespeicherte Wert stehen - eine Titelkorrektur darf
+    // die Einstellung nicht nebenbei umlegen.
+    assert.equal(validierePlaylist({ name: 'A', urls: zeile }, { [feld]: false }).playlist[feld], false, feld);
+    assert.equal(validierePlaylist({ name: 'A', urls: zeile, [feld]: true }, { [feld]: false }).playlist[feld], true, feld);
+  }
+  // Ein Schalter im Body laesst den anderen in Ruhe.
+  const nur = validierePlaylist({ name: 'A', urls: zeile, ansage: false }, { wiederholen: false, ansage: true });
+  assert.equal(nur.playlist.ansage, false);
+  assert.equal(nur.playlist.wiederholen, false);
+});
+
+test('Ohne Ansage startet die Musik ohne ein Wort davor', async () => {
+  const r = await skill(intent('PlayPlaylistIntent', 'leise'), {}, [STILL]);
+  assert.equal(r.outputSpeech, undefined, 'keine Sprachausgabe');
+  assert.equal(r.shouldEndSession, undefined, 'kein shouldEndSession neben AudioPlayer.Play');
+  assert.equal(r.directives.length, 1);
+  assert.equal(r.directives[0].playBehavior, 'REPLACE_ALL');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Leise|0|0');
+});
+
+test('Mit Ansage bleibt der Satz vor der Musik', async () => {
+  const r = await skill(intent('PlayPlaylistIntent', 'kinderlieder'));
+  assert.equal(r.outputSpeech.text, 'Ich spiele Kinderlieder.');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|0');
+});
+
+test('Die Ansage schweigt nur vorn - Rueckfragen und Fehler bleiben hoerbar', async () => {
+  const unbekannt = await skill(intent('PlayPlaylistIntent', 'Jazz'), {}, [STILL]);
+  assert.match(unbekannt.outputSpeech.text, /keine Playlist namens Jazz/);
+
+  const leer = await skill(intent('PlayPlaylistIntent', 'leer'), {}, [{ name: 'Leer', ansage: false, titel: [] }]);
+  assert.match(leer.outputSpeech.text, /noch keine Titel/);
 });
 
 test('Ohne Wiederholung wird hinter dem letzten Titel nichts angehaengt', async () => {
@@ -406,6 +442,24 @@ test('handleManage haelt die Wiederholung ueber eine Titelaenderung hinweg', asy
   // Ausdruecklich wieder an.
   await post({ name: 'Einmal', urls: 'https://h.de/1.mp3', wiederholen: true });
   assert.equal(redis.speicher[REDIS_KEY][0].wiederholen, true);
+});
+
+test('handleManage speichert beide Schalter unabhaengig voneinander', async () => {
+  const redis = redisMit();
+  const post = (body) => handleManage({ method: 'POST', query: {}, body }, antwortFaenger(), redis);
+
+  await post({ name: 'Leise', urls: 'https://h.de/1.mp3', wiederholen: false, ansage: false });
+  assert.deepEqual(
+    { w: redis.speicher[REDIS_KEY][0].wiederholen, a: redis.speicher[REDIS_KEY][0].ansage },
+    { w: false, a: false },
+  );
+
+  // Nur die Ansage wieder an, die Wiederholung bleibt aus.
+  await post({ name: 'Leise', urls: 'https://h.de/1.mp3', ansage: true });
+  assert.deepEqual(
+    { w: redis.speicher[REDIS_KEY][0].wiederholen, a: redis.speicher[REDIS_KEY][0].ansage },
+    { w: false, a: true },
+  );
 });
 
 test('handleManage weist eine kaputte Playlist mit 400 und Zeilennummer ab', async () => {

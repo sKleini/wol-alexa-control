@@ -15,7 +15,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
 - **Waste Collection (Optional)**: Say *"Alexa, Mülltonne"* and hear which bin goes out next — a scene that triggers a spoken announcement on the Echo you just talked to.
 - **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — or have the phone ring, after Alexa asks you to confirm — fed by a free location-logger app (GPSLogger) posting the phone's position, no extra server component.
-- **Musik Box (Optional)**: Say *"Alexa, öffne musik box und spiele Kinderlieder"* and the Echo plays a playlist you manage in the dashboard — a name plus a list of MP3 URLs — in order, repeating or stopping at the end as you set it per playlist. No media server, no NAS: the Echo streams straight from the URLs.
+- **Musik Box (Optional)**: Say *"Alexa, öffne musik box und spiele Kinderlieder"* and the Echo plays a playlist you manage in the dashboard — a name plus a list of MP3 URLs — in order, with repeat and the spoken confirmation each switchable per playlist. No media server, no NAS: the Echo streams straight from the URLs.
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
 ---
@@ -351,7 +351,7 @@ The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creatin
 
 #### 9. (Optional) 🎵 Musik Box — "Alexa, öffne musik box und spiele Kinderlieder"
 
-Play your own MP3s on any Echo: a playlist is a **name plus a list of URLs**, managed in the dashboard. The Echo streams each file straight from its URL, so there is no media server, no NAS access and no VPS component — only the URLs have to be reachable from the internet. A **Repeat** switch per playlist decides what happens after the last track: start over and keep going until you say *"Alexa, Stopp"*, or end there.
+Play your own MP3s on any Echo: a playlist is a **name plus a list of URLs**, managed in the dashboard. The Echo streams each file straight from its URL, so there is no media server, no NAS access and no VPS component — only the URLs have to be reachable from the internet. Two switches per playlist decide how it behaves. **Repeat** says what happens after the last track: start over and keep going until you say *"Alexa, Stopp"*, or end there. **Announce** says whether Alexa confirms with *"Ich spiele …"* before the first track, or the music simply starts.
 
 **How it works:** the dashboard stores playlists in Redis (`musik_playlists`). A third Alexa skill (type **Custom**, with the **AudioPlayer** interface) reads them and answers every `PlayPlaylistIntent` with an `AudioPlayer.Play` directive. Shortly before a track ends Alexa asks the skill (`PlaybackNearlyFinished`) and gets the next track enqueued — after the last one, the first again. The state lives in the stream token (`<playlist>|<track>|<round>`), not in the database, so nothing can go stale.
 
@@ -370,11 +370,13 @@ Your own web space, a Nextcloud/ownCloud, an S3 bucket or any static file host w
 ##### 9.2 Dashboard
 
 - Open the dashboard → **Playlists** → enter a **speech-ready name** (this is what you say: `Kinderlieder`, `Hörspiele`) and the **URLs, one per line**. Optionally add a display title after a pipe: `https://…/01.mp3 | Hallo Welt` — it appears on Echo Show and in the Alexa app; otherwise the file name is used.
-- **Repeat** decides what happens after the last track: on, the playlist starts over; off, it ends. New playlists have it on, which is how the skill behaved before the switch existed, and playlists created before it keep repeating untouched.
+- **Repeat** decides what happens after the last track: on, the playlist starts over; off, it ends.
+- **Announce** decides whether Alexa says *"Ich spiele Kinderlieder."* before the music. Off is for playlists that start as part of a routine, where a voice in front of the music is in the way. Follow-up questions and error messages are unaffected — a playlist Alexa cannot find still says so.
+- Both switches are on for new playlists, which is how the skill behaved before they existed, and playlists created earlier keep their old behaviour untouched.
 - **Save** upserts by name (case-insensitive). **Edit** loads a playlist back into the form, **Check URLs** tests every link, the trash icon deletes.
 - Blank lines are ignored; anything that is not an `https://` URL is rejected with its line number. Up to 200 tracks per playlist.
 
-Everything goes through `/api/manage?type=playlists` (`GET`, `POST {name, urls, wiederholen}`, `DELETE {name}`, `GET &pruefen=1&name=…` for the check), protected by `ADMIN_PASSWORD` like the rest of the dashboard. Leaving `wiederholen` out of a `POST` keeps the stored setting, so a script that only fixes a track list cannot flip it by omission; switching it off has to arrive as an explicit `false` — so it can be scripted from a workflow just like persons and zones (8.5).
+Everything goes through `/api/manage?type=playlists` (`GET`, `POST {name, urls, wiederholen, ansage}`, `DELETE {name}`, `GET &pruefen=1&name=…` for the check), protected by `ADMIN_PASSWORD` like the rest of the dashboard. Leaving a switch out of a `POST` keeps its stored value, so a script that only fixes a track list cannot flip one by omission; switching it off has to arrive as an explicit `false` — so it can be scripted from a workflow just like persons and zones (8.5).
 
 ##### 9.3 Alexa Custom Skill
 
