@@ -19,6 +19,11 @@ import {
   istPrivateAdresse,
   wiederholtSich,
   sagtAn,
+  mischt,
+  setztFort,
+  reihenfolge,
+  titelAn,
+  neuerSeed,
   handleSkill,
   handleManage,
   REDIS_KEY,
@@ -79,11 +84,20 @@ function sucheIntent(wert) {
   return { type: 'IntentRequest', intent: { name: 'SuchePlaylistIntent', slots: { suche: { name: 'suche', value: wert } } } };
 }
 
-async function skill(request, opts = {}, playlists = [KINDER, EINZEL]) {
+async function skill(request, opts = {}, playlists = [KINDER, EINZEL], redis = null) {
   const res = antwortFaenger();
-  await handleSkill(anfrage(request, opts), res, redisMit({ [REDIS_KEY]: playlists }));
+  await handleSkill(anfrage(request, opts), res, redis || redisMit({ [REDIS_KEY]: playlists }));
   return res.body.response;
 }
+
+/** Eine Playlist, die fortgesetzt wird, samt Redis zum Hineinschauen. */
+function mitStand(playlist, stand = null) {
+  const daten = { [REDIS_KEY]: [playlist] };
+  if (stand) daten.musik_stand = { [playlist.name.toLowerCase()]: stand };
+  return redisMit(daten);
+}
+
+const HOERSPIEL = { name: 'Hörspiel', fortsetzen: true, wiederholen: false, titel: KINDER.titel };
 
 // --- titelnameAusUrl ----------------------------------------------------------
 
@@ -160,45 +174,95 @@ test('findePlaylist ist kulant beim gehoerten Wort', () => {
 // --- Token und Schritte -------------------------------------------------------
 
 test('Token hin und zurueck', () => {
-  const t = tokenBauen('Kinderlieder', 2, 1);
-  assert.equal(t, 'Kinderlieder|2|1');
-  assert.deepEqual(tokenLesen(t), { name: 'Kinderlieder', index: 2, runde: 1 });
+  assert.equal(tokenBauen('Kinderlieder', 2, 1), 'Kinderlieder|2|1|0');
+  assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711), 'Kinderlieder|2|1|4711');
+  assert.deepEqual(tokenLesen('Kinderlieder|2|1|4711'), { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711 });
   assert.equal(tokenLesen('fremd'), null);
-  assert.equal(tokenLesen('a|x|1'), null);
-  assert.equal(tokenLesen('a|-1|1'), null);
+  assert.equal(tokenLesen('a|x|1|0'), null);
+  assert.equal(tokenLesen('a|-1|1|0'), null);
+  assert.equal(tokenLesen('a|0|0|-1'), null);
   assert.equal(tokenLesen(undefined), null);
 });
 
+test('Ein Token aus der Zeit vor der Mischung bleibt lesbar', () => {
+  // Ein Stream, der beim Deploy noch laeuft, traegt drei Teile. Wuerde der
+  // ploetzlich als fremd gelten, braeche die Wiedergabe mitten im Titel ab.
+  assert.deepEqual(tokenLesen('Kinderlieder|1|2'), { name: 'Kinderlieder', position: 1, runde: 2, seed: 0 });
+});
+
 test('schritt laeuft vorwaerts mit Umbruch und zaehlt die Runde hoch', () => {
-  assert.deepEqual(schritt(KINDER, { index: 0, runde: 0 }, +1), { index: 1, runde: 0, umbruch: false });
-  assert.deepEqual(schritt(KINDER, { index: 2, runde: 0 }, +1), { index: 0, runde: 1, umbruch: true });
+  assert.deepEqual(schritt(KINDER, { position: 0, runde: 0, seed: 0 }, +1), { position: 1, runde: 0, seed: 0, umbruch: false });
+  assert.deepEqual(schritt(KINDER, { position: 2, runde: 0, seed: 0 }, +1), { position: 0, runde: 1, seed: 0, umbruch: true });
 });
 
 test('schritt rueckwaerts bricht am Anfang um', () => {
-  assert.deepEqual(schritt(KINDER, { index: 1, runde: 3 }, -1), { index: 0, runde: 3, umbruch: false });
-  assert.deepEqual(schritt(KINDER, { index: 0, runde: 3 }, -1), { index: 2, runde: 4, umbruch: true });
+  assert.deepEqual(schritt(KINDER, { position: 1, runde: 3, seed: 0 }, -1), { position: 0, runde: 3, seed: 0, umbruch: false });
+  assert.deepEqual(schritt(KINDER, { position: 0, runde: 3, seed: 0 }, -1), { position: 2, runde: 4, seed: 0, umbruch: true });
 });
 
 test('Ein-Titel-Playlist bekommt bei jedem Schritt einen neuen Token', () => {
-  const a = schritt(EINZEL, { index: 0, runde: 0 }, +1);
-  assert.deepEqual(a, { index: 0, runde: 1, umbruch: true });
-  assert.notEqual(tokenBauen('Solo', a.index, a.runde), tokenBauen('Solo', 0, 0));
+  const a = schritt(EINZEL, { position: 0, runde: 0, seed: 0 }, +1);
+  assert.deepEqual(a, { position: 0, runde: 1, seed: 0, umbruch: true });
+  assert.notEqual(tokenBauen('Solo', a.position, a.runde), tokenBauen('Solo', 0, 0));
 });
 
-test('schritt faengt einen Index jenseits der gekuerzten Playlist ab', () => {
-  assert.deepEqual(schritt(KINDER, { index: 7, runde: 0 }, +1), { index: 0, runde: 1, umbruch: true });
-  assert.equal(schritt({ name: 'leer', titel: [] }, { index: 0, runde: 0 }, +1), null);
+test('schritt faengt eine Stelle jenseits der gekuerzten Playlist ab', () => {
+  assert.deepEqual(schritt(KINDER, { position: 7, runde: 0, seed: 0 }, +1), { position: 0, runde: 1, seed: 0, umbruch: true });
+  assert.equal(schritt({ name: 'leer', titel: [] }, { position: 0, runde: 0, seed: 0 }, +1), null);
+});
+
+// --- Mischung -----------------------------------------------------------------
+
+test('reihenfolge: Seed 0 laesst die Liste in Ruhe, jeder andere mischt fest', () => {
+  assert.deepEqual(reihenfolge(4, 0), [0, 1, 2, 3]);
+  const a = reihenfolge(8, 12345);
+  assert.deepEqual(a, reihenfolge(8, 12345), 'derselbe Seed, dieselbe Folge');
+  assert.notDeepEqual(a, [0, 1, 2, 3, 4, 5, 6, 7], 'gemischt');
+  assert.deepEqual([...a].sort((x, y) => x - y), [0, 1, 2, 3, 4, 5, 6, 7], 'jeder Titel genau einmal');
+  assert.notDeepEqual(a, reihenfolge(8, 999), 'anderer Seed, andere Folge');
+});
+
+test('reihenfolge kommt mit leer und einem Titel klar', () => {
+  assert.deepEqual(reihenfolge(0, 4711), []);
+  assert.deepEqual(reihenfolge(1, 4711), [0]);
+});
+
+test('neuerSeed ist nie 0, denn 0 heisst ungemischt', () => {
+  for (let i = 0; i < 200; i++) assert.ok(neuerSeed() > 0);
+});
+
+test('titelAn loest die Stelle ueber die Mischung auf', () => {
+  const ungemischt = titelAn(KINDER, 1, 0);
+  assert.equal(ungemischt.nummer, 1);
+  assert.equal(ungemischt.titel, KINDER.titel[1]);
+
+  const seed = 777;
+  const folge = reihenfolge(3, seed);
+  assert.equal(titelAn(KINDER, 2, seed).nummer, folge[2]);
+});
+
+test('schritt mischt beim Umbruch neu, aber nur wenn ueberhaupt gemischt wird', () => {
+  const gemischt = schritt(KINDER, { position: 2, runde: 0, seed: 555 }, +1);
+  assert.equal(gemischt.umbruch, true);
+  assert.notEqual(gemischt.seed, 555, 'zweite Runde bekommt eine neue Folge');
+  assert.ok(gemischt.seed > 0);
+
+  const mitten = schritt(KINDER, { position: 0, runde: 0, seed: 555 }, +1);
+  assert.equal(mitten.seed, 555, 'innerhalb der Runde bleibt die Folge');
+
+  const ohne = schritt(KINDER, { position: 2, runde: 0, seed: 0 }, +1);
+  assert.equal(ohne.seed, 0, 'ungemischt bleibt ungemischt');
 });
 
 test('playDirektive baut Stream und Anzeige', () => {
-  const d = playDirektive(KINDER, 1, 0, { verhalten: 'ENQUEUE', vorherigerToken: 'Kinderlieder|0|0' });
+  const d = playDirektive(KINDER, 1, 0, { verhalten: 'ENQUEUE', vorherigerToken: 'Kinderlieder|0|0|0' });
   assert.equal(d.type, 'AudioPlayer.Play');
   assert.equal(d.playBehavior, 'ENQUEUE');
   assert.deepEqual(d.audioItem.stream, {
     url: 'https://example.org/k/02.mp3',
-    token: 'Kinderlieder|1|0',
+    token: 'Kinderlieder|1|0|0',
     offsetInMilliseconds: 0,
-    expectedPreviousToken: 'Kinderlieder|0|0',
+    expectedPreviousToken: 'Kinderlieder|0|0|0',
   });
   assert.equal(d.audioItem.metadata.title, '02');
   assert.equal(d.audioItem.metadata.subtitle, 'Kinderlieder · 2 von 3');
@@ -243,7 +307,7 @@ test('PlayPlaylistIntent startet den ersten Titel', async () => {
   assert.equal(r.shouldEndSession, true);
   assert.equal(r.directives.length, 1);
   assert.equal(r.directives[0].playBehavior, 'REPLACE_ALL');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|0');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|0|0');
 });
 
 test('PlayPlaylistIntent fragt bei unbekanntem Namen nach und zaehlt auf', async () => {
@@ -259,35 +323,35 @@ test('PlayPlaylistIntent ohne Slot-Wert fragt nach', async () => {
 });
 
 test('PlaybackNearlyFinished haengt den naechsten Titel an', async () => {
-  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|1|0' }, { token: 'Kinderlieder|1|0' });
+  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|1|0|0' }, { token: 'Kinderlieder|1|0|0' });
   assert.equal(r.outputSpeech, undefined);
   assert.equal(r.shouldEndSession, undefined);
   const d = r.directives[0];
   assert.equal(d.playBehavior, 'ENQUEUE');
-  assert.equal(d.audioItem.stream.token, 'Kinderlieder|2|0');
-  assert.equal(d.audioItem.stream.expectedPreviousToken, 'Kinderlieder|1|0');
+  assert.equal(d.audioItem.stream.token, 'Kinderlieder|2|0|0');
+  assert.equal(d.audioItem.stream.expectedPreviousToken, 'Kinderlieder|1|0|0');
 });
 
 test('Nach dem letzten Titel folgt wieder der erste - die Endlosschleife', async () => {
-  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|2|0' }, { token: 'Kinderlieder|2|0' });
-  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|1');
+  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|2|0|0' }, { token: 'Kinderlieder|2|0|0' });
+  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|1|0');
   assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[0].url);
 });
 
 test('PlaybackNearlyFinished mit fremdem oder verwaistem Token bleibt still', async () => {
   const fremd = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'irgendwas' });
   assert.deepEqual(fremd, {});
-  const weg = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Geloescht|0|0' });
+  const weg = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Geloescht|0|0|0' });
   assert.deepEqual(weg, {});
 });
 
 test('Pause stoppt, Weiter setzt am Offset fort', async () => {
-  const pause = await skill(intent('AMAZON.PauseIntent'), { token: 'Kinderlieder|1|0', offset: 5000 });
+  const pause = await skill(intent('AMAZON.PauseIntent'), { token: 'Kinderlieder|1|0|0', offset: 5000 });
   assert.deepEqual(pause.directives, [{ type: 'AudioPlayer.Stop' }]);
   assert.equal(pause.outputSpeech, undefined);
 
-  const weiter = await skill(intent('AMAZON.ResumeIntent'), { token: 'Kinderlieder|1|0', offset: 5000 });
-  assert.equal(weiter.directives[0].audioItem.stream.token, 'Kinderlieder|1|0');
+  const weiter = await skill(intent('AMAZON.ResumeIntent'), { token: 'Kinderlieder|1|0|0', offset: 5000 });
+  assert.equal(weiter.directives[0].audioItem.stream.token, 'Kinderlieder|1|0|0');
   assert.equal(weiter.directives[0].audioItem.stream.offsetInMilliseconds, 5000);
 });
 
@@ -297,17 +361,17 @@ test('Weiter ohne laufenden Stream fragt nach der Playlist', async () => {
 });
 
 test('Naechster und voriger Titel - per Sprache und per Knopf', async () => {
-  const n = await skill(intent('AMAZON.NextIntent'), { token: 'Kinderlieder|0|0' });
-  assert.equal(n.directives[0].audioItem.stream.token, 'Kinderlieder|1|0');
-  const v = await skill({ type: 'PlaybackController.PreviousCommandIssued' }, { token: 'Kinderlieder|0|0' });
-  assert.equal(v.directives[0].audioItem.stream.token, 'Kinderlieder|2|1');
+  const n = await skill(intent('AMAZON.NextIntent'), { token: 'Kinderlieder|0|0|0' });
+  assert.equal(n.directives[0].audioItem.stream.token, 'Kinderlieder|1|0|0');
+  const v = await skill({ type: 'PlaybackController.PreviousCommandIssued' }, { token: 'Kinderlieder|0|0|0' });
+  assert.equal(v.directives[0].audioItem.stream.token, 'Kinderlieder|2|1|0');
   assert.equal(v.outputSpeech, undefined);
 });
 
 test('PlaybackFailed springt weiter, aber nicht ueber das Ende der Runde hinaus', async () => {
-  const mitte = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
-  assert.equal(mitte.directives[0].audioItem.stream.token, 'Kinderlieder|1|0');
-  const ende = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|2|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
+  const mitte = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
+  assert.equal(mitte.directives[0].audioItem.stream.token, 'Kinderlieder|1|0|0');
+  const ende = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|2|0|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
   assert.deepEqual(ende.directives, [{ type: 'AudioPlayer.Stop' }]);
 });
 
@@ -316,7 +380,7 @@ test('Shuffle antwortet mit einem Satz', async () => {
 });
 
 test('PlaybackStarted und SessionEnded bleiben still', async () => {
-  assert.deepEqual(await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Kinderlieder|0|0' }), {});
+  assert.deepEqual(await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Kinderlieder|0|0|0' }), {});
   assert.deepEqual(await skill({ type: 'SessionEndedRequest' }), {});
 });
 
@@ -334,14 +398,14 @@ test('SuchePlaylistIntent spielt einen Namen, der im Modell nirgends steht', asy
   const neu = { name: 'Taschenlampe', titel: [{ url: 'https://example.org/t.mp3', name: 't' }] };
   const r = await skill(sucheIntent('taschenlampe'), {}, [KINDER, neu]);
   assert.equal(r.outputSpeech.text, 'Ich spiele Taschenlampe.');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Taschenlampe|0|0');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Taschenlampe|0|0|0');
 });
 
 test('SuchePlaylistIntent uebersteht Fuellwoerter im freien Text', async () => {
   const neu = { name: 'Taschenlampe', titel: [{ url: 'https://example.org/t.mp3', name: 't' }] };
   for (const gesagt of ['die taschenlampe', 'mal die taschenlampe bitte', 'taschen lampe']) {
     const r = await skill(sucheIntent(gesagt), {}, [KINDER, neu]);
-    assert.equal(r.directives?.[0]?.audioItem.stream.token, 'Taschenlampe|0|0', gesagt);
+    assert.equal(r.directives?.[0]?.audioItem.stream.token, 'Taschenlampe|0|0|0', gesagt);
   }
 });
 
@@ -382,6 +446,11 @@ test('validierePlaylist: fehlendes Feld nimmt den Bestand, sonst die Vorgabe', (
     assert.equal(validierePlaylist({ name: 'A', urls: zeile }, { [feld]: false }).playlist[feld], false, feld);
     assert.equal(validierePlaylist({ name: 'A', urls: zeile, [feld]: true }, { [feld]: false }).playlist[feld], true, feld);
   }
+  // Die neuen beiden stehen auf aus, weil es das bisherige Verhalten war.
+  const frisch = validierePlaylist({ name: 'A', urls: zeile }).playlist;
+  assert.equal(frisch.zufall, false);
+  assert.equal(frisch.fortsetzen, false);
+
   // Ein Schalter im Body laesst den anderen in Ruhe.
   const nur = validierePlaylist({ name: 'A', urls: zeile, ansage: false }, { wiederholen: false, ansage: true });
   assert.equal(nur.playlist.ansage, false);
@@ -394,13 +463,13 @@ test('Ohne Ansage startet die Musik ohne ein Wort davor', async () => {
   assert.equal(r.shouldEndSession, undefined, 'kein shouldEndSession neben AudioPlayer.Play');
   assert.equal(r.directives.length, 1);
   assert.equal(r.directives[0].playBehavior, 'REPLACE_ALL');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Leise|0|0');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Leise|0|0|0');
 });
 
 test('Mit Ansage bleibt der Satz vor der Musik', async () => {
   const r = await skill(intent('PlayPlaylistIntent', 'kinderlieder'));
   assert.equal(r.outputSpeech.text, 'Ich spiele Kinderlieder.');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|0');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|0|0');
 });
 
 test('Die Ansage schweigt nur vorn - Rueckfragen und Fehler bleiben hoerbar', async () => {
@@ -412,33 +481,133 @@ test('Die Ansage schweigt nur vorn - Rueckfragen und Fehler bleiben hoerbar', as
 });
 
 test('Ohne Wiederholung wird hinter dem letzten Titel nichts angehaengt', async () => {
-  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Einmal|2|0' }, { token: 'Einmal|2|0' }, [EINMAL]);
+  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Einmal|2|0|0' }, { token: 'Einmal|2|0|0' }, [EINMAL]);
   // Kein Stop: Der letzte Titel laeuft noch und soll zu Ende spielen.
   assert.deepEqual(r, {});
 });
 
 test('Ohne Wiederholung laeuft die Playlist bis dahin normal weiter', async () => {
-  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Einmal|0|0' }, { token: 'Einmal|0|0' }, [EINMAL]);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Einmal|1|0');
+  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Einmal|0|0|0' }, { token: 'Einmal|0|0|0' }, [EINMAL]);
+  assert.equal(r.directives[0].audioItem.stream.token, 'Einmal|1|0|0');
 });
 
 test('Ohne Wiederholung stoppt naechster Titel am Ende und bleibt am Anfang stehen', async () => {
-  const ende = await skill(intent('AMAZON.NextIntent'), { token: 'Einmal|2|0' }, [EINMAL]);
+  const ende = await skill(intent('AMAZON.NextIntent'), { token: 'Einmal|2|0|0' }, [EINMAL]);
   assert.deepEqual(ende.directives, [{ type: 'AudioPlayer.Stop' }]);
 
-  const anfang = await skill(intent('AMAZON.PreviousIntent'), { token: 'Einmal|0|0' }, [EINMAL]);
-  assert.equal(anfang.directives[0].audioItem.stream.token, 'Einmal|0|0');
+  const anfang = await skill(intent('AMAZON.PreviousIntent'), { token: 'Einmal|0|0|0' }, [EINMAL]);
+  assert.equal(anfang.directives[0].audioItem.stream.token, 'Einmal|0|0|0');
 });
 
 test('Loop-Befehle geben Auskunft, statt etwas zu behaupten oder umzuschalten', async () => {
-  const aus = await skill(intent('AMAZON.LoopOffIntent'), { token: 'Einmal|0|0' }, [EINMAL]);
+  const aus = await skill(intent('AMAZON.LoopOffIntent'), { token: 'Einmal|0|0|0' }, [EINMAL]);
   assert.match(aus.outputSpeech.text, /Einmal wiederholt sich nicht.*Dashboard/);
 
-  const an = await skill(intent('AMAZON.LoopOnIntent'), { token: 'Kinderlieder|0|0' });
+  const an = await skill(intent('AMAZON.LoopOnIntent'), { token: 'Kinderlieder|0|0|0' });
   assert.match(an.outputSpeech.text, /Kinderlieder wiederholt sich\./);
 
   const ohne = await skill(intent('AMAZON.RepeatIntent'));
   assert.match(ohne.outputSpeech.text, /Dashboard/);
+});
+
+// --- Weiterhoeren -----------------------------------------------------------------
+
+test('Der Stand wird gemerkt, wenn die Wiedergabe stoppt', async () => {
+  const redis = mitStand(HOERSPIEL);
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 42000 }, {}, null, redis);
+  assert.deepEqual(
+    { ...redis.speicher.musik_stand['hörspiel'], zeit: undefined },
+    { position: 1, runde: 0, seed: 0, offset: 42000, zeit: undefined },
+  );
+});
+
+test('Ohne den Schalter wird nichts gemerkt', async () => {
+  const redis = mitStand(KINDER);
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Kinderlieder|1|0|0', offsetInMilliseconds: 42000 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand, undefined);
+});
+
+test('Der naechste Start setzt an der gemerkten Stelle fort, mit Offset und Ansage', async () => {
+  const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 65000 });
+  const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
+  assert.equal(r.outputSpeech.text, 'Ich spiele Hörspiel weiter.');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|2|0|0');
+  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 65000);
+});
+
+test('Am Anfang stehengeblieben heisst nicht "weiter"', async () => {
+  const redis = mitStand(HOERSPIEL, { position: 0, runde: 0, seed: 0, offset: 0 });
+  const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
+  assert.equal(r.outputSpeech.text, 'Ich spiele Hörspiel.');
+});
+
+test('Ein Stand jenseits der gekuerzten Playlist faellt auf den Anfang', async () => {
+  const redis = mitStand(HOERSPIEL, { position: 9, runde: 0, seed: 0, offset: 1000 });
+  const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
+  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|0|0|0');
+  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+});
+
+test('Beim Fortsetzen gilt der gemerkte Seed weiter', async () => {
+  // Nur mit demselben Seed steht an dieser Stelle wieder derselbe Titel.
+  const redis = mitStand({ ...HOERSPIEL, zufall: true }, { position: 1, runde: 0, seed: 2024, offset: 0 });
+  const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
+  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|1|0|2024');
+  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[reihenfolge(3, 2024)[1]].url);
+});
+
+test('"Von vorn" vergisst den Stand', async () => {
+  const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 5000 });
+  await skill(intent('AMAZON.StartOverIntent'), { token: 'Hörspiel|2|0|0' }, null, redis);
+  assert.deepEqual(redis.speicher.musik_stand, {});
+});
+
+test('Durchgelaufen vergisst den Stand, sonst begaenne der naechste Start am Ende', async () => {
+  const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 5000 });
+  const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Hörspiel|2|0|0' }, {}, null, redis);
+  assert.deepEqual(r, {}, 'ohne Wiederholung wird nichts angehaengt');
+  assert.deepEqual(redis.speicher.musik_stand, {});
+});
+
+test('Ein kaputtes Redis bricht die Wiedergabe nicht', async () => {
+  const kaputt = {
+    async get(key) { if (key === REDIS_KEY) return [HOERSPIEL]; throw new Error('offline'); },
+    async set() { throw new Error('offline'); },
+  };
+  const r = await skill(sucheIntent('hörspiel'), {}, null, kaputt);
+  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|0|0|0', 'faengt eben von vorn an');
+});
+
+// --- Zufallswiedergabe im Betrieb --------------------------------------------------
+
+test('Mit dem Schalter startet die Playlist gemischt', async () => {
+  const gemischt = { name: 'Bunt', zufall: true, titel: KINDER.titel };
+  const r = await skill(sucheIntent('bunt'), {}, [gemischt]);
+  const token = tokenLesen(r.directives[0].audioItem.stream.token);
+  assert.ok(token.seed > 0, 'ein Seed wurde gezogen');
+  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[reihenfolge(3, token.seed)[0]].url);
+});
+
+test('Ohne den Schalter bleibt die Reihenfolge der Liste', async () => {
+  const r = await skill(sucheIntent('kinderlieder'));
+  assert.equal(tokenLesen(r.directives[0].audioItem.stream.token).seed, 0);
+  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[0].url);
+});
+
+test('Die Sprachbefehle mischen nur den laufenden Stream', async () => {
+  const an = await skill(intent('AMAZON.ShuffleOnIntent'), { token: 'Kinderlieder|1|0|0' });
+  const neu = tokenLesen(an.directives[0].audioItem.stream.token);
+  assert.ok(neu.seed > 0);
+  assert.equal(neu.runde, 1, 'neue Runde, damit der Token sich unterscheidet');
+  assert.equal(an.outputSpeech, undefined, 'die Musik spricht nicht dazwischen');
+
+  const aus = await skill(intent('AMAZON.ShuffleOffIntent'), { token: 'Kinderlieder|1|0|4711' });
+  assert.equal(tokenLesen(aus.directives[0].audioItem.stream.token).seed, 0);
+});
+
+test('Mischen ohne laufende Wiedergabe verweist aufs Dashboard', async () => {
+  const r = await skill(intent('AMAZON.ShuffleOnIntent'));
+  assert.match(r.outputSpeech.text, /Dashboard/);
 });
 
 // --- Verwaltung -------------------------------------------------------------------

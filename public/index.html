@@ -192,7 +192,7 @@
             <h1><i class="fas fa-music"></i> Playlists</h1>
 
             <div class="hint">
-                <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. With <em>Repeat</em> on it starts over after the last track; with it off the playlist ends there. With <em>Announce</em> off the music starts straight away, without Alexa saying anything first.<br>
+                <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. With <em>Repeat</em> on it starts over after the last track; with it off the playlist ends there. With <em>Announce</em> off the music starts straight away, without Alexa saying anything first. <em>Shuffle</em> plays them in a random order, and <em>Resume</em> picks up where the playlist last stopped — worth it for audiobooks, not for children's songs.<br>
                 Every URL must be <strong>https://</strong> and deliver the MP3 <strong>directly</strong> (no preview page, no login): Dropbox links need <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive shares usually do not work.
                 <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "resume" restarts the track).
             </div>
@@ -216,6 +216,18 @@
                     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                         <input type="checkbox" id="playlist-announce" style="width: auto;" checked>
                         Announce — Alexa says "Ich spiele …" before the first track
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="playlist-shuffle" style="width: auto;">
+                        Shuffle — play the tracks in a random order, reshuffled each round
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="playlist-resume" style="width: auto;">
+                        Resume — pick up where this playlist last stopped, for audiobooks
                     </label>
                 </div>
                 <button type="submit" class="btn btn-add"><i class="fas fa-save"></i> Save Playlist</button>
@@ -428,13 +440,15 @@
                 // Ein fehlendes Feld heisst "wiederholt sich" - genau wie im
                 // Backend, sonst zeigte die Liste fuer alte Playlists das
                 // Gegenteil dessen an, was der Skill tut.
-                const wiederholt = pl.wiederholen !== false;
-                const sagtAn = pl.ansage !== false;
+                // Die Vorgaben stehen hier genauso wie im Backend: die ersten
+                // beiden an, die letzten beiden aus, wenn das Feld fehlt.
                 const zustand = [
                     `${titel.length} ${titel.length === 1 ? 'track' : 'tracks'}`,
-                    wiederholt ? 'repeats' : 'plays once',
-                    sagtAn ? 'announced' : 'silent start',
-                ].join(' · ');
+                    pl.wiederholen !== false ? 'repeats' : 'plays once',
+                    pl.ansage !== false ? 'announced' : 'silent start',
+                    pl.zufall === true ? 'shuffled' : null,
+                    pl.fortsetzen === true ? 'resumes' : null,
+                ].filter(Boolean).join(' · ');
                 info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${zustand}</p>`;
                 item.appendChild(info);
 
@@ -454,6 +468,8 @@
             document.getElementById('playlist-name').value = pl.name;
             document.getElementById('playlist-repeat').checked = pl.wiederholen !== false;
             document.getElementById('playlist-announce').checked = pl.ansage !== false;
+            document.getElementById('playlist-shuffle').checked = pl.zufall === true;
+            document.getElementById('playlist-resume').checked = pl.fortsetzen === true;
             document.getElementById('playlist-urls').value = (pl.titel || [])
                 .map(t => t.name ? `${t.url} | ${t.name}` : t.url)
                 .join('\n');
@@ -514,7 +530,9 @@
             // ausdruecklich als false ankommen.
             const wiederholen = document.getElementById('playlist-repeat').checked;
             const ansage = document.getElementById('playlist-announce').checked;
-            const r = await apiRequest('POST', { name, urls, wiederholen, ansage }, '?type=playlists');
+            const zufall = document.getElementById('playlist-shuffle').checked;
+            const fortsetzen = document.getElementById('playlist-resume').checked;
+            const r = await apiRequest('POST', { name, urls, wiederholen, ansage, zufall, fortsetzen }, '?type=playlists');
             if (!r) return;
             if (r.error) { playlistStatus(r.error, 'error'); return; }
             playlistStatus(`Saved "${name.trim()}".`, 'ok');
