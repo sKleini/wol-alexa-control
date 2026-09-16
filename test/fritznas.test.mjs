@@ -13,6 +13,7 @@ import {
   streamUrl,
   sidKandidaten,
   titelAusListe,
+  mitSid,
 } from '../lib/fritznas.js'
 
 const FREIGABE = 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fbb2016f4f';
@@ -81,4 +82,18 @@ test('titelAusListe uebergeht Ordner und Antworten ohne Liste', () => {
   assert.deepEqual(titelAusListe({ files: [{ path: '/Unterordner', type: 'dir' }] }), []);
   assert.deepEqual(titelAusListe({ root: '/Musik', rights: { read: true } }), []);
   assert.deepEqual(titelAusListe(null), []);
+});
+
+test('mitSid tauscht nur die Sitzungsnummer und laesst den Pfad in Ruhe', () => {
+  const alt = streamUrl('https://abc.myfritz.net:456', 'aaaaaaaaaaaaaaaa', '/01 - Funkel, funkel.mp3');
+  const neu = new URL(mitSid(alt, 'bbbbbbbbbbbbbbbb'));
+  assert.equal(neu.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
+  assert.equal(neu.searchParams.get('path'), '/01 - Funkel, funkel.mp3', 'der Pfad bleibt unangetastet');
+  assert.equal(neu.searchParams.get('script'), '/api/data.lua');
+});
+
+test('mitSid laesst Adressen ohne sid unveraendert', () => {
+  const fremd = 'https://example.org/musik/01.mp3';
+  assert.equal(mitSid(fremd, 'bbbbbbbbbbbbbbbb'), fremd);
+  assert.equal(mitSid('keine url', 'bbbbbbbbbbbbbbbb'), 'keine url');
 });

@@ -422,6 +422,12 @@
             return btn;
         }
 
+        // Die Herkunft der gerade bearbeiteten Playlist. Sie steht in keinem
+        // Eingabefeld, weil niemand einen Freigabe-Link von Hand pflegen soll -
+        // sie kommt aus dem Import oder aus der gespeicherten Playlist und geht
+        // beim Speichern unveraendert wieder mit.
+        let fritzQuelle = null;
+
         function playlistStatus(text, kind = '') {
             const el = document.getElementById('playlist-status');
             el.textContent = text;
@@ -455,6 +461,7 @@
                     pl.ansage !== false ? 'announced' : 'silent start',
                     pl.zufall === true ? 'shuffled' : null,
                     pl.fortsetzen === true ? 'resumes' : null,
+                    pl.quelle?.typ === 'fritz' ? 'FRITZ!NAS · session refreshed on play' : null,
                 ].filter(Boolean).join(' · ');
                 info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${zustand}</p>`;
                 item.appendChild(info);
@@ -472,6 +479,7 @@
         }
 
         function editPlaylist(pl) {
+            fritzQuelle = pl.quelle || null;
             document.getElementById('playlist-name').value = pl.name;
             document.getElementById('playlist-repeat').checked = pl.wiederholen !== false;
             document.getElementById('playlist-announce').checked = pl.ansage !== false;
@@ -640,6 +648,12 @@
             const neue = (r.titel || []).filter(t => !bekannt.has(t.url));
             textarea.value = [...vorhanden, ...neue.map(t => t.name ? `${t.url} | ${t.name}` : t.url)].join('\n');
 
+            // Der Freigabe-Link der FRITZ!NAS-Quelle wandert ins Formular und
+            // von dort ins Gespeicherte: Aus ihm holt der Skill beim Abspielen
+            // eine frische Sitzungsnummer, statt die eingebaute veralten zu
+            // lassen.
+            if (r.quelle) fritzQuelle = r.quelle;
+
             const uebersprungen = (r.titel || []).length - neue.length;
             const satz = `Added ${neue.length} ${neue.length === 1 ? 'track' : 'tracks'}`
                 + (uebersprungen ? `, skipped ${uebersprungen} already listed` : '')
@@ -659,11 +673,13 @@
             const ansage = document.getElementById('playlist-announce').checked;
             const zufall = document.getElementById('playlist-shuffle').checked;
             const fortsetzen = document.getElementById('playlist-resume').checked;
-            const r = await apiRequest('POST', { name, urls, wiederholen, ansage, zufall, fortsetzen }, '?type=playlists');
+            const r = await apiRequest('POST', { name, urls, wiederholen, ansage, zufall, fortsetzen, quelle: fritzQuelle }, '?type=playlists');
             if (!r) return;
             if (r.error) { playlistStatus(r.error, 'error'); return; }
             playlistStatus(`Saved "${name.trim()}".`, 'ok');
             document.getElementById('playlist-form').reset();
+            document.getElementById('playlist-import-diagnose').textContent = '';
+            fritzQuelle = null;
             renderPlaylists();
         });
 
