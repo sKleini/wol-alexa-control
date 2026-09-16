@@ -830,6 +830,29 @@ test('validierePlaylist haelt die Herkunft ueber eine Titelaenderung hinweg', ()
   assert.equal(entfernt.quelle, undefined, 'ausdruecklich null entfernt sie');
 });
 
+test('validierePlaylist merkt sich den Ordnerpfad und kappt ihn', () => {
+  const { playlist } = validierePlaylist({
+    name: 'Schlaflieder',
+    urls: fritzTitel('aaaaaaaaaaaaaaaa'),
+    quelle: { typ: 'fritz', link: FRITZ_LINK, ordner: '  /Musik/Schlaflieder  ' },
+  });
+  assert.equal(playlist.quelle.ordner, '/Musik/Schlaflieder');
+
+  const lang = validierePlaylist({
+    name: 'X',
+    urls: 'https://h.de/1.mp3',
+    quelle: { typ: 'fritz', link: FRITZ_LINK, ordner: '/' + 'a'.repeat(400) },
+  }).playlist;
+  assert.equal(lang.quelle.ordner.length, 256);
+
+  const ohne = validierePlaylist({
+    name: 'X',
+    urls: 'https://h.de/1.mp3',
+    quelle: { typ: 'fritz', link: FRITZ_LINK, ordner: '   ' },
+  }).playlist;
+  assert.equal(ohne.quelle.ordner, undefined, 'ein leerer Pfad wird nicht gespeichert');
+});
+
 test('validierePlaylist nimmt nur einen echten Freigabe-Link als Herkunft', () => {
   // Sie wandert spaeter in einen Abruf des Servers - alles andere als ein
   // filelink.lua-Link waere eine Adresse, die sich jemand holen laesst.
