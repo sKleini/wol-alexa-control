@@ -802,3 +802,126 @@ test('seitenDiagnose kommt ohne title und ohne Skripte aus', () => {
   assert.equal(d.titel, null);
   assert.deepEqual(d.skripte, []);
 });
+
+// --- FRITZ!NAS-Playlists ----------------------------------------------------------
+
+const FRITZ_LINK = 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fbb2016f4f';
+const fritzTitel = (sid) =>
+  `https://abc.myfritz.net:456/nas/cgi-bin/luacgi_notimeout?script=%2Fapi%2Fdata.lua&sid=${sid}&c=music&a=get&path=%2F01.mp3`;
+
+test('validierePlaylist merkt sich die FRITZ!NAS-Herkunft', () => {
+  const { playlist } = validierePlaylist({
+    name: 'Schlaflieder',
+    urls: fritzTitel('aaaaaaaaaaaaaaaa'),
+    quelle: { typ: 'fritz', link: FRITZ_LINK },
+  });
+  assert.deepEqual(playlist.quelle, { typ: 'fritz', link: FRITZ_LINK });
+});
+
+test('validierePlaylist haelt die Herkunft ueber eine Titelaenderung hinweg', () => {
+  const bisher = { name: 'Schlaflieder', titel: [], quelle: { typ: 'fritz', link: FRITZ_LINK } };
+  const { playlist } = validierePlaylist({ name: 'Schlaflieder', urls: fritzTitel('aaaaaaaaaaaaaaaa') }, bisher);
+  assert.deepEqual(playlist.quelle, { typ: 'fritz', link: FRITZ_LINK }, 'ein fehlendes Feld nimmt sie nicht weg');
+
+  const entfernt = validierePlaylist(
+    { name: 'Schlaflieder', urls: 'https://h.de/1.mp3', quelle: null },
+    bisher,
+  ).playlist;
+  assert.equal(entfernt.quelle, undefined, 'ausdruecklich null entfernt sie');
+});
+
+test('validierePlaylist nimmt nur einen echten Freigabe-Link als Herkunft', () => {
+  // Sie wandert spaeter in einen Abruf des Servers - alles andere als ein
+  // filelink.lua-Link waere eine Adresse, die sich jemand holen laesst.
+  for (const quelle of [
+    { typ: 'fritz', link: 'https://example.org/beliebig' },
+    { typ: 'anderes', link: FRITZ_LINK },
+    { link: FRITZ_LINK },
+    'https://example.org',
+  ]) {
+    const { playlist } = validierePlaylist({ name: 'X', urls: 'https://h.de/1.mp3', quelle });
+    assert.equal(playlist.quelle, undefined, `abgelehnt: ${JSON.stringify(quelle)}`);
+  }
+});
+
+test('handleManage speichert die Herkunft mit der Playlist', async () => {
+  const redis = redisMit();
+  await handleManage({
+    method: 'POST',
+    query: {},
+    body: { name: 'Schlaflieder', urls: fritzTitel('aaaaaaaaaaaaaaaa'), quelle: { typ: 'fritz', link: FRITZ_LINK } },
+  }, antwortFaenger(), redis);
+  assert.deepEqual(redis.speicher[REDIS_KEY][0].quelle, { typ: 'fritz', link: FRITZ_LINK });
+});
+
+test('eine Playlist ohne Herkunft ruehrt der Skill nicht an', async () => {
+  // Kein Netzabruf, keine Aenderung an den Adressen: Wer keine
+  // FRITZ!NAS-Playlist hat, merkt von der Auffrischung nichts.
+  const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'));
+  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[0].url);
+});
+
+/** Eine FRITZ!NAS-Playlist samt gemerkter, noch gueltiger Sitzungsnummer. */
+function mitSitzung(sid, alterMs = 0) {
+  const playlist = {
+    name: 'Schlaflieder',
+    quelle: { typ: 'fritz', link: FRITZ_LINK },
+    titel: [
+      { url: fritzTitel('aaaaaaaaaaaaaaaa'), name: '01' },
+      { url: fritzTitel('aaaaaaaaaaaaaaaa').replace('%2F01', '%2F02'), name: '02' },
+    ],
+  };
+  return redisMit({
+    [REDIS_KEY]: [playlist],
+    musik_fritz_sid: { [FRITZ_LINK]: { sid, zeit: Date.now() - alterMs } },
+  });
+}
+
+test('der Skill setzt die gemerkte Sitzungsnummer in jede Adresse ein', async () => {
+  const redis = mitSitzung('bbbbbbbbbbbbbbbb');
+  const r = await skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis);
+  const url = new URL(r.directives[0].audioItem.stream.url);
+  assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb', 'die frische Nummer, nicht die gespeicherte');
+  assert.equal(url.searchParams.get('path'), '/01.mp3', 'der Pfad bleibt');
+});
+
+test('auch der naechste Titel bekommt die frische Nummer', async () => {
+  // PlaybackNearlyFinished haengt den naechsten Titel an - ohne Slot, nur mit
+  // Token. Ginge die Auffrischung nur ueber den Slot, waere der zweite Titel
+  // der erste, der stumm bleibt.
+  const redis = mitSitzung('bbbbbbbbbbbbbbbb');
+  const r = await skill(
+    { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Schlaflieder|0|0|0' },
+    { token: 'Schlaflieder|0|0|0' },
+    null,
+    redis,
+  );
+  const url = new URL(r.directives[0].audioItem.stream.url);
+  assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
+  assert.equal(url.searchParams.get('path'), '/02.mp3');
+});
+
+test('ist die Box nicht erreichbar, bleibt die gemerkte Nummer der letzte Versuch', async () => {
+  // Neun Minuten alt, also ueber der Frist von acht - es wird eine neue
+  // geholt. Der Host endet auf .invalid und ist damit garantiert nicht
+  // aufloesbar (RFC 2606), der Abruf scheitert also ohne Wartezeit.
+  //
+  // Dann lieber die alte Nummer als gar keine: Sie ist vielleicht noch gut
+  // (die FRITZ!Box laesst mehr Zeit, als hier gewartet wird), und eine
+  // Playlist mit vielleicht toten Adressen ist besser als eine Antwort ohne
+  // Titel. Was wirklich tot ist, faengt der PlaybackFailed-Weg ab.
+  const link = 'https://nicht-erreichbar.invalid/nas/filelink.lua?id=535f52fbb2016f4f';
+  const redis = redisMit({
+    [REDIS_KEY]: [{
+      name: 'Schlaflieder',
+      quelle: { typ: 'fritz', link },
+      titel: [{ url: fritzTitel('bbbbbbbbbbbbbbbb'), name: '01' }],
+    }],
+    musik_fritz_sid: { [link]: { sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() - 9 * 60_000 } },
+  });
+
+  const r = await skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis);
+  const url = new URL(r.directives[0].audioItem.stream.url);
+  assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
+  assert.equal(url.searchParams.get('path'), '/01.mp3');
+});
