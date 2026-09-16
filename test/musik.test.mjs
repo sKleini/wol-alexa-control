@@ -985,3 +985,37 @@ test('Check URLs meldet fuer eine gewoehnliche Playlist keine Auffrischung', asy
   await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Kinderlieder', ab: '0' } }, res, redis);
   assert.equal(res.body.aufgefrischt, false);
 });
+
+test('eine FRITZ!NAS-Playlist wird in kleineren Haeppchen geprueft', async () => {
+  // Vier gleichzeitige Abrufe beantwortet eine FRITZ!Box nicht rechtzeitig -
+  // sie bekommt einen nach dem anderen und mehr Zeit. Damit die zehn Sekunden
+  // der Function trotzdem reichen, sind es sechs Titel je Aufruf statt
+  // zwanzig; den Rest holt das Dashboard mit `ab=` nach.
+  const link = 'https://nicht-erreichbar.invalid/nas/filelink.lua?id=535f52fbb2016f4f';
+  const titel = Array.from({ length: 10 }, (_, i) => ({
+    url: `https://nicht-erreichbar.invalid/nas/cgi-bin/luacgi_notimeout?script=%2Fapi%2Fdata.lua&sid=aaaaaaaaaaaaaaaa&c=music&a=get&path=%2F${i}.mp3`,
+    name: String(i),
+  }));
+
+  const res = antwortFaenger();
+  await handleManage(
+    { method: 'GET', query: { pruefen: '1', name: 'Schlaflieder', ab: '0' } },
+    res,
+    redisMit({ [REDIS_KEY]: [{ name: 'Schlaflieder', quelle: { typ: 'fritz', link }, titel }] }),
+  );
+  assert.equal(res.body.ergebnisse.length, 6);
+  assert.equal(res.body.weiter, 6);
+  assert.equal(res.body.gesamt, 10);
+});
+
+test('eine gewoehnliche Playlist bleibt bei zwanzig je Aufruf', async () => {
+  const titel = Array.from({ length: 10 }, (_, i) => ({ url: `https://nicht-erreichbar.invalid/${i}.mp3`, name: String(i) }));
+  const res = antwortFaenger();
+  await handleManage(
+    { method: 'GET', query: { pruefen: '1', name: 'Viele', ab: '0' } },
+    res,
+    redisMit({ [REDIS_KEY]: [{ name: 'Viele', titel }] }),
+  );
+  assert.equal(res.body.ergebnisse.length, 10, 'alle zehn in einem Aufruf');
+  assert.equal(res.body.weiter, null);
+});
