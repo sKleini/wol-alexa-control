@@ -26,6 +26,9 @@ import {
   neuerSeed,
   handleSkill,
   handleManage,
+  istAudioUrl,
+  audioLinksAusHtml,
+  audioNamenImText,
   REDIS_KEY,
 } from '../lib/musik.js'
 
@@ -683,4 +686,92 @@ test('handleManage: Pruefung einer unbekannten Playlist ist 404', async () => {
   const res = antwortFaenger();
   await handleManage({ method: 'GET', query: { pruefen: '1', name: 'nix' } }, res, redisMit());
   assert.equal(res.statusCode, 404);
+});
+
+// --- Ordner-Import ----------------------------------------------------------------
+//
+// Geprueft wird der Teil ohne Netz: aus dem Quelltext einer Verzeichnisseite
+// die Titelliste. Der Abruf selbst (handleImport) steht hier nur mit den
+// Faellen, die er vor dem ersten Byte entscheidet - alles andere braeuchte
+// einen Server und gehoert nicht in einen Test, der ohne Netz laufen soll.
+
+const FRITZ_ORDNER = 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fb';
+
+test('istAudioUrl sieht den Dateinamen auch in der Abfrage', () => {
+  assert.equal(istAudioUrl('https://h.de/musik/01.mp3'), true);
+  assert.equal(istAudioUrl('https://h.de/musik/01.MP3?x=1'), true);
+  // Der FRITZ!NAS-Fall: immer derselbe Pfad, der Name steckt in `path`.
+  assert.equal(istAudioUrl(`${FRITZ_ORDNER}&path=%2FMusik%2F01%20Hallo.mp3`), true);
+  assert.equal(istAudioUrl(FRITZ_ORDNER), false);
+  assert.equal(istAudioUrl('https://h.de/musik/cover.jpg'), false);
+  assert.equal(istAudioUrl('kein url'), false);
+});
+
+test('audioLinksAusHtml liest einen Verzeichnisindex in seiner Reihenfolge', () => {
+  const html = `
+    <a href="../">Parent Directory</a>
+    <a href="02-tschuess.mp3">02-tschuess.mp3</a>
+    <a href="01-hallo.mp3">01-hallo.mp3</a>
+    <a href="Mein Lied.m4a">Mein Lied.m4a</a>
+    <a href="cover.jpg">cover.jpg</a>`;
+  assert.deepEqual(audioLinksAusHtml(html, 'https://h.de/musik/'), [
+    'https://h.de/musik/02-tschuess.mp3',
+    'https://h.de/musik/01-hallo.mp3',
+    'https://h.de/musik/Mein%20Lied.m4a',
+  ]);
+});
+
+test('audioLinksAusHtml loest &amp; auf, statt daraus einen Abfragewert zu machen', () => {
+  const html = '<a href="/nas/filelink.lua?id=535f&amp;path=%2FM%2F01.mp3">01</a>';
+  const [erste] = audioLinksAusHtml(html, FRITZ_ORDNER);
+  assert.equal(new URL(erste).searchParams.get('path'), '/M/01.mp3');
+  assert.equal(new URL(erste).searchParams.get('id'), '535f');
+});
+
+test('audioLinksAusHtml findet die Liste auch in einem JSON-Block', () => {
+  const html = '<script>var files=['
+    + '{"name":"01 Hallo.mp3","url":"\\/nas\\/filelink.lua?id=535f\\u0026path=%2FM%2F01.mp3"},'
+    + '{"name":"02.mp3","url":"\\/nas\\/filelink.lua?id=535f\\u0026path=%2FM%2F02.mp3"}];</script>';
+  const links = audioLinksAusHtml(html, FRITZ_ORDNER);
+  assert.deepEqual(links.map(u => new URL(u).searchParams.get('path')), ['/M/01.mp3', '/M/02.mp3']);
+});
+
+test('audioLinksAusHtml haelt den blossen Anzeigenamen aus der Liste heraus', () => {
+  // "Anzeige.mp3" ist der Name der Datei, nicht ihre Adresse. Als relative
+  // Adresse gelesen ergaebe er eine Zeile, die im Formular richtig aussieht
+  // und am Echo ins Leere laeuft.
+  const html = '<a href="/nas/filelink.lua?id=535f&amp;path=%2FM%2F02.mp3">02</a>'
+    + '<script>var x={"name":"Anzeige.mp3"};</script>';
+  assert.deepEqual(audioLinksAusHtml(html, FRITZ_ORDNER), [
+    'https://abc.myfritz.net:456/nas/filelink.lua?id=535f&path=%2FM%2F02.mp3',
+  ]);
+});
+
+test('audioLinksAusHtml uebergeht Dubletten und findet in einer leeren Seite nichts', () => {
+  const html = '<a href="01.mp3">a</a><a href="01.mp3">nochmal</a>';
+  assert.deepEqual(audioLinksAusHtml(html, 'https://h.de/m/'), ['https://h.de/m/01.mp3']);
+  assert.deepEqual(audioLinksAusHtml('<html><body>leer</body></html>', 'https://h.de/m/'), []);
+});
+
+test('audioNamenImText erkennt die Liste, die ihre Adressen erst im Browser baut', () => {
+  const namen = audioNamenImText('<td class="n">01 Hallo.mp3</td><td>Bild.jpg</td><td>02.mp3</td>');
+  assert.deepEqual(namen, ['01 Hallo.mp3', '02.mp3']);
+});
+
+test('handleImport weist einen fehlenden oder krummen Link ab, ohne ihn abzurufen', async () => {
+  let res = antwortFaenger();
+  await handleManage({ method: 'GET', query: { import: '1' } }, res, redisMit());
+  assert.equal(res.statusCode, 400);
+
+  res = antwortFaenger();
+  await handleManage({ method: 'GET', query: { import: '1', url: 'kein link' } }, res, redisMit());
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.error, /URL/);
+});
+
+test('handleImport laesst sich nicht als Sonde ins eigene Netz verwenden', async () => {
+  const res = antwortFaenger();
+  await handleManage({ method: 'GET', query: { import: '1', url: 'https://localhost/nas/' } }, res, redisMit());
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.error, /lokaler Host/);
 });
