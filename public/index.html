@@ -536,9 +536,26 @@
          * getippt hat - als Markup ausgefuehrt waere er ein Weg an das
          * Admin-Passwort im localStorage.
          */
-        function zeigeImportDiagnose(diagnose) {
+        function zeigeImportDiagnose(diagnose, bericht) {
             const ziel = document.getElementById('playlist-import-diagnose');
             ziel.textContent = '';
+
+            // Der Schritt-fuer-Schritt-Bericht einer FRITZ!NAS-Freigabe: Er
+            // kommt auch bei Erfolg, weil er sagt, welcher Ordner gelesen
+            // wurde und wie viele Titel darin lagen.
+            if (Array.isArray(bericht) && bericht.length) {
+                const liste = document.createElement('div');
+                liste.style.marginTop = '10px';
+                liste.style.opacity = '0.85';
+                liste.style.fontSize = '0.9em';
+                for (const zeile of bericht) {
+                    const p = document.createElement('div');
+                    p.textContent = `· ${zeile}`;
+                    liste.appendChild(p);
+                }
+                ziel.appendChild(liste);
+            }
+
             if (!diagnose) return;
 
             const block = document.createElement('details');
@@ -614,7 +631,7 @@
             if (!r) return;
 
             const hinweise = (r.hinweise || []).join(' ');
-            zeigeImportDiagnose(r.diagnose);
+            zeigeImportDiagnose(r.diagnose, r.bericht);
             if (r.error) { playlistStatus([r.error, hinweise].filter(Boolean).join(' '), 'error'); return; }
 
             const textarea = document.getElementById('playlist-urls');

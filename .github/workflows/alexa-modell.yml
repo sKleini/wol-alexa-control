@@ -20,6 +20,8 @@ on:
       - 'api/skill.js'
       - 'lib/musik.js'
       - 'lib/alexa.js'
+      - 'lib/fritznas.js'
+      - 'lib/netz.js'
       - 'test/**'
       - '.github/workflows/alexa-modell.yml'
   push:
@@ -29,6 +31,8 @@ on:
       - 'api/skill.js'
       - 'lib/musik.js'
       - 'lib/alexa.js'
+      - 'lib/fritznas.js'
+      - 'lib/netz.js'
       - 'test/**'
   workflow_dispatch:
 

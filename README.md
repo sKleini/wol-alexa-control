@@ -373,10 +373,18 @@ Your own web space, a Nextcloud/ownCloud, an S3 bucket or any static file host w
 
 One link instead of twenty: paste a **folder share link** into *Import folder* above the track list and every audio file listed behind it is added as its own track, in the order the page lists them.
 
-- Works with a **FRITZ!NAS folder share** (`https://…myfritz.net:456/nas/filelink.lua?id=…`, created in FRITZ!NAS via *Select → Share*), a **Nextcloud folder share**, and a plain **directory index** of an Apache or nginx.
+- Works with a **Nextcloud folder share** and a plain **directory index** of an Apache or nginx — and with a **FRITZ!NAS folder share** (`https://…myfritz.net:456/nas/filelink.lua?id=…`, created in FRITZ!NAS via *Select → Share*), which takes its own route; see below.
 - The server fetches the page (the dashboard cannot: its CSP is `connect-src 'self'`) and collects the addresses of files ending in `.mp3`, `.m4a`, `.m4b`, `.mp4`, `.aac` or `.mpga` — from the links first, and from an embedded JSON block only if the page has no links of its own. It reads the shared folder itself, not its subfolders.
 - Nothing is saved. The tracks land in the textarea below, appended to what is already there, so two folders can be combined and single lines removed before **Save Playlist**. Importing the same folder twice adds nothing twice.
 - A link that points at a single file instead of a folder is imported as that one track and says so. A page that lists its files but builds their addresses in the browser cannot be imported — the answer names that case rather than reporting an empty folder.
+##### FRITZ!NAS folder shares
+
+A FRITZ!NAS share link opens an empty page — a `<div id="app">` and two scripts. The file list is fetched by the browser afterwards, so there is nothing in the source to parse. `lib/fritznas.js` therefore walks the same route the browser does: open the share link, pick up the session number, ask `data.lua` for the listing, and assemble one stream address per track (`/nas/cgi-bin/luacgi_notimeout?script=/api/data.lua&sid=…&c=music&a=get&path=…`). That address is a plain GET without a cookie and supports range requests — the one form the Echo can load.
+
+AVM documents none of this, so the call that returns the listing is **tried rather than assumed**: a handful of plausible controller/action pairs in turn, until one answers with files. The import then fetches the first track exactly the way the Echo would — no cookie, `Range: bytes=0-0` — and only reports success if a real audio file comes back. Every step appears as a line under the field, so a FRITZ!OS update that renames something produces a usable message instead of an empty result.
+
+**The addresses carry a session number and therefore expire**, typically about twenty minutes after the last access. When that happens the Echo goes silent and the folder has to be imported again. The lasting fix is to build the address at playback time instead of storing it — `streamUrl()` is already split out for that.
+
 - **When the import finds nothing, it hands back the page it fetched**: an expandable *Page source* block below the field, with the page title, the scripts it loads and its source (in full if it is small, otherwise both ends of it), plus a copy button. That is the fastest way to tell apart a link pointing at the wrong place, a login in the way, and a list the browser builds — without digging through the browser's developer tools. It appears only when nothing was found, and only behind `ADMIN_PASSWORD` like the rest.
 - The import runs behind `ADMIN_PASSWORD` like everything else under `/api/manage`, refuses anything but `https://`, and rejects hosts that resolve to a private or loopback address, so it cannot be used as a probe into the Vercel network.
 
