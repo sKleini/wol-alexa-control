@@ -192,10 +192,10 @@
             <h1><i class="fas fa-music"></i> Playlists</h1>
 
             <div class="hint">
-                <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. With <em>Repeat</em> on it starts over after the last track; with it off the playlist ends there. With <em>Announce</em> off the music starts straight away, without Alexa saying anything first. <em>Shuffle</em> plays them in a random order, and <em>Resume</em> picks up where the playlist last stopped — worth it for audiobooks, not for children's songs.<br>
-                Every URL must be <strong>https://</strong> and deliver the MP3 <strong>directly</strong> (no preview page, no login): Dropbox links need <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive shares usually do not work.
-                <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "resume" restarts the track).<br>
-                <strong>Got a whole folder?</strong> Paste a folder share link — a FRITZ!NAS link (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder share or a plain directory index — into <em>Import folder</em>, and every audio file listed there is added below as its own track, in the order the page lists them. Nothing is saved until you press <em>Save Playlist</em>.
+                <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — worth it for audiobooks, not for children's songs.<br>
+                Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
+                <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
+                For FRITZ!NAS, saving also keeps the folder link with the playlist, so the skill renews the box's session number on every play. No re-import needed.
             </div>
 
             <form id="playlist-form">
