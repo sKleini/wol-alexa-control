@@ -948,3 +948,40 @@ test('ist die Box nicht erreichbar, bleibt die gemerkte Nummer der letzte Versuc
   assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
   assert.equal(url.searchParams.get('path'), '/01.mp3');
 });
+
+test('Check URLs prueft die FRITZ!NAS-Adressen mit der frischen Sitzungsnummer', async () => {
+  // Der Kern des Ganzen: Ohne die Auffrischung pruefte der Knopf die
+  // gespeicherte, laengst abgelaufene Adresse - und meldete eine Playlist als
+  // kaputt, die gerade tadellos spielt. Geprueft wird hier nur, WAS abgerufen
+  // wird; dass der Abruf ohne Netz scheitert, ist fuer diese Frage egal.
+  // Der Host endet auf .invalid (RFC 2606) und ist damit garantiert nicht
+  // aufloesbar: Der Abruf scheitert sofort, statt die Testsuite an einem
+  // echten Netzzugriff haengen zu lassen.
+  const link = 'https://nicht-erreichbar.invalid/nas/filelink.lua?id=535f52fbb2016f4f';
+  const titelUrl = (sid) =>
+    `https://nicht-erreichbar.invalid/nas/cgi-bin/luacgi_notimeout?script=%2Fapi%2Fdata.lua&sid=${sid}&c=music&a=get&path=%2F01.mp3`;
+  const redis = redisMit({
+    [REDIS_KEY]: [{
+      name: 'Schlaflieder',
+      quelle: { typ: 'fritz', link },
+      titel: [{ url: titelUrl('aaaaaaaaaaaaaaaa'), name: '01' }],
+    }],
+    musik_fritz_sid: { [link]: { sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() } },
+  });
+
+  const res = antwortFaenger();
+  await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Schlaflieder', ab: '0' } }, res, redis);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.aufgefrischt, true);
+  assert.equal(new URL(res.body.ergebnisse[0].url).searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
+
+  // Und die gespeicherte Playlist bleibt unberuehrt - die Pruefung schreibt nicht.
+  assert.equal(new URL(redis.speicher[REDIS_KEY][0].titel[0].url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
+});
+
+test('Check URLs meldet fuer eine gewoehnliche Playlist keine Auffrischung', async () => {
+  const redis = redisMit({ [REDIS_KEY]: [KINDER] });
+  const res = antwortFaenger();
+  await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Kinderlieder', ab: '0' } }, res, redis);
+  assert.equal(res.body.aufgefrischt, false);
+});
