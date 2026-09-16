@@ -361,19 +361,19 @@ Play your own MP3s on any Echo: a playlist is a **name plus a list of URLs**, ma
 
 Alexa fetches the files itself — without your login, without cookies. Every URL must therefore be
 
-- **`https://`** on port 443 with a certificate from a public CA (no self-signed, no plain `http://`),
+- **`https://`** with a certificate from a public CA (no self-signed, no plain `http://`). Amazon documents port 443, but a non-standard port works in practice — a FRITZ!Box share on its default port 456 plays fine,
 - a **direct link to the file** (`Content-Type: audio/mpeg`), not a preview or share page: Dropbox needs `?dl=1`, Nextcloud share links need `/download` appended, Google Drive shares usually fail,
 - ideally on a host that answers **range requests** (`206 Partial Content`) — without them *"Alexa, weiter"* after a pause restarts the track from the beginning.
 
 Your own web space, a Nextcloud/ownCloud, an S3 bucket or any static file host works. The dashboard's **Check URLs** button fetches every link the way the Echo does and reports status, content type, range support and the port, so you see problems before Alexa turns them into silence.
 
-**A FRITZ!Box works too, but only on port 443.** FRITZ!OS serves its HTTPS remote access on **port 456** by default, and the AudioPlayer loads audio over 443 and nothing else — a share link on 456 opens perfectly in a browser and stays silent on the Echo, with no error anywhere. Change it under *Internet › Permit Access › FRITZ!Box Services → Port for HTTPS = 443*, then copy the share link again; the certificate of a `…myfritz.net` address comes from a public CA, so that part is fine. Keep in mind that Alexa then fetches the files over your upstream bandwidth, and that a share link is public to anyone who has it.
+**A FRITZ!Box works too**, on its default HTTPS port 456 — the certificate of a `…myfritz.net` address comes from a public CA, which is the part that matters. Keep in mind that Alexa then fetches the files over your upstream bandwidth, and that a share link is public to anyone who has it.
 
 ##### 9.2 Import a whole folder
 
 One link instead of twenty: paste a **folder share link** into *Import folder* above the track list and every audio file listed behind it is added as its own track, in the order the page lists them.
 
-- Works with a **FRITZ!NAS folder share** (`https://…myfritz.net:443/nas/filelink.lua?id=…`, created in FRITZ!NAS via *Select → Share*), a **Nextcloud folder share**, and a plain **directory index** of an Apache or nginx.
+- Works with a **FRITZ!NAS folder share** (`https://…myfritz.net:456/nas/filelink.lua?id=…`, created in FRITZ!NAS via *Select → Share*), a **Nextcloud folder share**, and a plain **directory index** of an Apache or nginx.
 - The server fetches the page (the dashboard cannot: its CSP is `connect-src 'self'`) and collects the addresses of files ending in `.mp3`, `.m4a`, `.m4b`, `.mp4`, `.aac` or `.mpga` — from the links first, and from an embedded JSON block only if the page has no links of its own. It reads the shared folder itself, not its subfolders.
 - Nothing is saved. The tracks land in the textarea below, appended to what is already there, so two folders can be combined and single lines removed before **Save Playlist**. Importing the same folder twice adds nothing twice.
 - A link that points at a single file instead of a folder is imported as that one track and says so. A page that lists its files but builds their addresses in the browser cannot be imported — the answer names that case rather than reporting an empty folder.
@@ -422,7 +422,6 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
 | First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |
 | "Weiter" restarts the track | host without range support | **Check URLs** shows ⚠️ — pick another host |
-| Link plays in the browser, Echo stays silent | URL on a port other than 443 (a FRITZ!Box serves 456 by default) | **Check URLs** shows ⚠️ *Port … – Alexa lädt nur über Port 443*; set the FRITZ!Box HTTPS port to 443 (9.1) and re-import the folder |
 | *Import folder* finds nothing | the page builds its file list in the browser, or the link is not a folder share | the answer says which of the two it is; for a FRITZ!Box use the share link of the **folder**, not of the NAS web interface |
 | Playlist not understood | new name, first sentence of the session | open the skill first, then say the name; or add the value to the model |
 | Model build fails: `AMAZON.PauseIntent required` | AudioPlayer enabled, intent missing | use the JSON from the repo |

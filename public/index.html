@@ -195,8 +195,7 @@
                 <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. With <em>Repeat</em> on it starts over after the last track; with it off the playlist ends there. With <em>Announce</em> off the music starts straight away, without Alexa saying anything first. <em>Shuffle</em> plays them in a random order, and <em>Resume</em> picks up where the playlist last stopped — worth it for audiobooks, not for children's songs.<br>
                 Every URL must be <strong>https://</strong> and deliver the MP3 <strong>directly</strong> (no preview page, no login): Dropbox links need <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive shares usually do not work.
                 <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "resume" restarts the track).<br>
-                <strong>Got a whole folder?</strong> Paste a folder share link — a FRITZ!NAS link (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder share or a plain directory index — into <em>Import folder</em>, and every audio file listed there is added below as its own track, in the order the page lists them. Nothing is saved until you press <em>Save Playlist</em>.<br>
-                Alexa loads audio <strong>over port 443 only</strong>. A FRITZ!Box serves its remote access on port 456 by default, so such a link plays fine in a browser and stays silent on the Echo — change the HTTPS port to 443 under <em>Internet › Permit Access › FRITZ!Box Services</em> and copy the share link again.
+                <strong>Got a whole folder?</strong> Paste a folder share link — a FRITZ!NAS link (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder share or a plain directory index — into <em>Import folder</em>, and every audio file listed there is added below as its own track, in the order the page lists them. Nothing is saved until you press <em>Save Playlist</em>.
             </div>
 
             <form id="playlist-form">
@@ -206,7 +205,7 @@
                 </div>
                 <div class="input-group">
                     <label>Import folder — a folder share link whose audio files become tracks</label>
-                    <input type="text" inputmode="url" id="playlist-import-url" placeholder="https://xxxxxxxx.myfritz.net:443/nas/filelink.lua?id=…" spellcheck="false">
+                    <input type="text" inputmode="url" id="playlist-import-url" placeholder="https://xxxxxxxx.myfritz.net:456/nas/filelink.lua?id=…" spellcheck="false">
                     <button type="button" class="btn" id="playlist-import" style="background: rgba(255,255,255,0.08); margin-top: 8px;"><i class="fas fa-folder-open"></i> Import folder</button>
                 </div>
                 <div class="input-group">
@@ -505,10 +504,10 @@
                     const r = await apiRequest('GET', null, qs);
                     if (!r || r.error) { lines.push(`❌ ${esc(r?.error || 'check failed')}`); break; }
                     for (const e of r.ergebnisse) {
-                        const icon = e.fehler ? '❌' : (e.range && !e.warnung ? '✅' : '⚠️');
+                        const icon = e.fehler ? '❌' : (e.range ? '✅' : '⚠️');
                         const detail = e.fehler
                             ? e.fehler
-                            : `${e.status} ${e.contentType || ''}${e.range ? '' : ' · no range support'}${e.warnung ? ' · ' + e.warnung : ''}`;
+                            : `${e.status} ${e.contentType || ''}${e.range ? '' : ' · no range support'}`;
                         lines.push(`${icon} ${esc(e.url)} — ${esc(detail)}`);
                     }
                     ab = r.weiter;

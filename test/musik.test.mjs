@@ -29,7 +29,6 @@ import {
   istAudioUrl,
   audioLinksAusHtml,
   audioNamenImText,
-  importHinweise,
   REDIS_KEY,
 } from '../lib/musik.js'
 
@@ -757,13 +756,6 @@ test('audioLinksAusHtml uebergeht Dubletten und findet in einer leeren Seite nic
 test('audioNamenImText erkennt die Liste, die ihre Adressen erst im Browser baut', () => {
   const namen = audioNamenImText('<td class="n">01 Hallo.mp3</td><td>Bild.jpg</td><td>02.mp3</td>');
   assert.deepEqual(namen, ['01 Hallo.mp3', '02.mp3']);
-});
-
-test('importHinweise warnt vor jedem Port ausser 443', () => {
-  assert.deepEqual(importHinweise(['https://h.de/1.mp3', 'https://h.de:443/2.mp3']), []);
-  const [hinweis] = importHinweise([`${FRITZ_ORDNER}&path=%2F1.mp3`]);
-  assert.match(hinweis, /456/);
-  assert.match(hinweis, /443/);
 });
 
 test('handleImport weist einen fehlenden oder krummen Link ab, ohne ihn abzurufen', async () => {
