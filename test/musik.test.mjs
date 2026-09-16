@@ -29,6 +29,7 @@ import {
   istAudioUrl,
   audioLinksAusHtml,
   audioNamenImText,
+  seitenDiagnose,
   REDIS_KEY,
 } from '../lib/musik.js'
 
@@ -774,4 +775,30 @@ test('handleImport laesst sich nicht als Sonde ins eigene Netz verwenden', async
   await handleManage({ method: 'GET', query: { import: '1', url: 'https://localhost/nas/' } }, res, redisMit());
   assert.equal(res.statusCode, 400);
   assert.match(res.body.error, /lokaler Host/);
+});
+
+test('seitenDiagnose nimmt eine kleine Seite ganz und nennt ihre Skripte', () => {
+  const html = '<html><head><title> FRITZ!NAS </title>'
+    + '<script src="/nas/js/app.js"></script></head><body><div id="app"></div></body></html>';
+  const d = seitenDiagnose(html);
+  assert.equal(d.titel, 'FRITZ!NAS');
+  assert.equal(d.laenge, html.length);
+  assert.deepEqual(d.skripte, ['/nas/js/app.js']);
+  assert.equal(d.auszug, html, 'klein genug, also vollstaendig');
+});
+
+test('seitenDiagnose kappt eine grosse Seite an beiden Enden', () => {
+  const html = `<title>Anfang</title>${'x'.repeat(5000)}ENDE-MARKE`;
+  const d = seitenDiagnose(html, 1000);
+  assert.equal(d.laenge, html.length);
+  assert.ok(d.auszug.length < html.length);
+  assert.match(d.auszug, /^<title>Anfang<\/title>/, 'der Anfang bleibt');
+  assert.match(d.auszug, /ENDE-MARKE$/, 'das Ende auch');
+  assert.match(d.auszug, /Zeichen ausgelassen/);
+});
+
+test('seitenDiagnose kommt ohne title und ohne Skripte aus', () => {
+  const d = seitenDiagnose('nur text');
+  assert.equal(d.titel, null);
+  assert.deepEqual(d.skripte, []);
 });
