@@ -478,6 +478,14 @@
             });
         }
 
+        /** Taugt diese Adresse als href? Nur http und https, sonst nichts. */
+        function sicheresZiel(wert) {
+            try {
+                const u = new URL(wert);
+                return u.protocol === 'https:' || u.protocol === 'http:';
+            } catch { return false; }
+        }
+
         /**
          * "FRITZ!NAS" in der Kartenzeile - ein Klick zeigt, welcher Ordner.
          *
@@ -498,10 +506,29 @@
             marke.title = quelle.ordner || quelle.link;
             marke.style.cssText = 'background:none;border:none;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:underline dotted;';
 
-            const pfad = document.createElement('span');
+            // Der Ordner als Link auf die Freigabe selbst: Von hier aus will man
+            // sehen, was drin liegt, oder die Titelliste mit dem Bestand
+            // vergleichen - beides ist ein Klick entfernt, statt die Adresse
+            // von Hand zusammenzusuchen.
+            //
+            // Das href kommt aus der gespeicherten Herkunft und ist
+            // serverseitig als filelink.lua-Adresse geprueft; die Pruefung hier
+            // ist trotzdem da, weil ein href die eine Stelle ist, an der auch
+            // "javascript:" laufen wuerde, und weil ein Datenbestand aelter
+            // sein kann als die Regel, die ihn einmal angenommen hat.
+            const pfad = document.createElement(sicheresZiel(quelle.link) ? 'a' : 'span');
+            if (pfad.tagName === 'A') {
+                pfad.href = quelle.link;
+                pfad.target = '_blank';
+                // noopener, weil die geoeffnete Seite sonst ueber window.opener
+                // auf dieses Dashboard zugreifen koennte.
+                pfad.rel = 'noopener noreferrer';
+                pfad.title = quelle.link;
+            }
             pfad.textContent = ` ${quelle.ordner || quelle.link}`;
             pfad.hidden = true;
             pfad.style.opacity = '0.8';
+            pfad.style.color = 'inherit';
 
             marke.addEventListener('click', () => {
                 pfad.hidden = !pfad.hidden;
