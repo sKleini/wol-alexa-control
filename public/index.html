@@ -551,6 +551,13 @@
                     const qs = `?type=playlists&pruefen=1&name=${encodeURIComponent(name)}&ab=${ab}`;
                     const r = await apiRequest('GET', null, qs);
                     if (!r || r.error) { lines.push(`❌ ${esc(r?.error || 'check failed')}`); break; }
+                    // Bei einer FRITZ!NAS-Playlist sind die geprueften
+                    // Adressen nicht die gespeicherten: Sie tragen die
+                    // Sitzungsnummer, die der Echo gleich bekaeme. Ohne diesen
+                    // Satz wundert man sich, warum sie vom Formular abweichen.
+                    if (r.aufgefrischt && ab === 0) {
+                        lines.push('ℹ️ Checked with a current FRITZ!Box session number — the same one the Echo would get.');
+                    }
                     for (const e of r.ergebnisse) {
                         const icon = e.fehler ? '❌' : (e.range ? '✅' : '⚠️');
                         const detail = e.fehler
