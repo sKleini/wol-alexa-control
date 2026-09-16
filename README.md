@@ -365,9 +365,21 @@ Alexa fetches the files itself — without your login, without cookies. Every UR
 - a **direct link to the file** (`Content-Type: audio/mpeg`), not a preview or share page: Dropbox needs `?dl=1`, Nextcloud share links need `/download` appended, Google Drive shares usually fail,
 - ideally on a host that answers **range requests** (`206 Partial Content`) — without them *"Alexa, weiter"* after a pause restarts the track from the beginning.
 
-Your own web space, a Nextcloud/ownCloud, an S3 bucket or any static file host works. The dashboard's **Check URLs** button fetches every link the way the Echo does and reports status, content type and range support, so you see problems before Alexa turns them into silence.
+Your own web space, a Nextcloud/ownCloud, an S3 bucket or any static file host works. The dashboard's **Check URLs** button fetches every link the way the Echo does and reports status, content type, range support and the port, so you see problems before Alexa turns them into silence.
 
-##### 9.2 Dashboard
+**A FRITZ!Box works too, but only on port 443.** FRITZ!OS serves its HTTPS remote access on **port 456** by default, and the AudioPlayer loads audio over 443 and nothing else — a share link on 456 opens perfectly in a browser and stays silent on the Echo, with no error anywhere. Change it under *Internet › Permit Access › FRITZ!Box Services → Port for HTTPS = 443*, then copy the share link again; the certificate of a `…myfritz.net` address comes from a public CA, so that part is fine. Keep in mind that Alexa then fetches the files over your upstream bandwidth, and that a share link is public to anyone who has it.
+
+##### 9.2 Import a whole folder
+
+One link instead of twenty: paste a **folder share link** into *Import folder* above the track list and every audio file listed behind it is added as its own track, in the order the page lists them.
+
+- Works with a **FRITZ!NAS folder share** (`https://…myfritz.net:443/nas/filelink.lua?id=…`, created in FRITZ!NAS via *Select → Share*), a **Nextcloud folder share**, and a plain **directory index** of an Apache or nginx.
+- The server fetches the page (the dashboard cannot: its CSP is `connect-src 'self'`) and collects the addresses of files ending in `.mp3`, `.m4a`, `.m4b`, `.mp4`, `.aac` or `.mpga` — from the links first, and from an embedded JSON block only if the page has no links of its own. It reads the shared folder itself, not its subfolders.
+- Nothing is saved. The tracks land in the textarea below, appended to what is already there, so two folders can be combined and single lines removed before **Save Playlist**. Importing the same folder twice adds nothing twice.
+- A link that points at a single file instead of a folder is imported as that one track and says so. A page that lists its files but builds their addresses in the browser cannot be imported — the answer names that case rather than reporting an empty folder.
+- The import runs behind `ADMIN_PASSWORD` like everything else under `/api/manage`, refuses anything but `https://`, and rejects hosts that resolve to a private or loopback address, so it cannot be used as a probe into the Vercel network.
+
+##### 9.3 Dashboard
 
 - Open the dashboard → **Playlists** → enter a **speech-ready name** (this is what you say: `Kinderlieder`, `Hörspiele`) and the **URLs, one per line**. Optionally add a display title after a pipe: `https://…/01.mp3 | Hallo Welt` — it appears on Echo Show and in the Alexa app; otherwise the file name is used.
 - **Repeat** decides what happens after the last track: on, the playlist starts over; off, it ends.
@@ -378,9 +390,9 @@ Your own web space, a Nextcloud/ownCloud, an S3 bucket or any static file host w
 - **Save** upserts by name (case-insensitive). **Edit** loads a playlist back into the form, **Check URLs** tests every link, the trash icon deletes.
 - Blank lines are ignored; anything that is not an `https://` URL is rejected with its line number. Up to 200 tracks per playlist.
 
-Everything goes through `/api/manage?type=playlists` (`GET`, `POST {name, urls, wiederholen, ansage, zufall, fortsetzen}`, `DELETE {name}`, `GET &pruefen=1&name=…` for the check), protected by `ADMIN_PASSWORD` like the rest of the dashboard. Leaving a switch out of a `POST` keeps its stored value, so a script that only fixes a track list cannot flip one by omission; switching it off has to arrive as an explicit `false` — so it can be scripted from a workflow just like persons and zones (8.5).
+Everything goes through `/api/manage?type=playlists` (`GET`, `POST {name, urls, wiederholen, ansage, zufall, fortsetzen}`, `DELETE {name}`, `GET &pruefen=1&name=…` for the check, `GET &import=1&url=…` for the folder import), protected by `ADMIN_PASSWORD` like the rest of the dashboard. Leaving a switch out of a `POST` keeps its stored value, so a script that only fixes a track list cannot flip one by omission; switching it off has to arrive as an explicit `false` — so it can be scripted from a workflow just like persons and zones (8.5).
 
-##### 9.3 Alexa Custom Skill
+##### 9.4 Alexa Custom Skill
 
 1. [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) → **Create Skill** → name `Musik Box`, locale **German (DE)**, type of experience **Other**, model **Custom**, hosting **Provision your own**, template **Start from Scratch**.
 2. **Invocation name**: `musik box` (lower case, two words).
@@ -410,6 +422,8 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
 | First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |
 | "Weiter" restarts the track | host without range support | **Check URLs** shows ⚠️ — pick another host |
+| Link plays in the browser, Echo stays silent | URL on a port other than 443 (a FRITZ!Box serves 456 by default) | **Check URLs** shows ⚠️ *Port … – Alexa lädt nur über Port 443*; set the FRITZ!Box HTTPS port to 443 (9.1) and re-import the folder |
+| *Import folder* finds nothing | the page builds its file list in the browser, or the link is not a folder share | the answer says which of the two it is; for a FRITZ!Box use the share link of the **folder**, not of the NAS web interface |
 | Playlist not understood | new name, first sentence of the session | open the skill first, then say the name; or add the value to the model |
 | Model build fails: `AMAZON.PauseIntent required` | AudioPlayer enabled, intent missing | use the JSON from the repo |
 

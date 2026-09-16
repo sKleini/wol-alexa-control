@@ -194,13 +194,20 @@
             <div class="hint">
                 <strong>"Alexa, öffne musik box und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. With <em>Repeat</em> on it starts over after the last track; with it off the playlist ends there. With <em>Announce</em> off the music starts straight away, without Alexa saying anything first. <em>Shuffle</em> plays them in a random order, and <em>Resume</em> picks up where the playlist last stopped — worth it for audiobooks, not for children's songs.<br>
                 Every URL must be <strong>https://</strong> and deliver the MP3 <strong>directly</strong> (no preview page, no login): Dropbox links need <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive shares usually do not work.
-                <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "resume" restarts the track).
+                <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "resume" restarts the track).<br>
+                <strong>Got a whole folder?</strong> Paste a folder share link — a FRITZ!NAS link (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder share or a plain directory index — into <em>Import folder</em>, and every audio file listed there is added below as its own track, in the order the page lists them. Nothing is saved until you press <em>Save Playlist</em>.<br>
+                Alexa loads audio <strong>over port 443 only</strong>. A FRITZ!Box serves its remote access on port 456 by default, so such a link plays fine in a browser and stays silent on the Echo — change the HTTPS port to 443 under <em>Internet › Permit Access › FRITZ!Box Services</em> and copy the share link again.
             </div>
 
             <form id="playlist-form">
                 <div class="input-group">
                     <label>Name (speech-ready, this is what you say to Alexa)</label>
                     <input type="text" id="playlist-name" placeholder="e.g. Kinderlieder" maxlength="64" required>
+                </div>
+                <div class="input-group">
+                    <label>Import folder — a folder share link whose audio files become tracks</label>
+                    <input type="text" inputmode="url" id="playlist-import-url" placeholder="https://xxxxxxxx.myfritz.net:443/nas/filelink.lua?id=…" spellcheck="false">
+                    <button type="button" class="btn" id="playlist-import" style="background: rgba(255,255,255,0.08); margin-top: 8px;"><i class="fas fa-folder-open"></i> Import folder</button>
                 </div>
                 <div class="input-group">
                     <label>MP3 URLs, one per line — optionally <code>URL | Title</code></label>
@@ -498,10 +505,10 @@
                     const r = await apiRequest('GET', null, qs);
                     if (!r || r.error) { lines.push(`❌ ${esc(r?.error || 'check failed')}`); break; }
                     for (const e of r.ergebnisse) {
-                        const icon = e.fehler ? '❌' : (e.range ? '✅' : '⚠️');
+                        const icon = e.fehler ? '❌' : (e.range && !e.warnung ? '✅' : '⚠️');
                         const detail = e.fehler
                             ? e.fehler
-                            : `${e.status} ${e.contentType || ''}${e.range ? '' : ' · no range support'}`;
+                            : `${e.status} ${e.contentType || ''}${e.range ? '' : ' · no range support'}${e.warnung ? ' · ' + e.warnung : ''}`;
                         lines.push(`${icon} ${esc(e.url)} — ${esc(detail)}`);
                     }
                     ab = r.weiter;
@@ -520,6 +527,47 @@
                 renderPlaylists();
             }
         };
+
+        // Der Import haengt an, statt zu ersetzen: Wer zwei Ordner zu einer
+        // Playlist zusammenfasst, macht das so in zwei Durchgaengen, und eine
+        // von Hand eingetragene Zeile geht nicht verloren. Gespeichert wird
+        // nichts - was danach in der Textarea steht, ist ein Vorschlag, den
+        // "Save Playlist" uebernimmt.
+        document.getElementById('playlist-import').addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
+            const feld = document.getElementById('playlist-import-url');
+            const ordner = feld.value.trim();
+            if (!ordner) { playlistStatus('Paste a folder share link first.', 'error'); return; }
+
+            btn.disabled = true;
+            playlistStatus('Reading the folder…');
+            let r;
+            try {
+                r = await apiRequest('GET', null, `?type=playlists&import=1&url=${encodeURIComponent(ordner)}`);
+            } catch (err) {
+                playlistStatus(`Import failed: ${err.message}`, 'error');
+                return;
+            } finally {
+                btn.disabled = false;
+            }
+            if (!r) return;
+
+            const hinweise = (r.hinweise || []).join(' ');
+            if (r.error) { playlistStatus([r.error, hinweise].filter(Boolean).join(' '), 'error'); return; }
+
+            const textarea = document.getElementById('playlist-urls');
+            const vorhanden = textarea.value.split('\n').map(z => z.trim()).filter(Boolean);
+            const bekannt = new Set(vorhanden.map(z => z.split('|')[0].trim()));
+            const neue = (r.titel || []).filter(t => !bekannt.has(t.url));
+            textarea.value = [...vorhanden, ...neue.map(t => t.name ? `${t.url} | ${t.name}` : t.url)].join('\n');
+
+            const uebersprungen = (r.titel || []).length - neue.length;
+            const satz = `Added ${neue.length} ${neue.length === 1 ? 'track' : 'tracks'}`
+                + (uebersprungen ? `, skipped ${uebersprungen} already listed` : '')
+                + '. Check the list, then Save Playlist.';
+            playlistStatus([satz, hinweise].filter(Boolean).join(' '), hinweise ? '' : 'ok');
+            if (neue.length) feld.value = '';
+        });
 
         document.getElementById('playlist-form').addEventListener('submit', async (e) => {
             e.preventDefault();
