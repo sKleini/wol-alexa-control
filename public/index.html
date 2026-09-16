@@ -461,9 +461,9 @@
                     pl.ansage !== false ? 'announced' : 'silent start',
                     pl.zufall === true ? 'shuffled' : null,
                     pl.fortsetzen === true ? 'resumes' : null,
-                    pl.quelle?.typ === 'fritz' ? 'FRITZ!NAS · session refreshed on play' : null,
                 ].filter(Boolean).join(' · ');
                 info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${zustand}</p>`;
+                if (pl.quelle?.typ === 'fritz') info.querySelector('p').append(' · ', quelleMarke(pl.quelle));
                 item.appendChild(info);
 
                 const actions = document.createElement('div');
@@ -478,8 +478,47 @@
             });
         }
 
+        /**
+         * "FRITZ!NAS" in der Kartenzeile - ein Klick zeigt, welcher Ordner.
+         *
+         * Ein Knopf und kein blosses title-Attribut, weil ein Tooltip auf dem
+         * Handy nicht existiert: Dort gibt es kein Ueberfahren mit der Maus,
+         * und genau dort schaut man nach, welche Playlist woher kommt. Das
+         * title bleibt trotzdem stehen - am Rechner ist es der schnellere Weg.
+         *
+         * Pfad und Link kommen von der FRITZ!Box und aus einem Eingabefeld;
+         * beide gehen ueber textContent ins Dokument, nie als Markup.
+         */
+        function quelleMarke(quelle) {
+            const huelle = document.createElement('span');
+
+            const marke = document.createElement('button');
+            marke.type = 'button';
+            marke.textContent = 'FRITZ!NAS';
+            marke.title = quelle.ordner || quelle.link;
+            marke.style.cssText = 'background:none;border:none;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:underline dotted;';
+
+            const pfad = document.createElement('span');
+            pfad.textContent = ` ${quelle.ordner || quelle.link}`;
+            pfad.hidden = true;
+            pfad.style.opacity = '0.8';
+
+            marke.addEventListener('click', () => {
+                pfad.hidden = !pfad.hidden;
+                marke.setAttribute('aria-expanded', String(!pfad.hidden));
+            });
+            marke.setAttribute('aria-expanded', 'false');
+
+            huelle.append(marke, pfad);
+            return huelle;
+        }
+
         function editPlaylist(pl) {
             fritzQuelle = pl.quelle || null;
+            // Der hinterlegte Ordner-Link gehoert sichtbar ins Feld: Sonst
+            // liesse sich nicht nachsehen, woher eine Playlist kommt, und ein
+            // anderer Ordner nicht an seine Stelle setzen.
+            document.getElementById('playlist-import-url').value = pl.quelle?.link || '';
             document.getElementById('playlist-name').value = pl.name;
             document.getElementById('playlist-repeat').checked = pl.wiederholen !== false;
             document.getElementById('playlist-announce').checked = pl.ansage !== false;
@@ -673,9 +712,20 @@
             const ansage = document.getElementById('playlist-announce').checked;
             const zufall = document.getElementById('playlist-shuffle').checked;
             const fortsetzen = document.getElementById('playlist-resume').checked;
+            // Steht im Feld ein anderer Ordner als der hinterlegte, hat jemand
+            // ihn getippt, aber nicht importiert. Gespeichert wird dann der
+            // alte - das waere still falsch, also wird es gesagt.
+            const imFeld = document.getElementById('playlist-import-url').value.trim();
+            const abweichend = imFeld && fritzQuelle && imFeld !== fritzQuelle.link;
+
             const r = await apiRequest('POST', { name, urls, wiederholen, ansage, zufall, fortsetzen, quelle: fritzQuelle }, '?type=playlists');
             if (!r) return;
             if (r.error) { playlistStatus(r.error, 'error'); return; }
+            if (abweichend) {
+                playlistStatus(`Saved "${name.trim()}" — but the folder link in the field was not applied. Press Import folder to use it.`, 'error');
+                renderPlaylists();
+                return;
+            }
             playlistStatus(`Saved "${name.trim()}".`, 'ok');
             document.getElementById('playlist-form').reset();
             document.getElementById('playlist-import-diagnose').textContent = '';
