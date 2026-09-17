@@ -292,12 +292,29 @@ test('istPrivateAdresse kennt die privaten Bereiche', () => {
 
 // --- Der Skill ------------------------------------------------------------------
 
-test('LaunchRequest fragt nach der Playlist und schiebt die Namen nach', async () => {
+test('LaunchRequest fragt knapp und schiebt die Namen trotzdem nach', async () => {
+  // Gesprochen wird nur die Frage: Wer den Skill oeffnet, weiss meist schon,
+  // was er hoeren will, und muss sich nicht erst durch alle Namen hoeren.
+  //
+  // Nachgeschoben werden sie trotzdem - als dynamische Entitaeten. Genau das
+  // ist der Grund, warum Alexa die Antwort auf diese Frage versteht; sie
+  // zusammen mit der Ansage wegzulassen waere der naheliegende Fehler und
+  // machte die Rueckfrage unbrauchbar.
   const r = await skill({ type: 'LaunchRequest' });
-  assert.match(r.outputSpeech.text, /Welche Playlist.*Kinderlieder und Solo/);
+  assert.match(r.outputSpeech.text, /Welche Playlist soll ich spielen\?/);
+  assert.doesNotMatch(r.outputSpeech.text, /Ich kenne|Kinderlieder|Solo/);
   assert.equal(r.shouldEndSession, false);
   assert.equal(r.directives[0].type, 'Dialog.UpdateDynamicEntities');
   assert.deepEqual(r.directives[0].types[0].values.map(v => v.name.value), ['Kinderlieder', 'Solo']);
+});
+
+test('ein unbekannter Name zaehlt die Playlists weiterhin auf', async () => {
+  // Die Gegenprobe zum Test darueber: Hier ist die Liste die eigentliche
+  // Antwort, nicht Beiwerk. Ohne diesen Test wuerde eine spaetere
+  // Vereinfachung von frageWelche die Unterscheidung unbemerkt einebnen.
+  const r = await skill(intent('PlayPlaylistIntent', 'Taschenlampe'));
+  assert.match(r.outputSpeech.text, /keine Playlist namens Taschenlampe/);
+  assert.match(r.outputSpeech.text, /Ich kenne Kinderlieder und Solo/);
 });
 
 test('LaunchRequest ohne Playlists verweist aufs Dashboard', async () => {
