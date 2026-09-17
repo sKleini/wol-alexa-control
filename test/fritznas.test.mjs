@@ -14,6 +14,7 @@ import {
   sidKandidaten,
   titelAusListe,
   mitSid,
+  textAuszug,
 } from '../lib/fritznas.js'
 
 const FREIGABE = 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fbb2016f4f';
@@ -96,4 +97,20 @@ test('mitSid laesst Adressen ohne sid unveraendert', () => {
   const fremd = 'https://example.org/musik/01.mp3';
   assert.equal(mitSid(fremd, 'bbbbbbbbbbbbbbbb'), fremd);
   assert.equal(mitSid('keine url', 'bbbbbbbbbbbbbbbb'), 'keine url');
+});
+
+test('textAuszug holt die Aussage aus einer HTML-Antwort', () => {
+  const seite = '<html><head><title>FRITZ!NAS</title><style>body{color:red}</style>'
+    + '<script>var x=1;</script></head><body><p>Die Datei wurde nicht gefunden.</p></body></html>';
+  const auszug = textAuszug(seite);
+  assert.match(auszug, /FRITZ!NAS/);
+  assert.match(auszug, /Die Datei wurde nicht gefunden\./);
+  assert.doesNotMatch(auszug, /var x/, 'Skript und Stil fliegen raus');
+  assert.doesNotMatch(auszug, /</, 'und das Markup auch');
+});
+
+test('textAuszug kappt und kommt ohne title aus', () => {
+  assert.equal(textAuszug(`<p>${'a'.repeat(500)}</p>`, 50).length, 51, '50 Zeichen plus Auslassungszeichen');
+  assert.equal(textAuszug('<p>nur Text</p>'), 'nur Text');
+  assert.equal(textAuszug(''), '');
 });
