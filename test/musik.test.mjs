@@ -26,6 +26,7 @@ import {
   neuerSeed,
   handleSkill,
   handleManage,
+  fritzSidMerken,
   istAudioUrl,
   audioLinksAusHtml,
   audioNamenImText,
@@ -897,7 +898,7 @@ function mitSitzung(sid, alterMs = 0) {
   };
   return redisMit({
     [REDIS_KEY]: [playlist],
-    musik_fritz_sid: { [FRITZ_LINK]: { sid, zeit: Date.now() - alterMs } },
+    musik_fritz_sid: { link: FRITZ_LINK, sid, zeit: Date.now() - alterMs },
   });
 }
 
@@ -926,7 +927,7 @@ test('auch der naechste Titel bekommt die frische Nummer', async () => {
 });
 
 test('ist die Box nicht erreichbar, bleibt die gemerkte Nummer der letzte Versuch', async () => {
-  // Neun Minuten alt, also ueber der Frist von acht - es wird eine neue
+  // Neun Minuten alt, also ueber der Frist von fuenf - es wird eine neue
   // geholt. Der Host endet auf .invalid und ist damit garantiert nicht
   // aufloesbar (RFC 2606), der Abruf scheitert also ohne Wartezeit.
   //
@@ -941,7 +942,7 @@ test('ist die Box nicht erreichbar, bleibt die gemerkte Nummer der letzte Versuc
       quelle: { typ: 'fritz', link },
       titel: [{ url: fritzTitel('bbbbbbbbbbbbbbbb'), name: '01' }],
     }],
-    musik_fritz_sid: { [link]: { sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() - 9 * 60_000 } },
+    musik_fritz_sid: { link, sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() - 9 * 60_000 },
   });
 
   const r = await skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis);
@@ -967,7 +968,7 @@ test('Check URLs prueft die FRITZ!NAS-Adressen mit der frischen Sitzungsnummer',
       quelle: { typ: 'fritz', link },
       titel: [{ url: titelUrl('aaaaaaaaaaaaaaaa'), name: '01' }],
     }],
-    musik_fritz_sid: { [link]: { sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() } },
+    musik_fritz_sid: { link, sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() },
   });
 
   const res = antwortFaenger();
@@ -1079,4 +1080,108 @@ test('das Umsortieren laesst die Playlists selbst unangetastet', async () => {
     redis,
   );
   assert.deepEqual(redis.speicher[REDIS_KEY][0], voll);
+});
+
+// --- Eine Sitzung je FRITZ!Box ----------------------------------------------------
+//
+// AVM: Die Zahl der Sitzungen ist begrenzt, ein Programm soll nur eine je Box
+// verwenden - und ein Zugriff ohne gueltige Sitzung beendet alle bestehenden.
+// Die Tests hier halten fest, was daraus folgt.
+
+/** Eine FRITZ!NAS-Playlist auf einem Host, der garantiert nicht antwortet. */
+function unerreichbar(name, id) {
+  const link = `https://nicht-erreichbar.invalid/nas/filelink.lua?id=${id}`;
+  return {
+    link,
+    playlist: {
+      name,
+      quelle: { typ: 'fritz', link },
+      titel: [{
+        url: `https://nicht-erreichbar.invalid/nas/cgi-bin/luacgi_notimeout?script=%2Fapi%2Fdata.lua&sid=gespeichertexxxx&c=music&a=get&path=%2F01.mp3`,
+        name: '01',
+      }],
+    },
+  };
+}
+
+/** Welche Sitzungsnummer steckt in der Adresse, die Alexa bekommen hat? */
+async function sidDerDirektive(redis, name) {
+  const r = await skill(intent('PlayPlaylistIntent', name), {}, null, redis);
+  return new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid');
+}
+
+test('die gemerkte Sitzung einer ANDEREN Freigabe wird nicht verwendet', async () => {
+  // Der Kern: Gemerkt ist die Sitzung von Playlist A, gespielt wird B. Haette
+  // B sie eingesetzt, kaeme am Echo die Anmeldeseite der Box statt Musik - die
+  // Box hat A's Sitzung beendet, als B's Freigabe geoeffnet wurde.
+  //
+  // Der Host antwortet nicht, das Neuholen scheitert also. Genau daran ist es
+  // pruefbar: Es bleibt die gespeicherte Adresse stehen, nicht die fremde
+  // Nummer.
+  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
+  const b = unerreichbar('Udo CD zwei', 'bbbb2222bbbb2222');
+  const redis = redisMit({
+    [REDIS_KEY]: [a.playlist, b.playlist],
+    musik_fritz_sid: { link: a.link, sid: 'fremdesitzung11', zeit: Date.now() },
+  });
+
+  assert.equal(await sidDerDirektive(redis, 'Udo CD zwei'), 'gespeichertexxxx');
+});
+
+test('die gemerkte Sitzung DERSELBEN Freigabe wird verwendet', async () => {
+  // Die Gegenprobe zum Test darueber: Passt der Link, wird sie eingesetzt,
+  // ohne dass die Box ueberhaupt gefragt wird.
+  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
+  const redis = redisMit({
+    [REDIS_KEY]: [a.playlist],
+    musik_fritz_sid: { link: a.link, sid: 'eigenesitzung11', zeit: Date.now() },
+  });
+
+  assert.equal(await sidDerDirektive(redis, 'Schlaflieder'), 'eigenesitzung11');
+});
+
+test('fuenf Minuten sind die Grenze', async () => {
+  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
+  const mit = (alterMinuten) => redisMit({
+    [REDIS_KEY]: [a.playlist],
+    musik_fritz_sid: { link: a.link, sid: 'eigenesitzung11', zeit: Date.now() - alterMinuten * 60_000 },
+  });
+
+  assert.equal(await sidDerDirektive(mit(4), 'Schlaflieder'), 'eigenesitzung11', 'vier Minuten: noch gut');
+  // Sechs Minuten: Es wird eine neue geholt, das scheitert am toten Host, und
+  // die gemerkte darf danach noch als letzter Versuch dienen - sie gehoert ja
+  // zu dieser Freigabe.
+  assert.equal(await sidDerDirektive(mit(6), 'Schlaflieder'), 'eigenesitzung11');
+});
+
+test('der alte Zwischenspeicher je Freigabe wird als leer gelesen', async () => {
+  // Vor dieser Fassung stand dort eine Zuordnung Link -> Nummer. Aus ihr darf
+  // keine Nummer mehr herausgelesen werden, auch nicht zufaellig.
+  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
+  const redis = redisMit({
+    [REDIS_KEY]: [a.playlist],
+    musik_fritz_sid: { [a.link]: { sid: 'altesformat1111', zeit: Date.now() } },
+  });
+
+  assert.equal(await sidDerDirektive(redis, 'Schlaflieder'), 'gespeichertexxxx');
+});
+
+test('fritzSidMerken legt genau einen Datensatz ab', async () => {
+  const redis = redisMit();
+  await fritzSidMerken(redis, FRITZ_LINK, 'frischgeholt111');
+  const gemerkt = redis.speicher.musik_fritz_sid;
+  assert.equal(gemerkt.link, FRITZ_LINK);
+  assert.equal(gemerkt.sid, 'frischgeholt111');
+  assert.ok(Date.now() - gemerkt.zeit < 5000);
+
+  // Eine zweite Freigabe ersetzt die erste, sie kommt nicht daneben: Die Box
+  // fuehrt nur eine Sitzung, also merkt sich der Zwischenspeicher auch nur eine.
+  await fritzSidMerken(redis, 'https://abc.myfritz.net:456/nas/filelink.lua?id=bbbb2222bbbb2222', 'zweitesitzung11');
+  assert.equal(redis.speicher.musik_fritz_sid.sid, 'zweitesitzung11');
+  assert.equal(Object.keys(redis.speicher.musik_fritz_sid).sort().join(), 'link,sid,zeit');
+});
+
+test('fritzSidMerken laesst einen kaputten Zwischenspeicher die Wiedergabe nicht aufhalten', async () => {
+  const kaputt = { async get() { return null; }, async set() { throw new Error('offline'); } };
+  await assert.doesNotReject(() => fritzSidMerken(kaputt, FRITZ_LINK, 'frischgeholt111'));
 });
