@@ -15,7 +15,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
 - **Waste Collection (Optional)**: Say *"Alexa, Mülltonne"* and hear which bin goes out next — a scene that triggers a spoken announcement on the Echo you just talked to.
 - **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — or have the phone ring, after Alexa asks you to confirm — fed by a free location-logger app (GPSLogger) posting the phone's position, no extra server component.
-- **Musik Box (Optional)**: Say *"Alexa, öffne musik box und spiele Kinderlieder"* and the Echo plays a playlist you manage in the dashboard — a name plus a list of MP3 URLs — in order or shuffled, with repeat, the spoken confirmation and resuming where it stopped each switchable per playlist. No media server, no NAS: the Echo streams straight from the URLs.
+- **Musik Box (Optional)**: Say *"Alexa, öffne meine plattenkiste und spiele Kinderlieder"* and the Echo plays a playlist you manage in the dashboard — a name plus a list of MP3 URLs — in order or shuffled, with repeat, the spoken confirmation and resuming where it stopped each switchable per playlist. No media server, no NAS: the Echo streams straight from the URLs.
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
 ---
@@ -51,9 +51,9 @@ VPS cron (abwesenheit-relay) → GET /api/presence?persons=Julia,Stefan&zone=zu%
 Relay health (optional): let Alexa say why a SmartTag position is stale
 VPS cron (smarttag-relay) → POST /api/relay-status → Redis → "wo ist …?" answers "the Samsung login has expired" + dashboard badge
 
-Musik Box (optional): "Alexa, öffne musik box und spiele Kinderlieder"
+Musik Box (optional): "Alexa, öffne meine plattenkiste und spiele Kinderlieder"
 Dashboard → POST /api/manage?type=playlists → Redis (name + MP3 URLs)
-Custom Skill "musik box" → /api/skill (same endpoint, routed by skill ID) → AudioPlayer.Play → Echo streams the MP3 from its URL
+Custom Skill "Musik Box" → /api/skill (same endpoint, routed by skill ID) → AudioPlayer.Play → Echo streams the MP3 from its URL
 ```
 
 **Location-feature endpoints** (all authenticated with `LOCATION_KEY`):
@@ -110,7 +110,7 @@ Custom Skill "musik box" → /api/skill (same endpoint, routed by skill ID) → 
 | `LOCATION_KEY` | *(optional, location feature)* Secret key for the `/api/location` ingest endpoint |
 | `ALEXA_SKILL_ID` | *(optional, location feature)* Skill ID of the custom skill (`amzn1.ask.skill....`) |
 | `DEFAULT_PERSON` | *(optional, location feature)* Fallback person name (e.g. `Julia`) |
-| `MUSIK_SKILL_ID` | *(optional, Musik Box)* Skill ID of the **musik box** custom skill (`amzn1.ask.skill....`, see section 9). Both custom skills point at `/api/skill`; this ID is how the endpoint tells them apart |
+| `MUSIK_SKILL_ID` | *(optional, Musik Box)* Skill ID of the **Musik Box** custom skill (`amzn1.ask.skill....`, see section 9). Both custom skills point at `/api/skill`; this ID is how the endpoint tells them apart |
 
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
 
@@ -349,7 +349,7 @@ The server-side part of step 8.2 lends itself to automation from any repository:
 
 The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creating the custom skill (8.3) and the Alexa routine (8.4).
 
-#### 9. (Optional) 🎵 Musik Box — "Alexa, öffne musik box und spiele Kinderlieder"
+#### 9. (Optional) 🎵 Musik Box — "Alexa, öffne meine plattenkiste und spiele Kinderlieder"
 
 Play your own MP3s on any Echo: a playlist is a **name plus a list of URLs**, managed in the dashboard. The Echo streams each file straight from its URL, so there is no media server, no NAS access and no VPS component — only the URLs have to be reachable from the internet. Two switches per playlist decide how it behaves. **Repeat** says what happens after the last track: start over and keep going until you say *"Alexa, Stopp"*, or end there. **Announce** says whether Alexa confirms with *"Ich spiele …"* before the first track, or the music simply starts.
 
@@ -415,16 +415,16 @@ Everything goes through `/api/manage?type=playlists` (`GET`, `POST {name, urls, 
 ##### 9.4 Alexa Custom Skill
 
 1. [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) → **Create Skill** → name `Musik Box`, locale **German (DE)**, type of experience **Other**, model **Custom**, hosting **Provision your own**, template **Start from Scratch**.
-2. **Invocation name**: `musik box` (lower case, two words).
+2. **Invocation name**: `meine plattenkiste` (lower case, three words). Avoid anything containing *musik*: an invocation name [must not overlap with Alexa's own functions](https://developer.amazon.com/en-US/docs/alexa/custom-skills/choose-the-invocation-name-for-a-custom-skill.html), and `musik box` kept landing in Amazon Music instead of the skill.
 3. **Interfaces** → enable **Audio Player** and **Playback Controller** → *Save Interfaces*. (Pause/Resume become mandatory intents once AudioPlayer is on — the model below already contains them.)
 4. **Interaction Model → JSON Editor** → paste [`alexa/interaction-model-musik.de-DE.json`](alexa/interaction-model-musik.de-DE.json) → **Save Model** → **Build Model**. Run `node alexa/pruefe-modell.mjs alexa/interaction-model-musik.de-DE.json lib/musik.js PLAYLIST_NAME` first — the same check the CI runs.
 5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` (**the same URL as the familien finder skill**) → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"* → *Save Endpoints*.
 6. Copy the **Skill ID** into the `MUSIK_SKILL_ID` environment variable in Vercel and redeploy. Until then the endpoint answers `401` and Alexa says there was a problem with the skill's response.
-7. **Test** tab → *Development* → type `öffne musik box` — Alexa asks which playlist and lists the ones from the dashboard — then `spiele kinderlieder`. The simulator does not play audio but shows the `AudioPlayer.Play` directive with the stream URL on the right. Then on an Echo: *"Alexa, öffne musik box und spiele Kinderlieder."*
+7. **Test** tab → *Development* → type `öffne meine plattenkiste` — Alexa asks which playlist and lists the ones from the dashboard — then `spiele kinderlieder`. The simulator does not play audio but shows the `AudioPlayer.Play` directive with the stream URL on the right. Then on an Echo: *"Alexa, öffne meine plattenkiste und spiele Kinderlieder."*
 
 Development mode is enough: the skill works on every Echo of your Amazon account without certification or publishing.
 
-**Playlist names need no model changes.** A new playlist goes into the dashboard and nothing else — the one-shot call (*"öffne musik box und spiele Taschenlampe"*) reaches an `AMAZON.SearchQuery` slot, which takes free text and so recognises any name.
+**Playlist names need no model changes.** A new playlist goes into the dashboard and nothing else — the one-shot call (*"öffne meine plattenkiste und spiele Taschenlampe"*) reaches an `AMAZON.SearchQuery` slot, which takes free text and so recognises any name.
 
 That takes two intents, because a `SearchQuery` sample may not consist of the slot alone and always needs a carrier word in front of it — which is exactly what answering the skill's own question requires. So `SuchePlaylistIntent` (free text, always with a carrier word) handles the one-shot call, and `PlayPlaylistIntent` (the `PLAYLIST_NAME` slot, sample `{playlist}`) handles *"Welche Playlist?"* → *"Taschenlampe"*. Both end up in the same handler.
 
@@ -460,8 +460,8 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 | *"Alexa, frag familien finder, wo [Name] ist"* | Speaks the current location of any configured person |
 | *"Alexa, frag familien finder, ob [Name]s Handy klingeln kann"* | **Asks back first**, then makes the phone ring (Mylo app required) |
 | *"Alexa, frag familien finder, lass [Name]s Handy aufhören"* | Stops sound, torch and announcement — no confirmation |
-| *"Alexa, öffne musik box und spiele [Playlist]"* | Plays the MP3 URLs of that playlist in order, repeating or stopping at the end as set (section 9) |
-| *"Alexa, frag musik box, welche playlists es gibt"* | Lists the playlists from the dashboard |
+| *"Alexa, öffne meine plattenkiste und spiele [Playlist]"* | Plays the MP3 URLs of that playlist in order, repeating or stopping at the end as set (section 9) |
+| *"Alexa, frag meine plattenkiste, welche playlists es gibt"* | Lists the playlists from the dashboard |
 
 The Windows Agent supports **Sleep**, **Shutdown**, and **Hibernate** — configurable in the tray app.
 
