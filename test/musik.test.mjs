@@ -1,4 +1,4 @@
-// test/musik.test.mjs – die Musik-Box ohne Netz und ohne Redis.
+// test/musik.test.mjs – Meine Plattenkiste ohne Netz und ohne Redis.
 //
 //   node --test
 //
