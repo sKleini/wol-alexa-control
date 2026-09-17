@@ -30,6 +30,7 @@ import {
   audioLinksAusHtml,
   audioNamenImText,
   seitenDiagnose,
+  sortierePlaylists,
   REDIS_KEY,
 } from '../lib/musik.js'
 
@@ -1018,4 +1019,64 @@ test('eine gewoehnliche Playlist bleibt bei zwanzig je Aufruf', async () => {
   );
   assert.equal(res.body.ergebnisse.length, 10, 'alle zehn in einem Aufruf');
   assert.equal(res.body.weiter, null);
+});
+
+// --- Reihenfolge der Playlists ----------------------------------------------------
+
+const pl = (name) => ({ name, titel: [{ url: 'https://h.de/1.mp3', name: '1' }] });
+
+test('sortierePlaylists bringt sie in die gewuenschte Reihenfolge', () => {
+  const bestand = [pl('Kinderlieder'), pl('Hörspiele'), pl('Schlaflieder')];
+  const neu = sortierePlaylists(bestand, ['Schlaflieder', 'Hörspiele', 'Kinderlieder']);
+  assert.deepEqual(neu.map(p => p.name), ['Schlaflieder', 'Hörspiele', 'Kinderlieder']);
+});
+
+test('sortierePlaylists vergleicht Namen ohne Ruecksicht auf Gross- und Kleinschreibung', () => {
+  const neu = sortierePlaylists([pl('Kinderlieder'), pl('Hörspiele')], ['hörspiele', 'KINDERLIEDER']);
+  assert.deepEqual(neu.map(p => p.name), ['Hörspiele', 'Kinderlieder']);
+});
+
+test('sortierePlaylists verliert nichts und stolpert ueber nichts', () => {
+  const bestand = [pl('A'), pl('B'), pl('C')];
+
+  // Ein Name, den es nicht gibt - etwa eine Playlist, die inzwischen geloescht
+  // wurde -, wird uebergangen.
+  const mitGeist = sortierePlaylists(bestand, ['C', 'Weg', 'A']);
+  assert.deepEqual(mitGeist.map(p => p.name), ['C', 'A', 'B'], 'B fehlte in der Liste und haengt sich hinten an');
+
+  // Gar keine Liste, eine leere, etwas Krummes: Der Bestand bleibt, wie er ist.
+  for (const namen of [undefined, null, [], 'kein Array', ['', '   ']]) {
+    assert.deepEqual(sortierePlaylists(bestand, namen).map(p => p.name), ['A', 'B', 'C']);
+  }
+});
+
+test('handleManage speichert die neue Reihenfolge', async () => {
+  const redis = redisMit({ [REDIS_KEY]: [pl('Kinderlieder'), pl('Hörspiele')] });
+  const res = antwortFaenger();
+  await handleManage(
+    { method: 'POST', query: { sortieren: '1' }, body: { namen: ['Hörspiele', 'Kinderlieder'] } },
+    res,
+    redis,
+  );
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(redis.speicher[REDIS_KEY].map(p => p.name), ['Hörspiele', 'Kinderlieder']);
+});
+
+test('das Umsortieren laesst die Playlists selbst unangetastet', async () => {
+  // Es kommt kein Inhalt mit, also darf auch keiner verlorengehen - weder
+  // Titel noch Schalter noch die FRITZ!NAS-Herkunft.
+  const voll = {
+    name: 'Schlaflieder',
+    titel: [{ url: 'https://h.de/1.mp3', name: '1' }, { url: 'https://h.de/2.mp3', name: '2' }],
+    wiederholen: false,
+    zufall: true,
+    quelle: { typ: 'fritz', link: FRITZ_LINK, ordner: '/Musik/Schlaflieder' },
+  };
+  const redis = redisMit({ [REDIS_KEY]: [pl('Andere'), voll] });
+  await handleManage(
+    { method: 'POST', query: { sortieren: '1' }, body: { namen: ['Schlaflieder', 'Andere'] } },
+    antwortFaenger(),
+    redis,
+  );
+  assert.deepEqual(redis.speicher[REDIS_KEY][0], voll);
 });

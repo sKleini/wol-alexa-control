@@ -241,6 +241,8 @@
                 <div class="form-status" id="playlist-status"></div>
             </form>
 
+            <button type="button" class="btn" id="playlist-sort-az" style="background: rgba(255,255,255,0.08); margin-top: 20px;"><i class="fas fa-arrow-down-a-z"></i> Sort A–Z</button>
+
             <div class="device-list" id="playlist-list">
                 <!-- Playlists loaded here -->
             </div>
@@ -440,8 +442,11 @@
 
             const container = document.getElementById('playlist-list');
             container.innerHTML = playlists.length ? '' : '<p style="text-align:center; padding: 20px;">No playlists configured.</p>';
+            // Nichts zu sortieren, solange es hoechstens eine gibt.
+            document.getElementById('playlist-sort-az').hidden = playlists.length < 2;
 
-            playlists.forEach(pl => {
+            zuletztGerendert = playlists;
+            playlists.forEach((pl, nummer) => {
                 const titel = Array.isArray(pl.titel) ? pl.titel : [];
                 const item = document.createElement('div');
                 item.className = 'device-item';
@@ -468,6 +473,18 @@
 
                 const actions = document.createElement('div');
                 actions.className = 'item-actions';
+                // Die Reihenfolge ist nicht nur Kosmetik: In ihr zaehlt Alexa
+                // die Playlists auf, wenn sie fragt, welche sie spielen soll.
+                const hoch = iconButton('arrow-up', 'Move up', () => verschiebePlaylist(pl.name, -1));
+                const runter = iconButton('arrow-down', 'Move down', () => verschiebePlaylist(pl.name, +1));
+                hoch.disabled = nummer === 0;
+                runter.disabled = nummer === playlists.length - 1;
+                // Das gemeinsame :disabled zeigt einen Warte-Zeiger - richtig
+                // fuer "Check URLs laeuft gerade", falsch fuer einen Pfeil, der
+                // schlicht am Ende der Liste steht.
+                for (const b of [hoch, runter]) if (b.disabled) b.style.cursor = 'default';
+                actions.appendChild(hoch);
+                actions.appendChild(runter);
                 actions.appendChild(iconButton('pen', 'Edit', () => editPlaylist(pl)));
                 const checkBtn = iconButton('stethoscope', 'Check URLs', () => checkPlaylist(pl.name, item, checkBtn));
                 actions.appendChild(checkBtn);
@@ -601,6 +618,48 @@
             list.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
             btn.disabled = false;
         }
+
+        // Der zuletzt gerenderte Bestand. Das Umsortieren schickt eine
+        // Namensliste zum Server, und die muss von dem ausgehen, was gerade auf
+        // dem Bildschirm steht - sonst verschiebt ein Klick etwas anderes, als
+        // der Pfeil danebensteht.
+        let zuletztGerendert = [];
+
+        /** Schickt die Reihenfolge, wie sie nach der Aenderung sein soll. */
+        async function speichereReihenfolge(namen) {
+            const r = await apiRequest('POST', { namen }, '?type=playlists&sortieren=1');
+            if (!r) return;
+            if (r.error) { playlistStatus(r.error, 'error'); return; }
+            renderPlaylists();
+        }
+
+        /**
+         * Eine Playlist um eine Stelle nach oben oder unten.
+         *
+         * Gesucht wird nach Namen und nicht nach Position: Zwischen dem Rendern
+         * und dem Klick kann sich der Bestand geaendert haben - in einem zweiten
+         * Browserfenster, oder weil gerade gespeichert wurde.
+         */
+        function verschiebePlaylist(name, richtung) {
+            const namen = zuletztGerendert.map(p => p.name);
+            const i = namen.indexOf(name);
+            const ziel = i + richtung;
+            if (i === -1 || ziel < 0 || ziel >= namen.length) return;
+            [namen[i], namen[ziel]] = [namen[ziel], namen[i]];
+            speichereReihenfolge(namen);
+        }
+
+        // A-Z ist eine Aktion, keine Ansichtseinstellung: Es setzt die
+        // gespeicherte Reihenfolge einmal alphabetisch, und danach laesst sich
+        // wieder einzeln verschieben. Eine Ansicht, die immer alphabetisch
+        // sortiert, waere mit den Pfeilen daneben nicht vereinbar.
+        document.getElementById('playlist-sort-az').addEventListener('click', () => {
+            const namen = zuletztGerendert
+                .map(p => p.name)
+                // localeCompare mit 'de': Sonst stuenden Umlaute hinter dem Z.
+                .sort((a, b) => a.localeCompare(b, 'de', { sensitivity: 'base', numeric: true }));
+            speichereReihenfolge(namen);
+        });
 
         window.deletePlaylist = async (name) => {
             if (confirm('Delete this playlist?')) {
