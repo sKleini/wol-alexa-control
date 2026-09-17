@@ -15,7 +15,7 @@ Tired of paid Alexa skills or complex setups? This project allows you to create 
 - **Fritz!Box LED Control (Optional)**: Virtual Alexa device "Fritzbox LED" to switch the FRITZ!Box LED display on/off by voice — plus a manual HTTP switch (`/api/led`).
 - **Waste Collection (Optional)**: Say *"Alexa, Mülltonne"* and hear which bin goes out next — a scene that triggers a spoken announcement on the Echo you just talked to.
 - **Location Feature (Optional)**: Ask *"Alexa, wo ist Julia?"* and get the current location spoken back — or have the phone ring, after Alexa asks you to confirm — fed by a free location-logger app (GPSLogger) posting the phone's position, no extra server component.
-- **Musik Box (Optional)**: Say *"Alexa, öffne meine plattenkiste und spiele Kinderlieder"* and the Echo plays a playlist you manage in the dashboard — a name plus a list of MP3 URLs — in order or shuffled, with repeat, the spoken confirmation and resuming where it stopped each switchable per playlist. No media server, no NAS: the Echo streams straight from the URLs.
+- **Meine Plattenkiste (Optional)**: Say *"Alexa, öffne meine plattenkiste und spiele Kinderlieder"* and the Echo plays a playlist you manage in the dashboard — a name plus a list of MP3 URLs — in order or shuffled, with repeat, the spoken confirmation and resuming where it stopped each switchable per playlist. No media server, no NAS: the Echo streams straight from the URLs.
 - **100% Free**: Operates entirely within the free tiers of Vercel, Upstash (Redis), and AWS.
 
 ---
@@ -51,9 +51,9 @@ VPS cron (abwesenheit-relay) → GET /api/presence?persons=Julia,Stefan&zone=zu%
 Relay health (optional): let Alexa say why a SmartTag position is stale
 VPS cron (smarttag-relay) → POST /api/relay-status → Redis → "wo ist …?" answers "the Samsung login has expired" + dashboard badge
 
-Musik Box (optional): "Alexa, öffne meine plattenkiste und spiele Kinderlieder"
+Meine Plattenkiste (optional): "Alexa, öffne meine plattenkiste und spiele Kinderlieder"
 Dashboard → POST /api/manage?type=playlists → Redis (name + MP3 URLs)
-Custom Skill "Musik Box" → /api/skill (same endpoint, routed by skill ID) → AudioPlayer.Play → Echo streams the MP3 from its URL
+Custom Skill "Meine Plattenkiste" → /api/skill (same endpoint, routed by skill ID) → AudioPlayer.Play → Echo streams the MP3 from its URL
 ```
 
 **Location-feature endpoints** (all authenticated with `LOCATION_KEY`):
@@ -80,7 +80,7 @@ Custom Skill "Musik Box" → /api/skill (same endpoint, routed by skill ID) → 
 | LED relay (optional) | VPS service (`fritzbox-led-relay`) that switches the Fritz!Box LED display |
 | GPSLogger (optional) | Free Android app that posts the phone's location to `/api/location` |
 | Alexa Custom Skill (optional) | Second skill that answers "Wo ist [Person]?" with a spoken location |
-| Musik Box skill (optional) | Third skill (Custom, AudioPlayer) that plays the MP3 playlists from the dashboard — shares the `/api/skill` endpoint |
+| Meine Plattenkiste skill (optional) | Third skill (Custom, AudioPlayer) that plays the MP3 playlists from the dashboard — shares the `/api/skill` endpoint |
 
 ---
 
@@ -110,7 +110,7 @@ Custom Skill "Musik Box" → /api/skill (same endpoint, routed by skill ID) → 
 | `LOCATION_KEY` | *(optional, location feature)* Secret key for the `/api/location` ingest endpoint |
 | `ALEXA_SKILL_ID` | *(optional, location feature)* Skill ID of the custom skill (`amzn1.ask.skill....`) |
 | `DEFAULT_PERSON` | *(optional, location feature)* Fallback person name (e.g. `Julia`) |
-| `MUSIK_SKILL_ID` | *(optional, Musik Box)* Skill ID of the **Musik Box** custom skill (`amzn1.ask.skill....`, see section 9). Both custom skills point at `/api/skill`; this ID is how the endpoint tells them apart |
+| `MUSIK_SKILL_ID` | *(optional, Meine Plattenkiste)* Skill ID of the **Meine Plattenkiste** custom skill (`amzn1.ask.skill....`, see section 9). Both custom skills point at `/api/skill`; this ID is how the endpoint tells them apart |
 
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
 
@@ -349,7 +349,7 @@ The server-side part of step 8.2 lends itself to automation from any repository:
 
 The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creating the custom skill (8.3) and the Alexa routine (8.4).
 
-#### 9. (Optional) 🎵 Musik Box — "Alexa, öffne meine plattenkiste und spiele Kinderlieder"
+#### 9. (Optional) 🎵 Meine Plattenkiste — "Alexa, öffne meine plattenkiste und spiele Kinderlieder"
 
 Play your own MP3s on any Echo: a playlist is a **name plus a list of URLs**, managed in the dashboard. The Echo streams each file straight from its URL, so there is no media server, no NAS access and no VPS component — only the URLs have to be reachable from the internet. Two switches per playlist decide how it behaves. **Repeat** says what happens after the last track: start over and keep going until you say *"Alexa, Stopp"*, or end there. **Announce** says whether Alexa confirms with *"Ich spiele …"* before the first track, or the music simply starts.
 
@@ -414,7 +414,7 @@ Everything goes through `/api/manage?type=playlists` (`GET`, `POST {name, urls, 
 
 ##### 9.4 Alexa Custom Skill
 
-1. [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) → **Create Skill** → name `Musik Box`, locale **German (DE)**, type of experience **Other**, model **Custom**, hosting **Provision your own**, template **Start from Scratch**.
+1. [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) → **Create Skill** → name `Meine Plattenkiste`, locale **German (DE)**, type of experience **Other**, model **Custom**, hosting **Provision your own**, template **Start from Scratch**.
 2. **Invocation name**: `meine plattenkiste` (lower case, three words). Avoid anything containing *musik*: an invocation name [must not overlap with Alexa's own functions](https://developer.amazon.com/en-US/docs/alexa/custom-skills/choose-the-invocation-name-for-a-custom-skill.html), and `musik box` kept landing in Amazon Music instead of the skill.
 3. **Interfaces** → enable **Audio Player** and **Playback Controller** → *Save Interfaces*. (Pause/Resume become mandatory intents once AudioPlayer is on — the model below already contains them.)
 4. **Interaction Model → JSON Editor** → paste [`alexa/interaction-model-musik.de-DE.json`](alexa/interaction-model-musik.de-DE.json) → **Save Model** → **Build Model**. Run `node alexa/pruefe-modell.mjs alexa/interaction-model-musik.de-DE.json lib/musik.js PLAYLIST_NAME` first — the same check the CI runs.
@@ -434,7 +434,7 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 
 **With Repeat off**, nothing is queued behind the last track, so it plays to its end and the playlist stops — a `Stop` at that moment would cut the last track off mid-song. *"Nächster Titel"* on the last track ends playback; *"voriger Titel"* on the first one replays it rather than jumping to the end.
 
-**Alexa routine** (optional): *Mehr → Routinen → +* → *Wenn: Sprache* `musik an` → *Aktion: Angepasst → Skills → Musik Box*. A routine cannot pass a parameter, so it opens the skill and Alexa asks which playlist.
+**Alexa routine** (optional): *Mehr → Routinen → +* → *Wenn: Sprache* `musik an` → *Aktion: Angepasst → Skills → Meine Plattenkiste*. A routine cannot pass a parameter, so it opens the skill and Alexa asks which playlist.
 
 | Symptom | Cause | Fix |
 |---|---|---|

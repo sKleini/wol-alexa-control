@@ -4,7 +4,7 @@
 **familien finder** — dasselbe, das im **JSON Editor** der
 [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask) unter
 *Interaction Model* steht. `interaction-model-musik.de-DE.json` ist das Modell
-des zweiten Skills **Musik Box** (README, Abschnitt 9); seine Gegenseite ist
+des zweiten Skills **Meine Plattenkiste** (README, Abschnitt 9); seine Gegenseite ist
 `lib/musik.js`, nicht `api/skill.js` — beide Skills teilen sich den Endpunkt
 `/api/skill`, der nach der Skill-ID verzweigt.
 
@@ -30,7 +30,7 @@ node alexa/pruefe-modell.mjs alexa/interaction-model-musik.de-DE.json lib/musik.
 ```
 
 — dieselbe Prüfung, die die CI fährt (die erste Zeile für *familien finder*,
-die zweite für *Musik Box*). Sie ersetzt den Build in der Konsole nicht, kennt
+die zweite für *Meine Plattenkiste*). Sie ersetzt den Build in der Konsole nicht, kennt
 aber die Fehler, die hier schon vorgekommen sind — seit dem AudioPlayer auch
 einen eingebauten Intent, den der Code behandelt und das Modell nicht führt:
 `AMAZON.PauseIntent` und `AMAZON.ResumeIntent` verlangt die Konsole, sobald das
@@ -106,7 +106,7 @@ und wer das Handy gerade gefunden hat, während es Alarm schlägt, soll nicht
 erst eine Frage beantworten. Die Vorsicht gehört vor das Geräusch, nicht
 dahinter.
 
-## Playlists pflegen (Musik Box)
+## Playlists pflegen (Meine Plattenkiste)
 
 **Eine neue Playlist gehört nur ins Dashboard.** Am Sprachmodell ist dafür
 nichts mehr zu tun — seit `SuchePlaylistIntent` nimmt der Ein-Satz-Aufruf

@@ -49,7 +49,7 @@ export default async function handler(req, res) {
   }
 
   // **Zwei Skills, ein Endpunkt.** Der Vercel-Hobby-Tarif erlaubt zwoelf
-  // Functions, und api/ hat zwoelf. Die Musik Box zeigt deshalb in der
+  // Functions, und api/ hat zwoelf. Meine Plattenkiste zeigt deshalb in der
   // Developer Console auf dieselbe URL wie der Familien-Finder; welcher Skill
   // spricht, sagt die Skill-ID. Beide Pruefungen sind fail-closed: ohne
   // gesetzte Env-Var passt keine ID.

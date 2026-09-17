@@ -13,7 +13,7 @@
 //   node alexa/pruefe-modell.mjs
 //     -> familien finder: interaction-model.de-DE.json gegen api/skill.js
 //   node alexa/pruefe-modell.mjs alexa/interaction-model-musik.de-DE.json lib/musik.js PLAYLIST_NAME
-//     -> musik box: das zweite Modell gegen den Handler in lib/musik.js
+//     -> meine plattenkiste: das zweite Modell gegen den Handler in lib/musik.js
 //
 // Der dritte Parameter ist der Slot-Typ, der Werte haben muss - sonst wuerde
 // kein einziger Name erkannt.
