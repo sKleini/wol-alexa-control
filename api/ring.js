@@ -63,6 +63,7 @@ import { keyOk } from '../lib/auth.js'
 import { fcmKonfiguriert } from '../lib/fcm.js'
 import { bildHandler, istBildAnfrage } from '../lib/bild.js'
 import { BEFEHLE, befehlAnPerson } from '../lib/ring.js'
+import { queryOf } from '../lib/query.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -80,7 +81,8 @@ export default async function handler(req, res) {
 
   // Vor allem anderen abzweigen: Die Bild-Anfrage hat weder eine Person noch
   // ein Verb, und sie braucht auch kein Firebase - sie legt nur ab oder holt.
-  if (istBildAnfrage(req.query)) return bildHandler(req, res);
+  const query = queryOf(req);
+  if (istBildAnfrage(query)) return bildHandler(req, res);
 
   // **Diese Pruefung steht hier und nicht erst in lib/ring.js**, obwohl sie
   // dort noch einmal vorkommt: Sie stand vor dem Umbau an genau dieser Stelle,
@@ -96,10 +98,10 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: false, reason: 'fcm_not_configured' });
   }
 
-  const personName = (req.query.u || '').trim();
+  const personName = (query.u || '').trim();
   if (!personName) return res.status(400).json({ error: 'Missing person (u param)' });
 
-  const befehl = (req.query.do || 'ring').trim().toLowerCase();
+  const befehl = (query.do || 'ring').trim().toLowerCase();
   // Unbekannte Verben werden abgewiesen statt durchgereicht: Sonst kaeme beim
   // Handy ein Befehl an, den dort niemand kennt - die App wuerde ihn stumm
   // verwerfen, und der Aufrufer haette "zugestellt" gemeldet.
@@ -119,9 +121,9 @@ export default async function handler(req, res) {
   // Das ist der Weg fuer jedes Mylo, das den Rueckfall aus der Antwort auf
   // seine Standortmeldung liest, und er kostet dort keinen eigenen Request.
   const ergebnis = await befehlAnPerson(redis, personName, befehl, {
-    text: req.query.t,
-    bild: req.query.i,
-    rueckfall: req.query.r === '1',
+    text: query.t,
+    bild: query.i,
+    rueckfall: query.r === '1',
   });
 
   // Die Antwort ist Zeichen fuer Zeichen die von vorher - beide Apps lesen

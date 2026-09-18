@@ -1,6 +1,8 @@
 // api/led.js – GET /api/led?action=on|off&key=<geheimer-Aufruf-Key>
+import { queryOf } from '../lib/query.js'
+
 export default async function handler(req, res) {
-  const { action, key } = req.query;
+  const { action, key } = queryOf(req);
   // Fail closed: with LED_CALL_KEY unset, `key !== process.env.LED_CALL_KEY`
   // compares undefined against undefined, so a request without any key would
   // pass. Same guard style as location.js / manage.js / skill.js.

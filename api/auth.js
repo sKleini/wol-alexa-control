@@ -1,4 +1,6 @@
 // api/auth.js – Account-Linking-Einstieg für den Alexa-Skill.
+import { queryOf } from '../lib/query.js'
+
 // Nur Amazons Linking-Ziele sind als redirect_uri zulaessig: ohne Allowlist ist
 // das ein offener Redirect, mit dem sich unter der eigenen Domain auf beliebige
 // Seiten weiterleiten laesst (Phishing).
@@ -20,7 +22,7 @@ function isAllowedRedirect(uri) {
 }
 
 export default async function handler(req, res) {
-  const { redirect_uri, state } = req.query;
+  const { redirect_uri, state } = queryOf(req);
   if (!redirect_uri) return res.status(400).send('Missing redirect_uri');
   if (!isAllowedRedirect(redirect_uri)) return res.status(400).send('Invalid redirect_uri');
 
