@@ -7,6 +7,7 @@
 import { Redis } from '@upstash/redis'
 import { haversineMeters } from '../lib/geo.js'
 import { keyOk } from '../lib/auth.js'
+import { queryOf } from '../lib/query.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -21,9 +22,10 @@ export default async function handler(req, res) {
   // entries, which break the shell caller's per-person jq lookup. Dedupe
   // case-insensitively and cap the list so one request cannot fan out into
   // thousands of Redis round-trips.
+  const query = queryOf(req);
   const seen = new Set();
   const names = [];
-  for (const raw of String(req.query.persons || '').split(',')) {
+  for (const raw of String(query.persons || '').split(',')) {
     const name = raw.trim();
     if (!name) continue;
     const key = name.toLowerCase();
@@ -32,7 +34,7 @@ export default async function handler(req, res) {
     names.push(name);
     if (names.length >= 20) break;
   }
-  const zoneName = String(req.query.zone || '').trim();
+  const zoneName = String(query.zone || '').trim();
   if (!names.length) return res.status(400).json({ error: 'Missing persons' });
   if (!zoneName) return res.status(400).json({ error: 'Missing zone' });
 

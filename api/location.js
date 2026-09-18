@@ -6,6 +6,7 @@ import { Redis } from '@upstash/redis'
 import { keyOk } from '../lib/auth.js'
 import { zonenWechsel, sendeZonenwechsel } from '../lib/hub-push.js'
 import { CMD_KEY_PREFIX } from '../lib/ring.js'
+import { queryOf } from '../lib/query.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -328,7 +329,11 @@ export default async function handler(req, res) {
   const isOwnTracks = typeof body._type === 'string';
   const ackOwnTracks = () => res.status(200).json([]);
 
-  const personName = (req.query.u || process.env.DEFAULT_PERSON || '').trim();
+  // Einmal gelesen und weitergereicht: nicht ueber req.query, weil Vercels
+  // Getter dafuer url.parse() benutzt (siehe lib/query.js).
+  const query = queryOf(req);
+
+  const personName = (query.u || process.env.DEFAULT_PERSON || '').trim();
   if (!personName) {
     if (isOwnTracks) return ackOwnTracks();
     return res.status(400).json({ error: 'Missing person (u param or DEFAULT_PERSON)' });
@@ -342,7 +347,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: false, error: 'Unknown person' });
   }
 
-  const pick = (k) => (body[k] ?? req.query[k]);
+  const pick = (k) => (body[k] ?? query[k]);
   const lat = parseFloat(pick('lat'));
   const lon = parseFloat(pick('lon'));
   const jetzt = Math.floor(Date.now() / 1000);
