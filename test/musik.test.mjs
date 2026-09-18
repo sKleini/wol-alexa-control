@@ -586,7 +586,9 @@ test('validierePlaylist: fehlendes Feld nimmt den Bestand, sonst die Vorgabe', (
 test('Ohne Ansage startet die Musik ohne ein Wort davor', async () => {
   const r = await skill(intent('PlayPlaylistIntent', 'leise'), {}, [STILL]);
   assert.equal(r.outputSpeech, undefined, 'keine Sprachausgabe');
-  assert.equal(r.shouldEndSession, undefined, 'kein shouldEndSession neben AudioPlayer.Play');
+  // Die Sitzung endet trotzdem, sonst horcht der Echo nach dem stillen Start
+  // weiter. Neben einer Play-Direktive ist `true` erlaubt, nur `false` nicht.
+  assert.equal(r.shouldEndSession, true, 'die Sitzung endet auch ohne Ansage');
   assert.equal(r.directives.length, 1);
   assert.equal(r.directives[0].playBehavior, 'REPLACE_ALL');
   assert.equal(r.directives[0].audioItem.stream.token, 'Leise|0|0|0');
@@ -623,6 +625,75 @@ test('Ohne Wiederholung stoppt naechster Titel am Ende und bleibt am Anfang steh
 
   const anfang = await skill(intent('AMAZON.PreviousIntent'), { token: 'Einmal|0|0|0' }, [EINMAL]);
   assert.equal(anfang.directives[0].audioItem.stream.token, 'Einmal|0|0|0');
+});
+
+// --- Das Mikrofon nach dem Befehl -------------------------------------------
+
+test('Jeder Sprachbefehl schliesst die Sitzung', async () => {
+  // **Warum das eine eigene Zeile braucht.** Ein fehlendes `shouldEndSession`
+  // heisst fuer Alexa nicht "beenden", sondern "lass es, wie es ist" - und
+  // nach dem zweistufigen Aufruf ("oeffne meine Plattenkiste" … "spiele
+  // Kinderlieder") steht es offen. Die Antworten hier tragen keine Sprache und
+  // sahen deshalb harmlos aus; in Wahrheit horchte der Echo nach jedem
+  // erledigten Befehl noch einmal.
+  const befehle = [
+    'AMAZON.PauseIntent',
+    'AMAZON.StopIntent',
+    'AMAZON.CancelIntent',
+    'AMAZON.ResumeIntent',
+    'AMAZON.NextIntent',
+    'AMAZON.PreviousIntent',
+    'AMAZON.StartOverIntent',
+    'AMAZON.ShuffleOnIntent',
+    'AMAZON.ShuffleOffIntent',
+  ];
+  for (const name of befehle) {
+    const r = await skill(intent(name), { token: 'Kinderlieder|1|0|0', offset: 5000 });
+    assert.equal(r.shouldEndSession, true, name);
+  }
+});
+
+test('Auch ohne laufenden Stream bleibt das Mikrofon nach dem Befehl nicht offen', async () => {
+  // Der Zweig, in dem der Skill nichts zu tun findet, ist derselbe Fall fuer
+  // den Hoerenden: Der Befehl ist erledigt, es kommt keine Frage mehr.
+  for (const name of ['AMAZON.NextIntent', 'AMAZON.PreviousIntent', 'AMAZON.StartOverIntent']) {
+    const r = await skill(intent(name));
+    assert.deepEqual(r, { shouldEndSession: true }, name);
+  }
+});
+
+test('Knoepfe und AudioPlayer-Ereignisse tragen kein shouldEndSession', async () => {
+  // Die Gegenprobe: Dort gibt es keine Sitzung zu beenden, und das Feld haette
+  // in der Antwort nichts verloren. Dieselben Helfer beantworten beides - ohne
+  // diesen Test faellt das Feld beim naechsten Umbau ueberall hinein.
+  const ereignisse = [
+    { type: 'PlaybackController.NextCommandIssued' },
+    { type: 'PlaybackController.PreviousCommandIssued' },
+    { type: 'PlaybackController.PlayCommandIssued' },
+    { type: 'PlaybackController.PauseCommandIssued' },
+    { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|1|0|0' },
+    { type: 'AudioPlayer.PlaybackStarted', token: 'Kinderlieder|1|0|0' },
+    { type: 'AudioPlayer.PlaybackStopped', token: 'Kinderlieder|1|0|0' },
+  ];
+  for (const request of ereignisse) {
+    const r = await skill(request, { token: 'Kinderlieder|1|0|0', offset: 5000 });
+    assert.equal(r.shouldEndSession, undefined, request.type);
+  }
+});
+
+test('Rueckfragen halten die Sitzung offen - sonst waere niemand da, der antwortet', async () => {
+  // Die Grenze des Ganzen: Wo der Skill fragt, muss das Mikrofon aufbleiben,
+  // und dazu gehoert ein reprompt. Ein pauschales "immer beenden" waere die
+  // naheliegende Vereinfachung und nimmt genau diesen Fall mit.
+  for (const r of [
+    await skill({ type: 'LaunchRequest' }),
+    await skill(intent('PlayPlaylistIntent')),
+    await skill(intent('AMAZON.ResumeIntent')),
+    await skill(intent('AMAZON.HelpIntent')),
+  ]) {
+    assert.equal(r.shouldEndSession, false);
+    assert.ok(r.reprompt.outputSpeech.text);
+  }
 });
 
 test('Loop-Befehle geben Auskunft, statt etwas zu behaupten oder umzuschalten', async () => {

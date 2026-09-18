@@ -471,6 +471,17 @@ into a closed line, try again faster, and see it work the second time. The
 reprompt is deliberately shorter than the first question — whoever just heard
 the names does not need them again.
 
+**And every answer that finishes a command closes it.** The counterpart, and it
+was missing for just as long. A response without `shouldEndSession` does not
+mean *end it* to Alexa but *leave it as it is* — and after the two-step call
+(*"öffne meine Plattenkiste"*, then *"spiele Kinderlieder"*) it is open. The
+answers to pause, next, previous, start over and shuffle carry no speech, only
+a directive, so they looked harmless; in fact the Echo kept listening after
+every finished command, as if it expected more. Now those answers end the
+session, which is allowed next to a Play directive — only `false` would not be.
+Events from the AudioPlayer and the buttons in the Alexa app still omit the
+field, because there is no session there to end.
+
 **The skill no longer promises what it cannot keep.** If no session number can
 be fetched, the stored addresses still carry the one from import time, which is
 almost certainly dead — the box answers such a request with its own web page,
