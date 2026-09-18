@@ -613,8 +613,15 @@
                             teile.push(e.fehler);
                         } else {
                             teile.push(`${e.status} ${e.contentType || ''}`.trim());
-                            if (e.groesse) teile.push(e.dauer ? `${e.groesse}, ~${e.dauer}` : e.groesse);
-                            else teile.push('length not reported');
+                            // Die Tilde steht nur noch vor einer wirklich
+                            // geschaetzten Dauer. Steht die Bitrate daneben,
+                            // ist die Zeit aus dem Kopf der Datei gerechnet -
+                            // und dann darf sie auch so aussehen.
+                            if (e.groesse) {
+                                const dauer = e.dauer ? (e.geschaetzt ? `~${e.dauer}` : e.dauer) : null;
+                                const rate = e.kbit ? `${e.kbit} kbit/s` : null;
+                                teile.push([e.groesse, dauer, rate].filter(Boolean).join(', '));
+                            } else teile.push('length not reported');
                             if (!e.range) teile.push('no range support');
                             if (e.zuLang) teile.push('longer than a FRITZ!Box session lasts — see section 9');
                         }

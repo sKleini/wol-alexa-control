@@ -445,12 +445,19 @@ the same number, and nothing guarantees it survives. Any refresh elsewhere ends
 *all* sessions on the box as well, so a second playlist or a press of *Check
 URLs* can pull the ground out from under a running one.
 
-*Check URLs* therefore reports the size and an estimated duration for every
-track, and marks with ⏳ whatever plays longer than a session lasts. The
-estimate assumes 128 kbit/s; the warning itself is calculated at 320 kbit/s, the
-shortest plausible duration, so that a warning is a certainty rather than a
-guess. The import says the same thing at the moment it matters most, while the
-playlist is being created.
+*Check URLs* therefore reports the size, the bit rate and the playing time of
+every track, and marks with ⏳ whatever plays longer than a session lasts.
+
+**The playing time is read, not guessed.** It used to be estimated from the file
+size at an assumed 128 kbit/s, and for a chapter encoded at 320 that was off by
+a factor of two and a half: 14 MB was reported as a quarter of an hour and is in
+fact just under six minutes. A number that wrong is worse than none, because
+people act on it. The check now reads the first 32 KB of the file — the MPEG
+header there carries the real bit rate, and a variable-rate file carries its
+frame count in the same place, which gives the duration exactly. Only where that
+fails (not an MP3, an unreadable header) does the old estimate appear, and then
+with a `~` in front of it. The import says the same thing at the moment it
+matters most, while the playlist is being created.
 
 The remedy is not in the skill — the Echo does the loading and the box forgets
 the number underneath it. **Split long recordings into chapters.** That also
@@ -499,9 +506,20 @@ covers one, the skill now plays with the remembered number instead. Should that
 number be stale, the first track fails — and a failed track already triggers a
 fresh login and carries on with the next one. Silence becomes a short delay.
 
-Each request logs its own duration as `musik-box <type> in <n> ms`. That line
-separates the skill's own work from the cold start, which the Vercel timing
-alone cannot.
+**The FRITZ!NAS login gets the time that is actually left.** It used to allow
+itself a fixed four seconds. On a warm function that is plenty; on the first
+call after a pause it is not, because name resolution and the TLS handshake to a
+slow box come on top — the login ran into its own limit, the skill said *"Ich
+komme gerade nicht an die FRITZ!Box"*, and only the second attempt worked. That
+was the reported *"always starts on the second try"*. The login now receives the
+remaining budget minus a reserve for the answer itself, roughly five and a half
+seconds in the normal case, and the threshold below which it is skipped dropped
+accordingly.
+
+Each request logs its own duration as `musik-box <type> in <n> ms`, and every
+login logs `musik-box FRITZ!NAS-Login ok nach <n> ms, <n> ms Budget uebrig`.
+Those two lines separate the skill's own work from the cold start, which the
+Vercel timing alone cannot, and say whether the login was the reason.
 
 **The functions run in Frankfurt** (`"regions": ["fra1"]` in `vercel.json`).
 Without that line Vercel places them in Virginia by default, and every request
@@ -516,7 +534,7 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
 | Alexa confirms, then silence — FRITZ!NAS, large file | the track plays longer than a session number lasts | **Check URLs** now shows ⏳ for those; split the file into chapters, see below |
-| "Ich komme gerade nicht an die FRITZ!Box" | no session number could be fetched | the box was unreachable or slow; say it again |
+| "Ich komme gerade nicht an die FRITZ!Box" | no session number could be fetched | the box was unreachable or slow; say it again. The login now gets whatever is left of the time budget instead of a fixed four seconds — see below |
 | First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |
 | "Weiter" restarts the track | host without range support | **Check URLs** shows ⚠️ — pick another host |
 | *Import folder* finds nothing | the page builds its file list in the browser, or the link is not a folder share | the answer says which of the two it is; for a FRITZ!Box use the share link of the **folder**, not of the NAS web interface |
