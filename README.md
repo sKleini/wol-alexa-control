@@ -465,6 +465,12 @@ Each request logs its own duration as `musik-box <type> in <n> ms`. That line
 separates the skill's own work from the cold start, which the Vercel timing
 alone cannot.
 
+**The functions run in Frankfurt** (`"regions": ["fra1"]` in `vercel.json`).
+Without that line Vercel places them in Virginia by default, and every request
+crosses the Atlantic twice: once from Alexa's European endpoint, and again for
+every database lookup. Keep the Upstash database in Europe as well — a function in
+Frankfurt talking to a database in the US is worse than both being in the US.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | "Es gab ein Problem mit der Antwort des Skills" | `MUSIK_SKILL_ID` missing or wrong → `401` | step 6, redeploy |
