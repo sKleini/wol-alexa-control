@@ -1117,15 +1117,18 @@ test('auch der naechste Titel bekommt die frische Nummer', async () => {
   assert.equal(url.searchParams.get('path'), '/02.mp3');
 });
 
-test('ist die Box nicht erreichbar, bleibt die gemerkte Nummer der letzte Versuch', async () => {
+test('mit einer abgelaufenen Nummer wird nicht mehr losgespielt', async () => {
   // Neun Minuten alt, also ueber der Frist von fuenf - es wird eine neue
   // geholt. Der Host endet auf .invalid und ist damit garantiert nicht
   // aufloesbar (RFC 2606), der Abruf scheitert also ohne Wartezeit.
   //
-  // Dann lieber die alte Nummer als gar keine: Sie ist vielleicht noch gut
-  // (die FRITZ!Box laesst mehr Zeit, als hier gewartet wird), und eine
-  // Playlist mit vielleicht toten Adressen ist besser als eine Antwort ohne
-  // Titel. Was wirklich tot ist, faengt der PlaybackFailed-Weg ab.
+  // **Frueher spielte der Skill hier mit der alten Nummer los**, in der
+  // Annahme, sie sei vielleicht noch gut und ein gescheiterter Titel hole sich
+  // ueber PlaybackFailed eine frische. Im Betrieb kam davon nichts an: Alexa
+  // sagte "Ich spiele das doppelte Lottchen", und dann war es still - jedes
+  // Mal beim ersten Versuch, weil erst der zweite eine frische Nummer im
+  // Zwischenspeicher vorfand. Ein Satz, der erklaert, ist besser als Stille,
+  // die es nicht tut.
   const link = 'https://nicht-erreichbar.invalid/nas/filelink.lua?id=535f52fbb2016f4f';
   const redis = redisMit({
     [REDIS_KEY]: [{
@@ -1137,9 +1140,73 @@ test('ist die Box nicht erreichbar, bleibt die gemerkte Nummer der letzte Versuc
   });
 
   const r = await skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis);
-  const url = new URL(r.directives[0].audioItem.stream.url);
-  assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
-  assert.equal(url.searchParams.get('path'), '/01.mp3');
+  // Die dynamischen Werte gehen mit (der Satz ist eine Rueckfrage wert) -
+  // eine Wiedergabe nicht.
+  assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive mit toter Nummer');
+  assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
+});
+
+// --- Die Sitzung wird beim Oeffnen geholt ------------------------------------
+
+/** Dasselbe Redis, das nebenbei mitschreibt, welche Schluessel gelesen wurden. */
+function redisMitProtokoll(daten) {
+  const redis = redisMit(daten);
+  const gelesen = [];
+  return {
+    gelesen,
+    redis: { ...redis, async get(key) { gelesen.push(key); return redis.get(key); } },
+  };
+}
+
+/** Ein grosszuegiges Budget - sonst laesst der Skill den Login von vornherein aus. */
+async function mitBudget(ms, tu) {
+  process.env.MUSIK_BUDGET_MS = String(ms);
+  try { return await tu(); } finally { process.env.MUSIK_BUDGET_MS = '300'; }
+}
+
+test('Beim Oeffnen holt der Skill die FRITZ!Box-Sitzung schon vor der Frage', async () => {
+  // **Der Kern der Sache.** Der Aufruf hat zwei Schritte, und der ganze Login
+  // lag im zweiten - dem engen. Beim ersten Versuch nach einer Pause reichte
+  // es dort nicht, der Echo bekam eine abgelaufene Nummer und blieb still;
+  // erst der zweite Versuch fand eine frische im Zwischenspeicher. Jetzt
+  // passiert die Anmeldung schon beim Oeffnen, wo Zeit ist.
+  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
+  const { redis, gelesen } = redisMitProtokoll({ [REDIS_KEY]: [a.playlist] });
+
+  const r = await mitBudget(9000, () => skill({ type: 'LaunchRequest' }, {}, null, redis));
+  assert.ok(gelesen.includes('musik_fritz_sid'), 'die Sitzung wird beim Oeffnen geholt');
+  // Und die Frage kommt trotzdem: Der Login scheitert hier am toten Host, und
+  // das darf den ersten Schritt nicht aufhalten - der zweite versucht es noch
+  // einmal, dann mit warmen Verbindungen.
+  assert.match(r.outputSpeech.text, /Welche Playlist soll ich spielen/);
+  assert.equal(r.shouldEndSession, false);
+});
+
+test('Ohne FRITZ!NAS-Playlist wird beim Oeffnen nichts geholt', async () => {
+  const { redis, gelesen } = redisMitProtokoll({ [REDIS_KEY]: [KINDER] });
+  await mitBudget(9000, () => skill({ type: 'LaunchRequest' }, {}, null, redis));
+  assert.ok(!gelesen.includes('musik_fritz_sid'), 'ohne Freigabe gibt es nichts vorzuwaermen');
+});
+
+test('Bei zwei Freigaben wird nicht geraten', async () => {
+  // Jede Anmeldung beendet laut AVM alle Sitzungen der Box. Welche Freigabe
+  // gemeint ist, steht beim Oeffnen noch nicht fest - und die falsche zu
+  // waehlen naehme der richtigen gerade die Sitzung.
+  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
+  const b = unerreichbar('Hoerspiele', 'bbbb2222bbbb2222');
+  const { redis, gelesen } = redisMitProtokoll({ [REDIS_KEY]: [a.playlist, b.playlist] });
+  await mitBudget(9000, () => skill({ type: 'LaunchRequest' }, {}, null, redis));
+  assert.ok(!gelesen.includes('musik_fritz_sid'), 'zwei Freigaben: keine Wahl treffen');
+});
+
+test('Reicht die Zeit beim Oeffnen nicht, wird die Frage nicht aufgehalten', async () => {
+  // Das knappe Budget der Testsuite ist genau dieser Fall: Dann bleibt es beim
+  // bisherigen Weg, und der zweite Schritt meldet sich an.
+  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
+  const { redis, gelesen } = redisMitProtokoll({ [REDIS_KEY]: [a.playlist] });
+  const r = await skill({ type: 'LaunchRequest' }, {}, null, redis);
+  assert.ok(!gelesen.includes('musik_fritz_sid'));
+  assert.match(r.outputSpeech.text, /Welche Playlist soll ich spielen/);
 });
 
 test('Check URLs prueft die FRITZ!NAS-Adressen mit der frischen Sitzungsnummer', async () => {
@@ -1356,10 +1423,11 @@ test('fuenf Minuten sind die Grenze', async () => {
   });
 
   assert.equal(await sidDerDirektive(mit(4), 'Schlaflieder'), 'eigenesitzung11', 'vier Minuten: noch gut');
-  // Sechs Minuten: Es wird eine neue geholt, das scheitert am toten Host, und
-  // die gemerkte darf danach noch als letzter Versuch dienen - sie gehoert ja
-  // zu dieser Freigabe.
-  assert.equal(await sidDerDirektive(mit(6), 'Schlaflieder'), 'eigenesitzung11');
+  // Sechs Minuten: Es wird eine neue geholt, das scheitert am toten Host - und
+  // damit ist die gemerkte aus dem Rennen. Sie mag noch gut sein oder nicht;
+  // darauf zu wetten hiess im Betrieb, dem Hoerenden Stille zu servieren.
+  assert.equal(await sidDerDirektive(mit(6), 'Schlaflieder'), null);
+  assert.match(await satzBeimSpielen(mit(6), 'Schlaflieder'), /nicht an die FRITZ!Box/);
 });
 
 test('der alte Zwischenspeicher je Freigabe wird als leer gelesen', async () => {
