@@ -603,11 +603,22 @@
                         lines.push('ℹ️ Checked with a current FRITZ!Box session number — the same one the Echo would get.');
                     }
                     for (const e of r.ergebnisse) {
-                        const icon = e.fehler ? '❌' : (e.range ? '✅' : '⚠️');
-                        const detail = e.fehler
-                            ? e.fehler
-                            : `${e.status} ${e.contentType || ''}${e.range ? '' : ' · no range support'}`;
-                        lines.push(`${icon} ${esc(e.url)} — ${esc(detail)}`);
+                        // Vier Stufen statt zwei. Die Sanduhr ist die neue: Die
+                        // Datei laedt einwandfrei, laeuft aber laenger, als die
+                        // FRITZ!Box-Sitzung gilt - ein Fall, den ein Abruf von
+                        // einem Byte nie zeigen konnte.
+                        const icon = e.fehler ? '❌' : (e.zuLang ? '⏳' : (e.range ? '✅' : '⚠️'));
+                        const teile = [];
+                        if (e.fehler) {
+                            teile.push(e.fehler);
+                        } else {
+                            teile.push(`${e.status} ${e.contentType || ''}`.trim());
+                            if (e.groesse) teile.push(e.dauer ? `${e.groesse}, ~${e.dauer}` : e.groesse);
+                            else teile.push('length not reported');
+                            if (!e.range) teile.push('no range support');
+                            if (e.zuLang) teile.push('longer than a FRITZ!Box session lasts — see section 9');
+                        }
+                        lines.push(`${icon} ${esc(e.url)} — ${esc(teile.join(' · '))}`);
                     }
                     ab = r.weiter;
                     list.innerHTML = lines.map(l => `<div>${l}</div>`).join('') + (ab !== null ? '<div>…</div>' : '');

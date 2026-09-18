@@ -29,6 +29,12 @@ import {
   reihenfolge,
   titelAn,
   neuerSeed,
+  groesseAusContentRange,
+  lesbareGroesse,
+  spieldauerSekunden,
+  lesbareDauer,
+  laengerAlsSitzung,
+  adresseKurz,
   handleSkill,
   handleManage,
   fritzSidMerken,
@@ -410,6 +416,59 @@ test('Shuffle antwortet mit einem Satz', async () => {
 test('PlaybackStarted und SessionEnded bleiben still', async () => {
   assert.deepEqual(await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Kinderlieder|0|0|0' }), {});
   assert.deepEqual(await skill({ type: 'SessionEndedRequest' }), {});
+});
+
+// --- Wie gross ist die Datei? -------------------------------------------------------
+
+test('groesseAusContentRange liest die Gesamtgroesse, sonst nichts', () => {
+  assert.equal(groesseAusContentRange('bytes 0-0/52428800'), 52428800);
+  assert.equal(groesseAusContentRange('bytes 0-0 / 52428800'), 52428800);
+  assert.equal(groesseAusContentRange('bytes 0-0/*'), null, 'Laenge unbekannt');
+  assert.equal(groesseAusContentRange(null), null, 'Kopf fehlt ganz');
+  assert.equal(groesseAusContentRange('Unsinn'), null);
+  assert.equal(groesseAusContentRange('bytes 0-0/0'), null, 'null Bytes ist keine Datei');
+});
+
+test('Groesse und Dauer werden lesbar ausgedrueckt', () => {
+  assert.equal(lesbareGroesse(3145728), '3,0 MB');
+  assert.equal(lesbareGroesse(52428800), '50 MB');
+  assert.equal(lesbareGroesse(204800), '200 KB');
+  assert.equal(lesbareGroesse(null), null);
+
+  assert.equal(lesbareDauer(45), '45 Sekunden');
+  assert.equal(lesbareDauer(600), '10 Minuten');
+  assert.equal(lesbareDauer(7200), '2 Stunden');
+  assert.equal(lesbareDauer(5400 + 600), '1 Std. 40 Min.');
+  assert.equal(lesbareDauer(null), null);
+});
+
+test('laengerAlsSitzung warnt erst, wenn es sicher nicht reicht', () => {
+  // Gerechnet mit 320 kbit/s, also der KUERZESTEN plausiblen Spieldauer:
+  // Hinter der Warnung soll eine Gewissheit stehen, keine Annahme.
+  assert.equal(laengerAlsSitzung(3145728), false, 'ein Lied');
+  assert.equal(laengerAlsSitzung(52428800), true, 'ein Hoerspiel');
+  assert.equal(laengerAlsSitzung(null), false, 'ohne Groesse keine Behauptung');
+
+  // Die Schwelle selbst: zehn Minuten bei 320 kbit/s sind 24 MB.
+  const zehnMinuten = (320 * 1000 * 600) / 8;
+  assert.equal(laengerAlsSitzung(zehnMinuten - 1000), false);
+  assert.equal(laengerAlsSitzung(zehnMinuten + 1000), true);
+});
+
+test('spieldauerSekunden rechnet mit der angenommenen Bitrate', () => {
+  assert.equal(spieldauerSekunden((128 * 1000 * 60) / 8), 60, 'eine Minute bei 128 kbit/s');
+  assert.equal(spieldauerSekunden((320 * 1000 * 60) / 8, 320), 60);
+  assert.equal(spieldauerSekunden(null), null);
+});
+
+test('adresseKurz verraet die Sitzungsnummer nicht', () => {
+  const url = 'https://box.myfritz.net:456/nas/cgi-bin/luacgi_notimeout?sid=abcdef1234567890&c=music';
+  const kurz = adresseKurz(url);
+  assert.match(kurz, /box\.myfritz\.net:456/, 'Host und Port stehen drin');
+  assert.match(kurz, /sid…7890/, 'nur die letzten vier Stellen');
+  assert.doesNotMatch(kurz, /abcdef123456/, 'der Rest der Nummer nicht');
+  assert.equal(adresseKurz('kaputt'), '(keine gueltige Adresse)');
+  assert.match(adresseKurz('https://h.de/a.mp3'), /ohne sid/);
 });
 
 // --- Der Skill schweigt nie ---------------------------------------------------------
@@ -1165,10 +1224,23 @@ function unerreichbar(name, id) {
   };
 }
 
-/** Welche Sitzungsnummer steckt in der Adresse, die Alexa bekommen hat? */
+/**
+ * Welche Sitzungsnummer steckt in der Adresse, die Alexa bekommen hat?
+ *
+ * `null`, wenn gar nicht gespielt wurde - seit der Skill ohne frische Nummer
+ * nichts mehr verspricht, ist das ein eigenes, gueltiges Ergebnis und kein
+ * Fehler des Tests.
+ */
 async function sidDerDirektive(redis, name) {
   const r = await skill(intent('PlayPlaylistIntent', name), {}, null, redis);
-  return new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid');
+  const url = r.directives?.[0]?.audioItem?.stream?.url;
+  return url ? new URL(url).searchParams.get('sid') : null;
+}
+
+/** Was Alexa dabei gesagt hat. */
+async function satzBeimSpielen(redis, name) {
+  const r = await skill(intent('PlayPlaylistIntent', name), {}, null, redis);
+  return r.outputSpeech?.text ?? '';
 }
 
 test('die gemerkte Sitzung einer ANDEREN Freigabe wird nicht verwendet', async () => {
@@ -1176,9 +1248,12 @@ test('die gemerkte Sitzung einer ANDEREN Freigabe wird nicht verwendet', async (
   // B sie eingesetzt, kaeme am Echo die Anmeldeseite der Box statt Musik - die
   // Box hat A's Sitzung beendet, als B's Freigabe geoeffnet wurde.
   //
-  // Der Host antwortet nicht, das Neuholen scheitert also. Genau daran ist es
-  // pruefbar: Es bleibt die gespeicherte Adresse stehen, nicht die fremde
-  // Nummer.
+  // Der Host antwortet nicht, das Neuholen scheitert also. Frueher blieb dann
+  // die gespeicherte Adresse stehen und Alexa sagte "Ich spiele …" - ein
+  // Versprechen mit einer Nummer aus der Importzeit, das der Echo nicht halten
+  // konnte. Jetzt wird gar nicht erst gestartet, und das ist die staerkere
+  // Zusicherung: Die fremde Nummer taucht nirgends auf, und niemand wartet
+  // vergeblich auf Ton.
   const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
   const b = unerreichbar('Udo CD zwei', 'bbbb2222bbbb2222');
   const redis = redisMit({
@@ -1186,7 +1261,8 @@ test('die gemerkte Sitzung einer ANDEREN Freigabe wird nicht verwendet', async (
     musik_fritz_sid: { link: a.link, sid: 'fremdesitzung11', zeit: Date.now() },
   });
 
-  assert.equal(await sidDerDirektive(redis, 'Udo CD zwei'), 'gespeichertexxxx');
+  assert.equal(await sidDerDirektive(redis, 'Udo CD zwei'), null, 'es wird nicht gespielt');
+  assert.match(await satzBeimSpielen(redis, 'Udo CD zwei'), /komme gerade nicht an die FRITZ!Box/);
 });
 
 test('die gemerkte Sitzung DERSELBEN Freigabe wird verwendet', async () => {
@@ -1217,14 +1293,16 @@ test('fuenf Minuten sind die Grenze', async () => {
 
 test('der alte Zwischenspeicher je Freigabe wird als leer gelesen', async () => {
   // Vor dieser Fassung stand dort eine Zuordnung Link -> Nummer. Aus ihr darf
-  // keine Nummer mehr herausgelesen werden, auch nicht zufaellig.
+  // keine Nummer mehr herausgelesen werden, auch nicht zufaellig. Ohne
+  // brauchbare Nummer und mit totem Host wird nicht gespielt.
   const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
   const redis = redisMit({
     [REDIS_KEY]: [a.playlist],
     musik_fritz_sid: { [a.link]: { sid: 'altesformat1111', zeit: Date.now() } },
   });
 
-  assert.equal(await sidDerDirektive(redis, 'Schlaflieder'), 'gespeichertexxxx');
+  assert.equal(await sidDerDirektive(redis, 'Schlaflieder'), null);
+  assert.doesNotMatch(await satzBeimSpielen(redis, 'Schlaflieder'), /altesformat/);
 });
 
 test('fritzSidMerken legt genau einen Datensatz ab', async () => {

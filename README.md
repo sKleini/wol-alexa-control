@@ -436,6 +436,26 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 
 **Alexa routine** (optional): *Mehr → Routinen → +* → *Wenn: Sprache* `musik an` → *Aktion: Angepasst → Skills → Meine Plattenkiste*. A routine cannot pass a parameter, so it opens the skill and Alexa asks which playlist.
 
+##### One long file is not one long track
+
+A session number for the FRITZ!NAS lasts about ten minutes, extended by active
+use. A three-minute song is done long before that. **An hour-long audio play is
+not**: the Echo pulls it in ranges across that whole hour, every range carrying
+the same number, and nothing guarantees it survives. Any refresh elsewhere ends
+*all* sessions on the box as well, so a second playlist or a press of *Check
+URLs* can pull the ground out from under a running one.
+
+*Check URLs* therefore reports the size and an estimated duration for every
+track, and marks with ⏳ whatever plays longer than a session lasts. The
+estimate assumes 128 kbit/s; the warning itself is calculated at 320 kbit/s, the
+shortest plausible duration, so that a warning is a certainty rather than a
+guess. The import says the same thing at the moment it matters most, while the
+playlist is being created.
+
+The remedy is not in the skill — the Echo does the loading and the box forgets
+the number underneath it. **Split long recordings into chapters.** That also
+makes *Resume* land somewhere sensible instead of in the middle of an hour.
+
 ##### Why the skill never goes silent
 
 Alexa gives a skill about **eight seconds**, then gives up — and the person
@@ -450,6 +470,13 @@ hesitates for a moment after *"Welche Playlist soll ich spielen?"* used to talk
 into a closed line, try again faster, and see it work the second time. The
 reprompt is deliberately shorter than the first question — whoever just heard
 the names does not need them again.
+
+**The skill no longer promises what it cannot keep.** If no session number can
+be fetched, the stored addresses still carry the one from import time, which is
+almost certainly dead — the box answers such a request with its own web page,
+and the Echo drops it without a word. Alexa used to say *"Ich spiele …"*
+anyway. Now it says it cannot reach the box, and each start logs host, port and
+the last four digits of the session number, never the whole one.
 
 **Every request runs on a time budget** of 6.5 seconds, adjustable through
 `MUSIK_BUDGET_MS` and re-read on every request. Database lookups that overrun it
@@ -477,6 +504,8 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | Nothing at all happens after the second sentence | the session had already closed, or the answer arrived too late | should no longer occur — see **Why the skill never goes silent** below; check the `musik-box … ms` line in the Vercel logs |
 | "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
+| Alexa confirms, then silence — FRITZ!NAS, large file | the track plays longer than a session number lasts | **Check URLs** now shows ⏳ for those; split the file into chapters, see below |
+| "Ich komme gerade nicht an die FRITZ!Box" | no session number could be fetched | the box was unreachable or slow; say it again |
 | First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |
 | "Weiter" restarts the track | host without range support | **Check URLs** shows ⚠️ — pick another host |
 | *Import folder* finds nothing | the page builds its file list in the browser, or the link is not a folder share | the answer says which of the two it is; for a FRITZ!Box use the share link of the **folder**, not of the NAS web interface |
