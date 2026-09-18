@@ -7,6 +7,11 @@
 // node:assert reichen, und sie laufen in derselben CI wie die Modell-Pruefung.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+
+// Das Antwortbudget des Skills auf einen Testwert. Wirkt, weil lib/musik.js es
+// bei jedem Request neu liest - eine Konstante beim Laden des Moduls waere hier
+// nicht mehr zu erreichen, denn ES-Module fuehren ihre Importe vorher aus.
+process.env.MUSIK_BUDGET_MS = '300';
 import {
   titelnameAusUrl,
   validierePlaylist,
@@ -407,12 +412,51 @@ test('PlaybackStarted und SessionEnded bleiben still', async () => {
   assert.deepEqual(await skill({ type: 'SessionEndedRequest' }), {});
 });
 
-test('Ein lesbarer Redis-Fehler bricht den Skill nicht', async () => {
+// --- Der Skill schweigt nie ---------------------------------------------------------
+
+test('Ein Redis-Fehler sagt es, statt eine leere Liste vorzutaeuschen', async () => {
+  // Frueher hiess es hier "es ist noch keine Playlist angelegt" - und wer fuenf
+  // angelegt hatte, suchte den Fehler im Dashboard, wo keiner war.
   const res = antwortFaenger();
   const kaputt = { async get() { throw new Error('offline'); } };
   await handleSkill(anfrage({ type: 'LaunchRequest' }), res, kaputt);
   assert.equal(res.statusCode, 200);
-  assert.match(res.body.response.outputSpeech.text, /keine Playlist angelegt/);
+  assert.match(res.body.response.outputSpeech.text, /komme gerade nicht an deine Playlists/);
+});
+
+test('Eine wirklich leere Liste bleibt der Dashboard-Hinweis', async () => {
+  // Die beiden Faelle muessen unterscheidbar bleiben, das ist der ganze Punkt.
+  const r = await skill({ type: 'LaunchRequest' }, {}, []);
+  assert.match(r.outputSpeech.text, /keine Playlist angelegt/);
+});
+
+test('Ein Redis, das nie antwortet, laesst Alexa trotzdem sprechen', async () => {
+  // Ohne Frist wartete der Skill, bis Alexa aufgab - und der Sprechende hoerte
+  // gar nichts. Das Budget steht fuer diesen Test auf 300 ms (siehe unten).
+  const res = antwortFaenger();
+  const haengt = { get: () => new Promise(() => {}) };
+  const begonnen = Date.now();
+  await handleSkill(anfrage({ type: 'LaunchRequest' }), res, haengt);
+  assert.ok(Date.now() - begonnen < 2000, 'antwortet binnen Frist statt zu haengen');
+  assert.match(res.body.response.outputSpeech.text, /komme gerade nicht an deine Playlists/);
+});
+
+test('Eine offene Rueckfrage traegt ein Reprompt, eine Wiedergabe nicht', async () => {
+  // Ohne Reprompt beendet Alexa die Sitzung kommentarlos, und der naechste Satz
+  // geht ins Leere - der haeufigste Grund fuer "klappt erst beim zweiten Mal".
+  const frage = await skill({ type: 'LaunchRequest' });
+  assert.equal(frage.shouldEndSession, false);
+  assert.match(frage.reprompt.outputSpeech.text, /Welche Playlist soll ich spielen/);
+
+  const spielt = await skill(sucheIntent('kinderlieder'));
+  assert.equal(spielt.shouldEndSession, true);
+  assert.equal(spielt.reprompt, undefined, 'neben AudioPlayer.Play waere es ungueltig');
+});
+
+test('Das Nachfragen zaehlt die Namen nicht noch einmal auf', async () => {
+  const r = await skill(sucheIntent('Bundesliga'));
+  assert.match(r.outputSpeech.text, /Ich kenne/, 'die erste Antwort nennt sie');
+  assert.doesNotMatch(r.reprompt.outputSpeech.text, /Ich kenne/, 'das Nachfragen nicht');
 });
 
 // --- Der Name aus freiem Text (AMAZON.SearchQuery) ---------------------------------

@@ -436,9 +436,40 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 
 **Alexa routine** (optional): *Mehr → Routinen → +* → *Wenn: Sprache* `musik an` → *Aktion: Angepasst → Skills → Meine Plattenkiste*. A routine cannot pass a parameter, so it opens the skill and Alexa asks which playlist.
 
+##### Why the skill never goes silent
+
+Alexa gives a skill about **eight seconds**, then gives up — and the person
+hears *nothing at all*, which is the worst of all answers because no one can
+tell whether anyone was listening. Two mechanisms keep the skill inside that
+window, and both exist because it once did not.
+
+**Every answer that keeps the session open carries a reprompt.** Without one,
+Alexa closes the session after a few seconds *without saying so*: the
+microphone shuts, and the next sentence no longer reaches the skill. Anyone who
+hesitates for a moment after *"Welche Playlist soll ich spielen?"* used to talk
+into a closed line, try again faster, and see it work the second time. The
+reprompt is deliberately shorter than the first question — whoever just heard
+the names does not need them again.
+
+**Every request runs on a time budget** of 6.5 seconds, adjustable through
+`MUSIK_BUDGET_MS` and re-read on every request. Database lookups that overrun it
+fall back instead of waiting, and the skill says so rather than going quiet. The
+biggest item on that budget is the **FRITZ!Box login**: the box is slow, its
+session number is only kept for five minutes, and every longer pause used to
+force a fresh login on the critical path. If the remaining budget no longer
+covers one, the skill now plays with the remembered number instead. Should that
+number be stale, the first track fails — and a failed track already triggers a
+fresh login and carries on with the next one. Silence becomes a short delay.
+
+Each request logs its own duration as `musik-box <type> in <n> ms`. That line
+separates the skill's own work from the cold start, which the Vercel timing
+alone cannot.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | "Es gab ein Problem mit der Antwort des Skills" | `MUSIK_SKILL_ID` missing or wrong → `401` | step 6, redeploy |
+| Nothing at all happens after the second sentence | the session had already closed, or the answer arrived too late | should no longer occur — see **Why the skill never goes silent** below; check the `musik-box … ms` line in the Vercel logs |
+| "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
 | First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |
 | "Weiter" restarts the track | host without range support | **Check URLs** shows ⚠️ — pick another host |

@@ -260,6 +260,10 @@ function frageNach(res, intent, frage) {
     version: '1.0',
     response: {
       outputSpeech: { type: 'PlainText', text: frage },
+      // Auch hier: Ohne Reprompt beendet Alexa die Sitzung nach wenigen
+      // Sekunden kommentarlos, und das "ja" geht ins Leere - bei einer
+      // Rueckfrage, auf die jemand kurz nachdenkt, besonders wahrscheinlich.
+      reprompt: { outputSpeech: { type: 'PlainText', text: frage } },
       shouldEndSession: false,
       directives: [{ type: 'Dialog.ConfirmIntent', updatedIntent: intent }],
     },
