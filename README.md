@@ -111,6 +111,7 @@ Custom Skill "Meine Plattenkiste" → /api/skill (same endpoint, routed by skill
 | `ALEXA_SKILL_ID` | *(optional, location feature)* Skill ID of the custom skill (`amzn1.ask.skill....`) |
 | `DEFAULT_PERSON` | *(optional, location feature)* Fallback person name (e.g. `Julia`) |
 | `MUSIK_SKILL_ID` | *(optional, Meine Plattenkiste)* Skill ID of the **Meine Plattenkiste** custom skill (`amzn1.ask.skill....`, see section 9). Both custom skills point at `/api/skill`; this ID is how the endpoint tells them apart |
+| `MUSIK_VORLAUF_MS` | *(optional, Meine Plattenkiste)* How far *Resume* rewinds behind the remembered spot, in milliseconds. Default `5000`; `0` resumes on the exact millisecond. Re-read on every request, like `MUSIK_BUDGET_MS` |
 
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
 
@@ -353,7 +354,7 @@ The remaining steps stay manual: the GPSLogger setup on the phone (8.1), creatin
 
 Play your own MP3s on any Echo: a playlist is a **name plus a list of URLs**, managed in the dashboard. The Echo streams each file straight from its URL, so there is no media server, no NAS access and no VPS component — only the URLs have to be reachable from the internet. Two switches per playlist decide how it behaves. **Repeat** says what happens after the last track: start over and keep going until you say *"Alexa, Stopp"*, or end there. **Announce** says whether Alexa confirms with *"Ich spiele …"* before the first track, or the music simply starts.
 
-**How it works:** the dashboard stores playlists in Redis (`musik_playlists`, plus `musik_stand` for the resume marks). A third Alexa skill (type **Custom**, with the **AudioPlayer** interface) reads them and answers every `PlayPlaylistIntent` with an `AudioPlayer.Play` directive. Shortly before a track ends Alexa asks the skill (`PlaybackNearlyFinished`) and gets the next track enqueued — after the last one, the first again. The state lives in the stream token (`<playlist>|<track>|<round>`), not in the database, so nothing can go stale.
+**How it works:** the dashboard stores playlists in Redis (`musik_playlists`, plus `musik_stand` for the resume marks). A third Alexa skill (type **Custom**, with the **AudioPlayer** interface) reads them and answers every `PlayPlaylistIntent` with an `AudioPlayer.Play` directive. Shortly before a track ends Alexa asks the skill (`PlaybackNearlyFinished`) and gets the next track enqueued — after the last one, the first again. The state lives in the stream token (`<playlist>|<track>|<round>`), not in the database, so nothing can go stale — the one exception is the resume mark, which is the one thing a token cannot carry across a silent night.
 
 > **Why the skill shares `/api/skill` with "familien finder".** Vercel's Hobby plan allows twelve serverless functions and `api/` has exactly twelve (the `API-Funktionen zaehlen` workflow enforces it). The logic therefore lives in `lib/musik.js`; `api/skill.js` routes by skill ID and `api/manage.js` serves the dashboard under `?type=playlists`.
 
@@ -404,7 +405,10 @@ Only the playlist this request is about gets refreshed — fetching a number cos
 - **Repeat** decides what happens after the last track: on, the playlist starts over; off, it ends.
 - **Announce** decides whether Alexa says *"Ich spiele Kinderlieder."* before the music. Off is for playlists that start as part of a routine, where a voice in front of the music is in the way. Follow-up questions and error messages are unaffected — a playlist Alexa cannot find still says so.
 - **Shuffle** plays the tracks in a random order, reshuffled at the start of every round so a long session does not repeat the same sequence. The order is derived from a number in the stream token, so nothing extra is stored and *"nächster Titel"* still walks the shuffled order.
-- **Resume** picks up where the playlist last stopped, across days and across Echo devices. Worth it for audiobooks, pointless for children's songs. The position is kept per playlist, not per person: whoever carries on in the kids' room continues where the living room left off, which is what a household wants and what a public skill would call a flaw. A finished playlist and *"von vorn"* both clear the mark.
+- **Resume** picks up where the playlist last stopped — **to the second, not just to the track**. Stop thirty seconds into a three-minute song and the next start plays that song from 0:25, not from the beginning. Worth it for audiobooks, pointless for children's songs. It works across days and across Echo devices, and the position is kept per playlist, not per person: whoever carries on in the kids' room continues where the living room left off, which is what a household wants and what a public skill would call a flaw. A finished playlist and *"von vorn"* both clear the mark.
+  - **The rewind is deliberate.** Five seconds (`MUSIK_VORLAUF_MS`), because whoever stops in mid-sentence wants the sentence, not its second half — every audiobook player does this. It settles the other edge too: stop after four seconds and the track starts over instead of skipping them.
+  - **A stop in the last seconds continues with the next track.** About ten seconds before the end Alexa asks for the next track and gets it queued; from that moment the mark has already moved on, and a stop arriving afterwards no longer pulls it back. Alexa's own *"nearly finished"* is the signal here — more reliable than any playing time computed from the file size, and it needs nothing stored per track.
+  - **The switch is off for playlists that existed before it.** If *Resume* seems not to work, that is the first thing to check: dashboard → edit the playlist → *Resume* → *Save Playlist*.
 - **Repeat and Announce are on** for new playlists, **Shuffle and Resume are off** — in each case the way the skill behaved before that switch existed, so playlists created earlier keep their old behaviour untouched.
 - **Save** upserts by name (case-insensitive). **Edit** loads a playlist back into the form, **Check URLs** tests every link, the trash icon deletes.
 - The **arrows** move a playlist up or down, and **Sort A–Z** puts the whole list in alphabetical order once (umlauts sort as their base letter, not behind Z). The order is stored, not just displayed — it is also the order Alexa reads out when she asks which playlist to play, so the bedtime list does not have to come last. A–Z is an action rather than a view setting, so moving a single entry afterwards still works.
@@ -429,6 +433,8 @@ Development mode is enough: the skill works on every Echo of your Amazon account
 That takes two intents, because a `SearchQuery` sample may not consist of the slot alone and always needs a carrier word in front of it — which is exactly what answering the skill's own question requires. So `SuchePlaylistIntent` (free text, always with a carrier word) handles the one-shot call, and `PlayPlaylistIntent` (the `PLAYLIST_NAME` slot, sample `{playlist}`) handles *"Welche Playlist?"* → *"Taschenlampe"*. Both end up in the same handler.
 
 Three phrasings had to go for this, since the slot must sit at the end: *"Taschenlampe abspielen"*, *"Taschenlampe zu spielen"* and *"ich möchte Taschenlampe hören"*. The skill is forgiving with the rest: *"spiele Kinder"* starts *Kinderlieder*, and filler words do not matter.
+
+**Afterwards:** *"Alexa, weiter"* works even when the Echo has forgotten the stream — after the radio in between, or the next day. Without a running stream the skill falls back on the newest resume mark and carries on with the playlist that was stopped last. Only playlists with *Resume* on leave such a mark.
 
 **While playing:** *"Alexa, nächster Titel"*, *"voriger Titel"*, *"Pause"*, *"weiter"*, *"von vorn"* and *"Stopp"* work as usual, as do the buttons on Echo Show and in the Alexa app. *"Zufallswiedergabe an"* and *"aus"* reshuffle the running playback without touching the stored playlist — the order lives in the token, so the change reaches exactly this one stream. Asking Alexa to repeat, on the other hand, only reports how the running playlist is set and points at the dashboard: flipping that one by voice would change the playlist for good and for everyone. A track that fails to load is skipped; if every track of a round fails, playback stops instead of circling forever.
 
@@ -460,8 +466,9 @@ with a `~` in front of it. The import says the same thing at the moment it
 matters most, while the playlist is being created.
 
 The remedy is not in the skill — the Echo does the loading and the box forgets
-the number underneath it. **Split long recordings into chapters.** That also
-makes *Resume* land somewhere sensible instead of in the middle of an hour.
+the number underneath it. **Split long recordings into chapters.** *Resume* is
+to the second either way, but a chapter is also what the Echo can still load
+when the evening is over.
 
 ##### Why the skill never goes silent
 
@@ -548,6 +555,7 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | "Ich komme gerade nicht an die FRITZ!Box" | no current session number, and the remembered one is past its window | the box was unreachable or slow; say it again. The skill no longer starts with a number it does not trust — see below |
 | First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |
 | "Weiter" restarts the track | host without range support | **Check URLs** shows ⚠️ — pick another host |
+| A playlist starts from the beginning although it was stopped in the middle | *Resume* is off — it is off for new playlists and for every playlist created before the switch existed | dashboard → edit the playlist → *Resume* → *Save Playlist* |
 | *Import folder* finds nothing | the page builds its file list in the browser, or the link is not a folder share | the answer says which of the two it is; for a FRITZ!Box use the share link of the **folder**, not of the NAS web interface |
 | Playlist not understood | new name, first sentence of the session | open the skill first, then say the name; or add the value to the model |
 | Model build fails: `AMAZON.PauseIntent required` | AudioPlayer enabled, intent missing | use the JSON from the repo |
