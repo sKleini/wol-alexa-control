@@ -46,8 +46,11 @@
 
         .input-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 6px; color: rgba(255,255,255,0.8); font-size: 0.9rem; }
-        input, textarea { width: 100%; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 12px; color: white; outline: none; transition: 0.3s; }
-        input:focus, textarea:focus { border-color: var(--primary); background: rgba(255,255,255,0.07); }
+        input, textarea, select { width: 100%; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 12px; color: white; outline: none; transition: 0.3s; }
+        input:focus, textarea:focus, select:focus { border-color: var(--primary); background: rgba(255,255,255,0.07); }
+        /* Die Optionsliste zeichnet das Betriebssystem, nicht diese Seite: ohne
+           eigene Farben steht sie auf manchen Browsern weiss auf weiss. */
+        select option { background: #1a1a20; color: white; }
         textarea { min-height: 140px; resize: vertical; font-family: monospace; font-size: 0.85rem; line-height: 1.5; }
 
         .btn { width: 100%; padding: 14px; border-radius: 12px; border: none; color: white; font-weight: 600; cursor: pointer; transition: 0.3s; }
@@ -192,7 +195,7 @@
             <h1><i class="fas fa-music"></i> Playlists</h1>
 
             <div class="hint">
-                <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — worth it for audiobooks, not for children's songs.<br>
+                <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks).<br>
                 Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
                 <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
                 For FRITZ!NAS, saving also keeps the folder link with the playlist, so the skill renews the box's session number on every play. No re-import needed.
@@ -232,10 +235,12 @@
                     </label>
                 </div>
                 <div class="input-group">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                        <input type="checkbox" id="playlist-resume" style="width: auto;">
-                        Resume — pick up where this playlist last stopped, to the second, for audiobooks
-                    </label>
+                    <label for="playlist-resume">Resume — pick up where this playlist last stopped</label>
+                    <select id="playlist-resume">
+                        <option value="aus" selected>Off — always start at the first track</option>
+                        <option value="titel">Album — replay the stopped track from its beginning</option>
+                        <option value="sekunde">Audiobook — resume to the second</option>
+                    </select>
                 </div>
                 <button type="submit" class="btn btn-add"><i class="fas fa-save"></i> Save Playlist</button>
                 <div class="form-status" id="playlist-status"></div>
@@ -465,7 +470,7 @@
                     pl.wiederholen !== false ? 'repeats' : 'plays once',
                     pl.ansage !== false ? 'announced' : 'silent start',
                     pl.zufall === true ? 'shuffled' : null,
-                    pl.fortsetzen === true ? 'resumes' : null,
+                    fortsetzText(pl.fortsetzen),
                 ].filter(Boolean).join(' · ');
                 info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${zustand}</p>`;
                 if (pl.quelle?.typ === 'fritz') info.querySelector('p').append(' · ', quelleMarke(pl.quelle));
@@ -557,6 +562,15 @@
             return huelle;
         }
 
+        // Dieselbe Regel wie fortsetzArt im Backend - ein `true` aus der Zeit
+        // vor den Gangarten heisst weiter "sekundengenau". Ein strenges
+        // `=== true` stuende bei einem Album stumm da und zeigte nichts an.
+        function fortsetzText(wert) {
+            if (wert === true || wert === 'sekunde') return 'resumes to the second';
+            if (wert === 'titel') return 'resumes by track';
+            return null;
+        }
+
         function editPlaylist(pl) {
             fritzQuelle = pl.quelle || null;
             // Der hinterlegte Ordner-Link gehoert sichtbar ins Feld: Sonst
@@ -567,7 +581,8 @@
             document.getElementById('playlist-repeat').checked = pl.wiederholen !== false;
             document.getElementById('playlist-announce').checked = pl.ansage !== false;
             document.getElementById('playlist-shuffle').checked = pl.zufall === true;
-            document.getElementById('playlist-resume').checked = pl.fortsetzen === true;
+            document.getElementById('playlist-resume').value =
+                pl.fortsetzen === true ? 'sekunde' : (pl.fortsetzen || 'aus');
             document.getElementById('playlist-urls').value = (pl.titel || [])
                 .map(t => t.name ? `${t.url} | ${t.name}` : t.url)
                 .join('\n');
@@ -822,7 +837,7 @@
             const wiederholen = document.getElementById('playlist-repeat').checked;
             const ansage = document.getElementById('playlist-announce').checked;
             const zufall = document.getElementById('playlist-shuffle').checked;
-            const fortsetzen = document.getElementById('playlist-resume').checked;
+            const fortsetzen = document.getElementById('playlist-resume').value;
             // Steht im Feld ein anderer Ordner als der hinterlegte, hat jemand
             // ihn getippt, aber nicht importiert. Gespeichert wird dann der
             // alte - das waere still falsch, also wird es gesagt.

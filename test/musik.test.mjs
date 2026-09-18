@@ -26,6 +26,7 @@ import {
   sagtAn,
   mischt,
   setztFort,
+  fortsetzArt,
   reihenfolge,
   titelAn,
   neuerSeed,
@@ -563,6 +564,49 @@ test('Beide Schalter: nur ein ausdrueckliches false schaltet ab', () => {
   assert.equal(sagtAn({ wiederholen: false }), true);
 });
 
+test('fortsetzArt kennt drei Zustaende und versteht den Wert von frueher', () => {
+  // `true` ist der gespeicherte Wert aus der Zeit vor den Gangarten. Er muss
+  // sekundengenau bleiben, sonst aendert ein Deployment das Verhalten jeder
+  // vorhandenen Playlist, ohne dass jemand etwas angefasst haette.
+  assert.equal(fortsetzArt({ fortsetzen: true }), 'sekunde');
+  assert.equal(fortsetzArt({ fortsetzen: 'sekunde' }), 'sekunde');
+  assert.equal(fortsetzArt({ fortsetzen: 'titel' }), 'titel');
+  assert.equal(fortsetzArt({ fortsetzen: false }), 'aus');
+  assert.equal(fortsetzArt({}), 'aus', 'fehlendes Feld: die Vorgabe');
+  assert.equal(fortsetzArt(null), 'aus', 'neue Playlist');
+  assert.equal(fortsetzArt({ fortsetzen: 'unsinn' }), 'aus');
+
+  // setztFort ist seither nur noch die Frage, ob ueberhaupt etwas gemerkt wird.
+  assert.equal(setztFort({ fortsetzen: 'titel' }), true);
+  assert.equal(setztFort({ fortsetzen: true }), true);
+  assert.equal(setztFort({}), false);
+  assert.equal(setztFort(null), false);
+});
+
+test('validierePlaylist nimmt die Gangart an und weist Unsinn ab', () => {
+  const zeile = 'https://h.de/1.mp3';
+  const wert = (body, bisher) => validierePlaylist({ name: 'A', urls: zeile, ...body }, bisher).playlist?.fortsetzen;
+
+  assert.equal(wert({}), false, 'neue Playlist setzt nicht fort');
+  assert.equal(wert({ fortsetzen: 'titel' }), 'titel');
+  assert.equal(wert({ fortsetzen: 'sekunde' }), 'sekunde');
+  assert.equal(wert({ fortsetzen: 'aus' }), false);
+  assert.equal(wert({ fortsetzen: false }), false);
+  // Ein aelteres Dashboard oder ein Skript kennt nur den Schalter.
+  assert.equal(wert({ fortsetzen: true }), 'sekunde');
+
+  // Weggelassen: der gespeicherte Wert bleibt stehen - eine Titelkorrektur
+  // darf ein Album nicht nebenbei zum Hoerbuch machen.
+  assert.equal(wert({}, { fortsetzen: 'titel' }), 'titel');
+  assert.equal(wert({}, { fortsetzen: true }), 'sekunde', 'und wird dabei normalisiert');
+  assert.equal(wert({ fortsetzen: 'aus' }, { fortsetzen: 'titel' }), false);
+
+  // Ein Tippfehler faellt nicht still auf "aus": Eine Playlist, die sich
+  // ploetzlich nichts mehr merkt, sucht man im falschen Eck.
+  const kaputt = validierePlaylist({ name: 'A', urls: zeile, fortsetzen: 'titelgenau' });
+  assert.match(kaputt.fehler, /fortsetzen/);
+});
+
 test('validierePlaylist: fehlendes Feld nimmt den Bestand, sonst die Vorgabe', () => {
   const zeile = 'https://h.de/1.mp3';
   for (const feld of ['wiederholen', 'ansage']) {
@@ -900,6 +944,75 @@ test('Ein durchgelaufener Vermerk ist fuer "weiter" kein Stand', async () => {
   const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
   assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|0|0|0', 'von vorn statt gar nicht');
   assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+});
+
+// Ein Album: setzt fort, aber titelgenau. Drei Titel wie ueberall hier.
+const ALBUM = { name: 'Album', fortsetzen: 'titel', wiederholen: false, titel: KINDER.titel };
+
+test('Album: der gemerkte Titel faengt wieder von vorn an', async () => {
+  // Wer bei Lied drei nach siebenundvierzig Sekunden aufhoert, will Lied drei
+  // ganz hoeren - nicht seine zweite Haelfte.
+  const redis = mitStand(ALBUM, { position: 2, runde: 0, seed: 0, offset: 47000 });
+  const r = await skill(sucheIntent('album'), {}, null, redis);
+  assert.equal(r.outputSpeech.text, 'Ich spiele Album weiter.');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Album|2|0|0');
+  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+});
+
+test('Hoerbuch: derselbe Stand fuehrt auf die Sekunde', async () => {
+  // Die Gegenprobe zum Album - derselbe Stand, nur die Gangart ist anders.
+  const redis = mitStand({ ...ALBUM, name: 'Hoerbuch', fortsetzen: 'sekunde' }, { position: 2, runde: 0, seed: 0, offset: 47000 });
+  const r = await skill(sucheIntent('hoerbuch'), {}, null, redis);
+  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 42000);
+});
+
+test('Album am ersten Titel heisst nicht "weiter"', async () => {
+  const redis = mitStand(ALBUM, { position: 0, runde: 0, seed: 0, offset: 47000 });
+  const r = await skill(sucheIntent('album'), {}, null, redis);
+  assert.equal(r.outputSpeech.text, 'Ich spiele Album.');
+  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+});
+
+test('Album merkt sich die Sekunde trotzdem', async () => {
+  // Sie kostet nichts, und wer spaeter auf Hoerbuch umstellt, findet sie dann
+  // vor, statt erst beim naechsten Stopp wieder eine zu bekommen.
+  const redis = mitStand(ALBUM, { position: 1, runde: 0, seed: 0, offset: 0 });
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Album|1|0|0', offsetInMilliseconds: 47000 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['album'].offset, 47000);
+});
+
+test('Album: eine Pause fuehrt trotzdem an derselben Stelle weiter', async () => {
+  // Die Gangart gilt dem spaeteren Wiederaufnehmen. Wer auf Pause drueckt,
+  // will nicht das halbe Lied noch einmal.
+  const redis = mitStand(ALBUM);
+  const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Album|1|0|0', offset: 47000 }, null, redis);
+  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 42000);
+});
+
+test('Album: "weiter" ohne laufenden Stream nimmt den Titelanfang', async () => {
+  // Der Rueckfall auf den gemerkten Stand ist das spaetere Wiederaufnehmen -
+  // dort gilt die Gangart wieder.
+  const redis = mitStand(ALBUM, { position: 2, runde: 0, seed: 0, offset: 47000, zeit: 1000 });
+  const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
+  assert.equal(r.directives[0].audioItem.stream.token, 'Album|2|0|0');
+  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+});
+
+test('handleManage haelt die Gangart ueber eine Titelaenderung hinweg', async () => {
+  const redis = redisMit();
+  const post = (body) => handleManage({ method: 'POST', query: {}, body }, antwortFaenger(), redis);
+
+  await post({ name: 'Album', urls: 'https://h.de/1.mp3', fortsetzen: 'titel' });
+  assert.equal(redis.speicher[REDIS_KEY][0].fortsetzen, 'titel');
+
+  // Zweiter Aufruf ohne das Feld: die Gangart bleibt stehen.
+  await post({ name: 'Album', urls: 'https://h.de/1.mp3\nhttps://h.de/2.mp3' });
+  assert.equal(redis.speicher[REDIS_KEY][0].titel.length, 2);
+  assert.equal(redis.speicher[REDIS_KEY][0].fortsetzen, 'titel');
+
+  // Und ausdruecklich ab.
+  await post({ name: 'Album', urls: 'https://h.de/1.mp3', fortsetzen: 'aus' });
+  assert.equal(redis.speicher[REDIS_KEY][0].fortsetzen, false);
 });
 
 test('Eine zu langsame Datenbank loescht die Staende der anderen Playlists nicht', async () => {
