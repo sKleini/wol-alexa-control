@@ -15,6 +15,7 @@ import {
   titelAusListe,
   mitSid,
   textAuszug,
+  weckUrteil,
 } from '../lib/fritznas.js'
 
 const FREIGABE = 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fbb2016f4f';
@@ -163,4 +164,28 @@ test('mitSid raeumt auch eine alt gespeicherte Adresse mit + auf', () => {
   const neu = mitSid(alt, 'bbbbbbbbbbbbbbbb');
   assert.ok(!neu.includes('+'));
   assert.equal(new URL(neu).searchParams.get('path'), '/01. Die Bühne.mp3');
+});
+
+// --- Der Weckruf an die Datei ------------------------------------------------
+//
+// Zwei Fragen, und sie sind nicht dieselbe: Kam Ton? Und war es eine Absage?
+// Nur die zweite haelt eine Wiedergabe auf - eine Zeitueberschreitung ist der
+// Normalfall bei einer Platte, die gerade anlaeuft, und kommt hier gar nicht
+// erst an (sie hat keinen Status).
+
+test('weckUrteil erkennt eine Datei am Inhaltstyp, nicht am Status allein', () => {
+  assert.equal(weckUrteil(206, 'audio/mpeg').ok, true, 'der Regelfall: ein Bereich MP3');
+  assert.equal(weckUrteil(200, 'audio/mp4').ok, true);
+  assert.equal(weckUrteil(200, 'application/octet-stream').ok, true, 'ohne Ahnung vom Typ liefert die Box das');
+  assert.equal(weckUrteil(200, '').ok, true, 'gar kein Inhaltstyp ist kein Nein');
+  assert.equal(weckUrteil(206, 'Audio/MPEG; charset=binary').ok, true, 'Schreibweise und Zusatz zaehlen nicht');
+});
+
+test('weckUrteil sagt nein, wo die Box etwas anderes als Ton schickt', () => {
+  // Der gemeldete Fall hinter "Ich spiele ...", dann Stille: Die Box schickt
+  // ihre Oberflaeche, weil die Sitzungsnummer nicht (mehr) gilt.
+  assert.equal(weckUrteil(200, 'text/html').ok, false);
+  assert.equal(weckUrteil(302, 'text/html').ok, false, 'die Umleitung auf die Anmeldung');
+  assert.equal(weckUrteil(404, 'text/html').ok, false);
+  assert.equal(weckUrteil(500, 'audio/mpeg').ok, false, 'ein Fehler bleibt einer, auch mit Audio-Etikett');
 });
