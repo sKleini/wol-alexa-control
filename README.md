@@ -633,32 +633,6 @@ die FRITZ!Box"* — which arrives, and leaves a line in the log saying why. Two
 clocks never agree exactly, so a negative or absurd lead time is discarded and
 the full window applies; a wrong budget would be worse than none.
 
-**The cheapest login is the one that never happens.** The silent attempt is
-always the one that logs in: two calls to a slow box — measured at 1951 ms —
-inside the very request that has to share Alexa's window with everything else.
-The attempt that follows finds the number remembered, is done in a third of the
-time and plays. The skill can only move that login, not avoid it: the number has
-to be there before the first note, and a one-sentence invocation (*"Alexa, spiele
-X bei meiner Plattenkiste"*) has no `LaunchRequest` for it to fall into.
-
-Knocking from outside every few minutes removes it altogether. `POST
-/api/manage?type=fritz-warm` (admin password, same as everything else there)
-walks the same three steps as the skill — remembered, asked, and only on a truly
-dead number a login — except that the asking is forced: without that it would
-return inside its own five-minute window without touching the box at all, which
-is the opposite of the point. The box extends a session on every access, so a
-session that is never left alone never expires, and the skill never logs in
-again. The first attempt then looks like the second. Only with exactly one share
-link, for the same reason as the pre-warm: a login ends every session on the box,
-and the wrong guess would take the right share's session away.
-
-It is a `type=` on `/api/manage` rather than an endpoint of its own because
-`api/` already holds the twelve functions the Vercel Hobby plan allows. The VPS
-calls it on a five-minute cron — see workflow 32 in the
-[wireguard-vps-strato](https://github.com/sKleini/wireguard-vps-strato)
-repository. The answer never carries the whole session number, only its last four
-digits: it ends up in a log file, and the number is the key to the share.
-
 Each request logs its own duration as `musik-box <type> in <n> ms`, and every
 login logs `musik-box FRITZ!NAS-Login ok nach <n> ms, <n> ms Budget uebrig`.
 Those two lines separate the skill's own work from the cold start, which the
