@@ -1730,3 +1730,208 @@ test('fritzSidMerken laesst einen kaputten Zwischenspeicher die Wiedergabe nicht
   const kaputt = { async get() { return null; }, async set() { throw new Error('offline'); } };
   await assert.doesNotReject(() => fritzSidMerken(kaputt, FRITZ_LINK, 'frischgeholt111'));
 });
+
+// --- Nachfragen statt anmelden ----------------------------------------------
+//
+// **Der Fehler, um den es hier geht.** Mitten in einem Album meldete der Echo
+// "MEDIA_ERROR_INTERNAL_SERVER_ERROR – Device playback error", und der Skill
+// sprang zum naechsten Titel. Schuld war der Skill selbst: Lief die gemerkte
+// Sitzungsnummer aus ihrem Fuenf-Minuten-Fenster, meldete er sich neu an - und
+// eine Anmeldung beendet auf der FRITZ!Box **alle** Sitzungen, auch die, mit
+// der der Echo gerade lud. Bei Titeln von vier, fuenf Minuten fiel das Fenster
+// fast immer in einen laufenden Titel.
+//
+// Die Tests hier haengen deshalb eine Box an den Draht, die sich wie das
+// Original verhaelt - genau eine Sitzung, und jede Anmeldung ersetzt sie - und
+// pruefen, welche Abrufe der Skill macht. Die Adresse ist eine aus TEST-NET-3
+// (RFC 5737): oeffentlich genug fuer die Zielpruefung, und `dns.lookup` gibt
+// eine IP-Literale ohne Netz zurueck.
+
+const BOX = 'https://203.0.113.9:456';
+const BOX_LINK = `${BOX}/nas/filelink.lua?id=535f52fbb2016f4f`;
+const boxTitel = (nr, sid) =>
+  `${BOX}/nas/cgi-bin/luacgi_notimeout?script=%2Fapi%2Fdata.lua&sid=${sid}&c=music&a=get&path=%2F0${nr}.mp3`;
+
+/** Eine Antwort, wie sie die Box schickt. */
+function boxAntwort(typ, text) {
+  return new Response(text, { status: 200, headers: { 'Content-Type': typ } });
+}
+
+/**
+ * Die Box am Draht: eine einzige Sitzung, und `filelink.lua` ersetzt sie.
+ *
+ * `abrufe` protokolliert die Pfade in ihrer Reihenfolge - daran haengt die
+ * eigentliche Zusicherung dieser Tests: dass `filelink.lua` **nicht** vorkommt,
+ * solange die gemerkte Nummer noch gilt.
+ */
+function boxAmDraht(gueltig, neue = 'cccccccccccccccc') {
+  const abrufe = [];
+  const zustand = { gueltig };
+  const vorher = globalThis.fetch;
+  globalThis.fetch = async (eingabe, init = {}) => {
+    const url = String(eingabe);
+    abrufe.push(new URL(url).pathname);
+    if (url.includes('/nas/filelink.lua')) {
+      zustand.gueltig = neue; // die Anmeldung wirft jede bestehende Sitzung raus
+      return boxAntwort('text/html', `<html><body data-sid="${neue}"></body></html>`);
+    }
+    if (url.includes('/nas/api/data.lua')) {
+      const sid = new URLSearchParams(String(init.body || '')).get('sid');
+      const daten = sid === zustand.gueltig ? { root: '/Musik', rights: { read: true } } : { error: 'no session' };
+      return boxAntwort('application/json', JSON.stringify(daten));
+    }
+    throw new Error(`unerwarteter Abruf: ${url}`);
+  };
+  return { abrufe, zustand, zurueck() { globalThis.fetch = vorher; } };
+}
+
+/** Der Skill mit einem Budget, das fuer Nachfrage und Anmeldung reicht. */
+async function skillMitBudget(request, opts, redis) {
+  const vorher = process.env.MUSIK_BUDGET_MS;
+  process.env.MUSIK_BUDGET_MS = '6500';
+  try {
+    return await skill(request, opts, null, redis);
+  } finally {
+    process.env.MUSIK_BUDGET_MS = vorher;
+  }
+}
+
+/** Eine FRITZ!NAS-Playlist an der Box oben, samt gemerkter Nummer von vorhin. */
+function boxRedis(sid, alterMinuten) {
+  return redisMit({
+    [REDIS_KEY]: [{
+      name: 'Udo CD eins',
+      quelle: { typ: 'fritz', link: BOX_LINK },
+      titel: [
+        { url: boxTitel(1, sid), name: '01' },
+        { url: boxTitel(2, sid), name: '02' },
+      ],
+    }],
+    musik_fritz_sid: { link: BOX_LINK, sid, zeit: Date.now() - alterMinuten * 60_000 },
+  });
+}
+
+const laufend = (token, offset = 0) => ({
+  request: { type: 'AudioPlayer.PlaybackNearlyFinished', token },
+  opts: { token, offset },
+});
+
+test('eine abgelaufene Frist fragt nach, statt sich neu anzumelden', async () => {
+  // Der Titelwechsel nach sechs Minuten: Die Frist ist um, die Sitzung lebt -
+  // weil der Echo sie mit jedem Abruf verlaengert hat. Frueher meldete sich
+  // der Skill hier an und riss damit den laufenden Titel aus der Box.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget(
+      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
+      { token: 'Udo CD eins|0|0|0' },
+      redis,
+    );
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'keine Anmeldung, solange die Nummer gilt');
+    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'genau ein Abruf: die Nachfrage');
+    const url = new URL(r.directives[0].audioItem.stream.url);
+    assert.equal(url.searchParams.get('sid'), 'aaaaaaaaaaaaaaaa', 'dieselbe Nummer bleibt');
+    assert.equal(url.searchParams.get('path'), '/02.mp3');
+    assert.ok(Date.now() - redis.speicher.musik_fritz_sid.zeit < 5000, 'die Frist beginnt von vorn');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('erst eine wirklich tote Nummer loest die Anmeldung aus', async () => {
+  // Die Gegenprobe: Die Box kennt die gemerkte Nummer nicht mehr (Neustart,
+  // eine fremde Freigabe). Dann ist die Anmeldung richtig - und ihr Preis,
+  // alle Sitzungen zu beenden, kostet hier nichts mehr.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
+  const box = boxAmDraht('totetotetotetote');
+  try {
+    const r = await skillMitBudget(
+      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
+      { token: 'Udo CD eins|0|0|0' },
+      redis,
+    );
+    assert.deepEqual(
+      box.abrufe,
+      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua'],
+      'nachgefragt, abgelehnt, angemeldet, gegengeprueft',
+    );
+    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
+    assert.equal(redis.speicher.musik_fritz_sid.sid, 'cccccccccccccccc');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('nach einer Anmeldung bekommt der gescheiterte Titel einen zweiten Versuch', async () => {
+  // War die Nummer tot, lag es nicht am Titel, sondern an der Adresse. Ihn zu
+  // ueberspringen hiesse, den Hoerenden fuer einen Fehler der Box zu bestrafen -
+  // er faengt dort wieder an, wo er abbrach.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('totetotetotetote');
+  try {
+    const r = await skillMitBudget(
+      {
+        type: 'AudioPlayer.PlaybackFailed',
+        token: 'Udo CD eins|0|0|0',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
+      },
+      { token: 'Udo CD eins|0|0|0', offset: 90_000 },
+      redis,
+    );
+    const stream = r.directives[0].audioItem.stream;
+    assert.equal(stream.token, 'Udo CD eins|0|0|0', 'derselbe Titel, nicht der naechste');
+    assert.equal(new URL(stream.url).searchParams.get('sid'), 'cccccccccccccccc', 'mit der neuen Nummer');
+    assert.equal(stream.offsetInMilliseconds, einstieg(90_000), 'dort, wo er abbrach - mit Vorlauf');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('galt die Nummer noch, geht es nach einem Fehler mit dem naechsten Titel weiter', async () => {
+  // Kein Sitzungsproblem, also auch kein zweiter Versuch: Dieselbe Adresse
+  // noch einmal zu laden ergaebe nur denselben Fehler. Und das alte Verhalten
+  // bleibt, wo es richtig ist.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget(
+      {
+        type: 'AudioPlayer.PlaybackFailed',
+        token: 'Udo CD eins|0|0|0',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
+      },
+      { token: 'Udo CD eins|0|0|0', offset: 90_000 },
+      redis,
+    );
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'ein Stolperer beendet nicht alle Sitzungen der Box');
+    const stream = r.directives[0].audioItem.stream;
+    assert.equal(stream.token, 'Udo CD eins|1|0|0', 'der naechste Titel');
+    assert.equal(stream.offsetInMilliseconds, 0);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('die Nachfrage haelt eine spielende Playlist ueber Stunden am Leben', async () => {
+  // Zehn Titelwechsel, jeder sechs Minuten nach dem vorigen - genau der Lauf,
+  // bei dem "Udo CD eins|10|0|0" scheiterte. Keine einzige Anmeldung, keine
+  // einzige neue Nummer: Die Sitzung traegt bis zum Schluss.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    for (let i = 0; i < 10; i++) {
+      await skillMitBudget(
+        { type: 'AudioPlayer.PlaybackNearlyFinished', token: `Udo CD eins|${i % 2}|${i}|0` },
+        { token: `Udo CD eins|${i % 2}|${i}|0` },
+        redis,
+      );
+      redis.speicher.musik_fritz_sid.zeit -= 6 * 60_000;
+    }
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'kein einziges Mal angemeldet');
+    assert.equal(box.abrufe.length, 10, 'ein Abruf je Titelwechsel');
+    assert.equal(redis.speicher.musik_fritz_sid.sid, 'aaaaaaaaaaaaaaaa');
+  } finally {
+    box.zurueck();
+  }
+});
