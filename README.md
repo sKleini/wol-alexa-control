@@ -439,6 +439,15 @@ What every silent attempt has in common, and no playing one does, is the **login
 
 So after a login the skill **spends what is left of its budget before answering, and probes the file a second time**. One change, two effects: the Echo's fetch moves away from the login, and the second line in the log says whether the box is still serving at that later moment — the observation about the box that was missing all along. Without a login none of it happens: there is no problem there, and two seconds of silence before every track would be a high price for nothing.
 
+**The first attempt at this gap contained the same class of mistake twice: arithmetic without slack.** Two constants meant the same thing and were different sizes — the pause held back 600 ms, the fetch after it demanded 900 — so the second probe could never happen in a tight budget, which is exactly where it was needed. The log said so, and it took a reported case to read it:
+
+```
+musik-box Datei angetippt: HTTP 206, audio/mpeg nach 644 ms, 2258 ms Budget uebrig
+musik-box Weckruf ausgelassen, nur noch 1300 ms Budget
+```
+
+`2258 − (2258 − 700 − 600) = 1300`. And once that was fixed, the pause landed two milliseconds short, because `setTimeout` never sleeps for exactly as long as it is told. The reserve behind the pause is also deliberately smaller than `SID_ANTWORT_RESERVE_MS`: those 700 ms protect against a network call overrunning, and after the second probe there is no call left, only `res.json()` — while the outer budget already holds a second and a half back. Taking that reserve twice halved the pause.
+
 **The 1.5 seconds are a bet, not a measurement**, so they live in an environment variable (`MUSIK_WECK_ABSTAND_MS`) rather than in the code: if the box needs longer, that is a number in Vercel's dashboard and not a deploy; `0` switches the whole second round off. And if the second probe comes back with the FRITZ!NAS interface instead of audio, nothing is promised — the Echo would get the same thing.
 
 **Silence from the box is not a No.** The check has three outcomes, and the difference matters: on a No the skill logs in, on no answer at all it does not — whoever cannot be reached will not accept a login either, and then the remembered number, still inside its window, is the best word there is. The same applies when the remaining budget is too small for a check: the window keeps its say. Staying silent while the number is very probably fine would be the worse choice.
@@ -659,7 +668,9 @@ login logs `musik-box FRITZ!NAS-Login ok nach <n> ms, <n> ms Budget uebrig`.
 Those two lines separate the skill's own work from the cold start, which the
 Vercel timing alone cannot, and say whether the login was the reason. The step
 in front of it logs too — `musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch`
-or `… ist tot` — so a log full of the first and empty of logins is what a
+or `… ist tot`, and when the box says nothing at all, **why** — `ohne Antwort
+(nicht erreichbar)` rather than the bare `ohne Antwort` that once cost a round
+of searching. So a log full of the first and empty of logins is what a
 healthy album looks like, and a login between two tracks is now the thing worth
 explaining. A starting playback adds a third line, `musik-box Datei angetippt:
 HTTP 206, audio/mpeg nach <n> ms`: that is the track itself, fetched one byte
