@@ -1996,3 +1996,60 @@ test('Check URLs meldet sich nicht an, nur weil Redis eine Weile braucht', async
     box.zurueck();
   }
 });
+
+test('die Fehlerzeile nennt den Titel, nicht nur die Stelle in der Mischung', async () => {
+  // **Warum das im Log stehen muss.** Gemeldet wurde
+  // "Token: Udo|23|0|251337043" - und damit war nicht zu sagen, welche Datei
+  // es getroffen hat: Mit Mischung ist Stelle 23 nicht Titel 24, und die
+  // Reihenfolge steht nirgends, sie wird aus dem Seed gerechnet. Ohne den
+  // Namen laesst sich die Zeile im Dashboard nicht nachschlagen, ohne die
+  // Adresse nicht sehen, welche Sitzungsnummer der Abruf getragen hat.
+  //
+  // Bei drei Titeln und diesem Seed steht an Stelle 0 der Titel mit der
+  // Nummer 1 - also "02", der zweite der Liste.
+  const gesagt = [];
+  const vorher = console.warn;
+  console.warn = (...teile) => gesagt.push(teile.join(' '));
+  try {
+    await skill(
+      {
+        type: 'AudioPlayer.PlaybackFailed',
+        token: 'Kinderlieder|0|0|251337043',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
+      },
+      { token: 'Kinderlieder|0|0|251337043', offset: 1 },
+    );
+  } finally {
+    console.warn = vorher;
+  }
+
+  const zeile = gesagt.find(z => z.startsWith('Alexa konnte nicht abspielen:'));
+  assert.ok(zeile, 'der Fehler wird ueberhaupt protokolliert');
+  assert.match(zeile, /Titel: 2\. 02 /, 'Nummer in der Liste und Name');
+  assert.match(zeile, /example\.org\/k\/02\.mp3 ohne sid/, 'und die Adresse');
+  assert.match(zeile, /Offset: 1\b/, 'der Offset trennt "nie angelaufen" von "mittendrin abgerissen"');
+});
+
+test('eine gekuerzte Playlist bringt die Fehlerzeile nicht durcheinander', async () => {
+  // Stelle 9 gibt es in einer Liste mit drei Titeln nicht mehr. Dann wird kein
+  // Titel genannt - und protokolliert wird trotzdem.
+  const gesagt = [];
+  const vorher = console.warn;
+  console.warn = (...teile) => gesagt.push(teile.join(' '));
+  try {
+    await skill(
+      {
+        type: 'AudioPlayer.PlaybackFailed',
+        token: 'Kinderlieder|9|0|0',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
+      },
+      { token: 'Kinderlieder|9|0|0' },
+    );
+  } finally {
+    console.warn = vorher;
+  }
+
+  const zeile = gesagt.find(z => z.startsWith('Alexa konnte nicht abspielen:'));
+  assert.ok(zeile);
+  assert.doesNotMatch(zeile, /Titel:/);
+});
