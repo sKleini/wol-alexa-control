@@ -462,6 +462,22 @@ An `HTTP 303` on `data.lua` is the box saying *"I do not know this number, go to
 
 **The theory behind it is weak, and that belongs here.** It is measured that the same Echo, after the same long pause, plays a playlist from a different server on the first attempt — a stuck queue would have been just as much in the way there. It costs nothing and breaks nothing, but it probably does not fix what stays silent here. So it sits behind a switch: `MUSIK_CLEAR_QUEUE=0` takes it out again, without a deploy. Only before a **start**, never at a track change: the next track is appended with `ENQUEUE`, and an emptied queue in front of that would clear away exactly what is being built.
 
+**It is not Alexa's window that decides, but a much tighter one.** Alexa accepted every answer and spoke the sentence; whether the Echo then *executes* the `Play` directive turned out to be a different question. Measured on an Echo that had been idle for a while:
+
+```
+silent:  3683, 3846, 4537, 5204, 5771 ms   — and not one AudioPlayer event after it
+plays:   1868, 2524 ms                     — PlaybackStarted after 18 ms
+```
+
+On the silent side the device did not even try: no `PlaybackStarted`, no `PlaybackFailed`, nothing. On the playing side it reported back in 18 milliseconds. Everything else about the two answers is identical, down to the session number and the byte the box serves. What differs is the time.
+
+So the skill now has a **haste target** of about 2.5 s, counted from Alexa's own timestamp, and everything dispensable gives way to it:
+
+- **The wake-up call is skipped** once the target is spent. It was built for the disk theory, and that is disproven — eight probes out of eight came back `HTTP 206` with audio. What is left of it is half a second on exactly the path where half a second decides between sound and silence.
+- **The check before a login is skipped** when the remembered number is past its window anyway. It costs about 740 ms and has exactly one job: to avoid a login that throws a **running** track out of the box. Before the first note nothing is running that it could protect.
+
+Both only before a start. At a track change nobody is waiting for a spoken sentence, the Echo appends the next track itself, and there the check is worth its 740 ms precisely because it prevents that login. `MUSIK_EILZIEL_MS` moves the target without a deploy; `0` switches the haste off and restores the earlier behaviour.
+
 **Silence from the box is not a No.** The check has three outcomes, and the difference matters: on a No the skill logs in, on no answer at all it does not — whoever cannot be reached will not accept a login either, and then the remembered number, still inside its window, is the best word there is. The same applies when the remaining budget is too small for a check: the window keeps its say. Staying silent while the number is very probably fine would be the worse choice.
 
 Only the playlist this request is about gets refreshed — fetching a number costs two calls to the box, and Alexa allows the skill eight seconds. The number is cached in Redis for five minutes — AVM grants ten, extended by every active access. A track the Echo failed to load overtakes that window: `PlaybackFailed` re-checks the number immediately rather than sitting the window out, because an expired one is by far the likeliest cause and the next track would carry the same. If the box cannot be reached at all, the skill says so instead of starting: the remembered number is past its window by then, and playing with it produced exactly the failure that was reported — *"Ich spiele das doppelte Lottchen"*, then silence, every first attempt. A sentence that explains beats a promise that does not hold.
