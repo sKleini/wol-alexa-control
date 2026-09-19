@@ -79,12 +79,16 @@ const EINZEL = { name: 'Solo', titel: [{ url: 'https://example.org/solo.mp3', na
 const EINMAL = { name: 'Einmal', wiederholen: false, titel: KINDER.titel };
 const STILL = { name: 'Leise', ansage: false, titel: KINDER.titel };
 
-function anfrage(request, { token, offset = 0 } = {}) {
+function anfrage(request, { token, offset = 0, geraet } = {}) {
   const body = {
     context: { System: { application: { applicationId: 'amzn1.ask.skill.musik' } } },
     request: { timestamp: new Date().toISOString(), ...request },
   };
   if (token) body.context.AudioPlayer = { token, offsetInMilliseconds: offset, playerActivity: 'PLAYING' };
+  // `geraet` ist die Liste der Schnittstellen, die das Geraet meldet. Ohne sie
+  // steht in der Anfrage kein `device` - so wie bei allen anderen Tests hier,
+  // und so kommen sie auch weiterhin ans Abspielen.
+  if (geraet) body.context.System.device = { supportedInterfaces: Object.fromEntries(geraet.map(n => [n, {}])) };
   return body;
 }
 
@@ -2188,4 +2192,57 @@ test('ein Name, den niemand kennt, steht im Log', async () => {
   assert.ok(zeile, 'der Fehlschlag wird protokolliert');
   assert.match(zeile, /"Uter Zett"/, 'was gehoert wurde');
   assert.match(zeile, /Kinderlieder=kinderlieder/, 'und wogegen verglichen wurde');
+});
+
+// --- Geraete ohne AudioPlayer ------------------------------------------------
+//
+// **Gemeldet vom Fire TV:** Alexa sagte "Ich spiele Udo CD eins weiter", und
+// dann kam keine Musik. Der Skill hatte alles richtig gemacht - Playlist
+// gefunden, Stand gelesen, Direktive geschickt -, nur nimmt ein Geraet ohne
+// AudioPlayer eine Play-Direktive wortlos nicht an. Uebrig blieb der Satz, und
+// der versprach etwas, das nicht kam.
+//
+// Was ein Geraet kann, steht in jeder Anfrage. Damit beantwortet die Anfrage
+// selbst die Frage - statt einer Liste von Geraetetypen, die mit jeder
+// Amazon-Generation veralten wuerde.
+
+test('ein Geraet ohne AudioPlayer bekommt einen Satz statt eines Versprechens', async () => {
+  const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'), { geraet: ['VideoApp', 'Display'] });
+  assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
+  assert.match(r.outputSpeech.text, /kann meine Musik leider nicht abspielen/);
+  assert.doesNotMatch(r.outputSpeech.text, /Ich spiele/, 'nichts versprechen, was nicht kommt');
+});
+
+test('ein Echo spielt wie bisher', async () => {
+  const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'), { geraet: ['AudioPlayer'] });
+  assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+  assert.match(r.outputSpeech.text, /Ich spiele Kinderlieder/);
+});
+
+test('ohne Auskunft ueber das Geraet wird gespielt', async () => {
+  // Der Rueckfall ist das bisherige Verhalten: Ein Geraet, das nichts ueber
+  // sich sagt, ist kein Grund, ihm die Musik zu verweigern. Alle anderen Tests
+  // in dieser Datei laufen ueber genau diesen Weg.
+  const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'));
+  assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+});
+
+test('der Riegel gilt fuer jeden Weg, der Musik ausgeben will', async () => {
+  const ohne = { geraet: ['VideoApp'] };
+  for (const name of ['SuchePlaylistIntent', 'AMAZON.ResumeIntent', 'AMAZON.NextIntent',
+    'AMAZON.PreviousIntent', 'AMAZON.StartOverIntent', 'AMAZON.ShuffleOnIntent']) {
+    const req = name === 'SuchePlaylistIntent' ? sucheIntent('Kinderlieder') : intent(name);
+    const r = await skill(req, { ...ohne, token: 'Kinderlieder|0|0|0' });
+    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), `${name}: keine Play-Direktive`);
+    assert.match(r.outputSpeech.text, /nicht abspielen/, `${name}: und ein Satz dazu`);
+  }
+});
+
+test('was ohne AudioPlayer trotzdem geht, geht weiter', async () => {
+  // Die Liste vorlesen, die Hilfe, Pause und Stopp brauchen keinen AudioPlayer -
+  // ein Riegel davor waere reine Schikane.
+  const ohne = { geraet: ['VideoApp'] };
+  assert.match((await skill(intent('ListPlaylistsIntent'), ohne)).outputSpeech.text, /Kinderlieder/);
+  assert.match((await skill(intent('AMAZON.HelpIntent'), ohne)).outputSpeech.text, /spiele/i);
+  assert.deepEqual((await skill(intent('AMAZON.StopIntent'), ohne)).directives, [{ type: 'AudioPlayer.Stop' }]);
 });
