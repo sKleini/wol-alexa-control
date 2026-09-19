@@ -1780,6 +1780,21 @@ function boxAmDraht(gueltig, neue = 'cccccccccccccccc') {
       const daten = sid === zustand.gueltig ? { root: '/Musik', rights: { read: true } } : { error: 'no session' };
       return boxAntwort('application/json', JSON.stringify(daten));
     }
+    if (url.includes('/nas/cgi-bin/luacgi_notimeout')) {
+      // Der Abruf, den der Echo macht - und den "Check URLs" nachstellt. Mit
+      // toter Nummer schickt die Box ihre Oberflaeche statt der Datei.
+      if (new URL(url).searchParams.get('sid') !== zustand.gueltig) {
+        return boxAntwort('text/html', '<title>FRITZ!NAS</title>Anmeldung erforderlich');
+      }
+      return new Response(new Uint8Array(64), {
+        status: 206,
+        headers: {
+          'Content-Type': 'audio/mpeg',
+          'Content-Range': 'bytes 0-63/4096000',
+          'Accept-Ranges': 'bytes',
+        },
+      });
+    }
     throw new Error(`unerwarteter Abruf: ${url}`);
   };
   return { abrufe, zustand, zurueck() { globalThis.fetch = vorher; } };
@@ -1931,6 +1946,52 @@ test('die Nachfrage haelt eine spielende Playlist ueber Stunden am Leben', async
     assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'kein einziges Mal angemeldet');
     assert.equal(box.abrufe.length, 10, 'ein Abruf je Titelwechsel');
     assert.equal(redis.speicher.musik_fritz_sid.sid, 'aaaaaaaaaaaaaaaa');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('Check URLs meldet sich nicht an, nur weil Redis eine Weile braucht', async () => {
+  // **Der Fehler, der das hier ausgeloest hat**, stand so im Vercel-Log:
+  //
+  //   TimeoutOverflowWarning: Infinity does not fit into a 32-bit signed integer.
+  //   Timeout duration was set to 1.
+  //   musik_fritz_sid nicht rechtzeitig: nach Infinity ms
+  //   musik-box FRITZ!NAS-Login ok nach 1622 ms, Infinity ms Budget uebrig
+  //
+  // Ausserhalb des Skills gibt es kein Alexa-Fenster, also reicht "Check URLs"
+  // `rest = () => Infinity` durch. `setTimeout` macht daraus eine
+  // Millisekunde - und die gewinnt gegen jeden echten Netzabruf zu Upstash.
+  // Die gemerkte Sitzungsnummer galt damit als nicht vorhanden, und der Knopf
+  // meldete sich jedes Mal neu an: Genau der Zugriff, der auf der Box alle
+  // Sitzungen beendet. Wer waehrend der Wiedergabe auf "Check URLs" drueckte,
+  // warf damit den laufenden Titel aus der Box.
+  //
+  // Dass es in den Tests nie auffiel, liegt am Redis-Stellvertreter: Seine
+  // `get` ist sofort fertig und gewinnt das Rennen im Microtask. Hier braucht
+  // sie deshalb echte Zeit - so wie Upstash auch.
+  const langsam = redisMit({
+    [REDIS_KEY]: [{
+      name: 'Udo CD eins',
+      quelle: { typ: 'fritz', link: BOX_LINK },
+      titel: [{ url: boxTitel(1, 'aaaaaaaaaaaaaaaa'), name: '01' }],
+    }],
+    musik_fritz_sid: { link: BOX_LINK, sid: 'aaaaaaaaaaaaaaaa', zeit: Date.now() },
+  });
+  const sofort = langsam.get.bind(langsam);
+  langsam.get = async (key) => {
+    await new Promise(fertig => setTimeout(fertig, 20));
+    return sofort(key);
+  };
+
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const res = antwortFaenger();
+    await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Udo CD eins', ab: '0' } }, res, langsam);
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'die gemerkte Nummer wurde gefunden, also keine Anmeldung');
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ergebnisse[0].fehler, null, 'und die Pruefung sieht eine Audiodatei');
+    assert.equal(res.body.ergebnisse[0].contentType, 'audio/mpeg');
   } finally {
     box.zurueck();
   }
