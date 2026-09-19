@@ -3055,3 +3055,67 @@ test('das Eilziel bremst den Titelwechsel nicht aus', async () => {
     box.zurueck();
   }
 });
+
+// --- Nur wer eine Adresse herausgibt, frischt die Sitzung auf ----------------
+//
+// **Gemeldet aus einem Log mit genau zwei Zeilen:**
+//
+//   musik-box FRITZ!NAS-Login ok nach 1572 ms, 4355 ms Budget uebrig
+//   musik-box IntentRequest in 1603 ms
+//
+// Kein "Geraet kann", kein "spielt" - ein Intent, der nichts abspielt. Und
+// trotzdem eine Anmeldung, die alle Sitzungen der Box beendet, waehrend der
+// Echo gerade streamte. Die Auffrischung lief fuer jede Anfrage, weil
+// `gemeintePlaylist` ohne Slot auf den laufenden Stream zurueckfaellt.
+
+test('ein Intent ohne Wiedergabe laesst die Sitzung in Ruhe', async () => {
+  const laeuft = { token: 'Udo CD eins|0|0|0' };
+  for (const name of ['AMAZON.FallbackIntent', 'AMAZON.HelpIntent', 'ListPlaylistsIntent',
+    'AMAZON.StopIntent', 'AMAZON.PauseIntent', 'AMAZON.LoopOnIntent', 'AMAZON.RepeatIntent']) {
+    const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // Frist abgelaufen: wuerde anmelden
+    const box = boxAmDraht('totetotetotetote');
+    try {
+      await skillMitBudget(intent(name), laeuft, redis);
+      assert.deepEqual(box.abrufe, [], `${name}: die Box wird nicht angefasst`);
+    } finally {
+      box.zurueck();
+    }
+  }
+});
+
+test('die Ereignisse am Titelende ebenso', async () => {
+  // PlaybackStarted, -Stopped und -Finished schreiben nur den Stand. Eine
+  // Anmeldung dafuer waere ein Titelwechsel, der sich selbst abwuergt.
+  const laeuft = { token: 'Udo CD eins|0|0|0' };
+  for (const typ of ['AudioPlayer.PlaybackStarted', 'AudioPlayer.PlaybackStopped',
+    'AudioPlayer.PlaybackFinished']) {
+    const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+    const box = boxAmDraht('totetotetotetote');
+    try {
+      await skillMitBudget({ type: typ, token: 'Udo CD eins|0|0|0' }, laeuft, redis);
+      assert.deepEqual(box.abrufe, [], `${typ}: die Box wird nicht angefasst`);
+    } finally {
+      box.zurueck();
+    }
+  }
+});
+
+test('wer eine Adresse herausgibt, frischt weiterhin auf', async () => {
+  // Die Gegenprobe - sonst waere die Abkuerzung oben eine Regression.
+  const faelle = [
+    [intent('AMAZON.NextIntent'), { token: 'Udo CD eins|0|0|0' }],
+    [{ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' }, { token: 'Udo CD eins|0|0|0' }],
+    [{ type: 'PlaybackController.NextCommandIssued' }, { token: 'Udo CD eins|0|0|0' }],
+  ];
+  for (const [request, opts] of faelle) {
+    const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);   // ausserhalb der Frist
+    const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+    try {
+      await skillMitBudget(request, opts, redis);
+      assert.ok(box.abrufe.includes('/nas/api/data.lua'),
+        `${request.type}${request.intent ? ` ${request.intent.name}` : ''}: nachgefragt`);
+    } finally {
+      box.zurueck();
+    }
+  }
+});
