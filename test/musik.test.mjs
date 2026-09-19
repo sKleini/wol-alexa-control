@@ -2778,3 +2778,38 @@ test('der Abstand laesst sich abschalten', async () => {
     box.zurueck();
   }
 });
+
+test('der zweite Weckruf faellt nicht der eigenen Pause zum Opfer', async () => {
+  // **Der gemeldete Fehlschlag, und der Grund, warum er lange unsichtbar war.**
+  // Im Betrieb stand:
+  //
+  //   musik-box Datei angetippt: HTTP 206, audio/mpeg nach 644 ms, 2258 ms Budget
+  //   musik-box Weckruf ausgelassen, nur noch 1300 ms Budget
+  //
+  // Die Pause legte 600 ms zurueck, der Abruf danach verlangte 900. Zwei
+  // Konstanten, die dasselbe meinten und verschieden gross waren - der zweite
+  // Weckruf konnte im engen Fall gar nicht stattfinden, also genau dort, wo er
+  // gebraucht wird.
+  //
+  // Der Test darueber hat das nicht gesehen: Die erfundene Box antwortet
+  // sofort, das Budget bleibt gross, und die Pause nimmt sich ihren
+  // Zielabstand statt des Rests. Deshalb hier ein Budget, das so knapp ist wie
+  // das gemeldete - und ein Abstand, der wirklich rechnen muss.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('totetotetotetote');
+  const vorherA = process.env.MUSIK_WECK_ABSTAND_MS;
+  const vorherB = process.env.MUSIK_BUDGET_MS;
+  process.env.MUSIK_WECK_ABSTAND_MS = '1500';
+  process.env.MUSIK_BUDGET_MS = '2600';
+  try {
+    const r = await skill(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, null, redis);
+    assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'es gab eine Anmeldung');
+    const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
+    assert.equal(weckrufe.length, 2, 'die Pause laesst dem zweiten Weckruf sein Budget');
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+  } finally {
+    process.env.MUSIK_WECK_ABSTAND_MS = vorherA;
+    process.env.MUSIK_BUDGET_MS = vorherB;
+    box.zurueck();
+  }
+});
