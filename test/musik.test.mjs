@@ -2116,3 +2116,76 @@ test('eine gekuerzte Playlist bringt die Fehlerzeile nicht durcheinander', async
   assert.ok(zeile);
   assert.doesNotMatch(zeile, /Titel:/);
 });
+
+// --- Zahlwoerter: der Ein-Satz-Aufruf ----------------------------------------
+//
+// **Gemeldet:** "Alexa, oeffne meine Plattenkiste und spiele udo cd eins"
+// funktioniert nicht zuverlaessig, teilweise kommt keine Musik. Der
+// zweistufige Aufruf dagegen laeuft.
+//
+// Der Unterschied liegt nicht am Abspielen, sondern am Namen. Der Ein-Satz-
+// Aufruf geht ueber SuchePlaylistIntent, und dessen Slot ist ein
+// AMAZON.SearchQuery - ohne Entity Resolution, es kommt nur der gehoerte Text.
+// Ob die Spracherkennung daraus "eins" oder "1" macht, entscheidet sie von Mal
+// zu Mal anders. Beim zweistufigen Aufruf traegt die Antwort auf "oeffne meine
+// Plattenkiste" die Namen als dynamische Werte mit, und Alexa loest dagegen
+// auf; der Ein-Satz-Aufruf hat diese Liste nie bekommen.
+
+test('normalisiere macht aus Zahlwoertern Ziffern', () => {
+  assert.equal(normalisiere('Udo CD eins'), 'udocd1');
+  assert.equal(normalisiere('Udo CD 1'), 'udocd1', 'beide Schreibweisen treffen sich');
+  assert.equal(normalisiere('Udo CD zwei'), 'udocd2');
+  assert.equal(normalisiere('udo cd zwo'), 'udocd2', 'auch die Telefon-Zwei');
+  assert.equal(normalisiere('Kapitel zwoelf'), 'kapitel12');
+});
+
+test('normalisiere ersetzt nur ganze Woerter', () => {
+  // "Kleinstadt" traegt ein "eins" in der Mitte. Wuerde blind ersetzt, hiesse
+  // die Playlist fortan "kl1tadt" - und ein Tippfehler im Dashboard oder eine
+  // leicht andere Aussprache traefe sie nicht mehr.
+  assert.equal(normalisiere('Kleinstadt'), 'kleinstadt');
+  assert.equal(normalisiere('Neunkirchen'), 'neunkirchen');
+  assert.equal(normalisiere('Dreiklang'), 'dreiklang');
+});
+
+test('findePlaylist trifft die Playlist, egal ob Zahl oder Wort gesprochen wurde', () => {
+  const listen = [
+    { name: 'Udo CD eins', titel: [{ url: 'https://h.de/1.mp3', name: '1' }] },
+    { name: 'Udo CD zwei', titel: [{ url: 'https://h.de/2.mp3', name: '2' }] },
+  ];
+  assert.equal(findePlaylist(listen, { value: 'Udo CD 1' }).playlist.name, 'Udo CD eins');
+  assert.equal(findePlaylist(listen, { value: 'udo cd eins' }).playlist.name, 'Udo CD eins');
+  assert.equal(findePlaylist(listen, { value: 'Udo CD 2' }).playlist.name, 'Udo CD zwei');
+  // Die Gegenprobe: Eine Ziffer im Namen und ein Wort im Gesagten.
+  const ziffer = [{ name: 'Udo CD 1', titel: [{ url: 'https://h.de/1.mp3', name: '1' }] }];
+  assert.equal(findePlaylist(ziffer, { value: 'udo cd eins' }).playlist.name, 'Udo CD 1');
+});
+
+test('der Ein-Satz-Aufruf spielt auch, wenn Alexa die Ziffer verstanden hat', async () => {
+  // Der gemeldete Satz, so wie er beim Skill ankommt: ein Intent, kein
+  // LaunchRequest davor, keine aufgeloesten Werte - nur der gehoerte Text.
+  const UDO = { name: 'Udo CD eins', titel: [{ url: 'https://example.org/u/01.mp3', name: '01' }] };
+  const wort = await skill(sucheIntent('Udo CD eins'), {}, [UDO]);
+  assert.equal(wort.directives[0].audioItem.stream.token, 'Udo CD eins|0|0|0');
+
+  const ziffer = await skill(sucheIntent('Udo CD 1'), {}, [UDO]);
+  assert.equal(ziffer.directives[0].audioItem.stream.token, 'Udo CD eins|0|0|0');
+  assert.match(ziffer.outputSpeech.text, /Ich spiele Udo CD eins/, 'gesagt wird der richtige Name');
+});
+
+test('ein Name, den niemand kennt, steht im Log', async () => {
+  // Bisher hinterliess der haeufigste Fehlschlag keine Spur: Von aussen war
+  // nicht zu unterscheiden, ob die Box stumm blieb oder der Name nicht ankam.
+  const gesagt = [];
+  const vorher = console.warn;
+  console.warn = (...teile) => gesagt.push(teile.join(' '));
+  try {
+    await skill(sucheIntent('Uter Zett'));
+  } finally {
+    console.warn = vorher;
+  }
+  const zeile = gesagt.find(z => z.startsWith('musik-box kennt'));
+  assert.ok(zeile, 'der Fehlschlag wird protokolliert');
+  assert.match(zeile, /"Uter Zett"/, 'was gehoert wurde');
+  assert.match(zeile, /Kinderlieder=kinderlieder/, 'und wogegen verglichen wurde');
+});
