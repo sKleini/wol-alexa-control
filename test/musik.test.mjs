@@ -1487,6 +1487,12 @@ test('mit einer abgelaufenen Nummer wird nicht mehr losgespielt', async () => {
   // Mal beim ersten Versuch, weil erst der zweite eine frische Nummer im
   // Zwischenspeicher vorfand. Ein Satz, der erklaert, ist besser als Stille,
   // die es nicht tut.
+  //
+  // **Das Budget gehoert zur Aussage.** Geprueft wird hier "die Box wurde
+  // gefragt und gab nichts her" - dafuer muss ueberhaupt Zeit zum Fragen
+  // sein. Mit dem knappen Voreinstellungsbudget dieser Datei wuerde der Skill
+  // die Box gar nicht anfassen, und das ist ein anderer Fall mit einer
+  // anderen Antwort (siehe "keine Zeit zu fragen" weiter unten).
   const link = 'https://nicht-erreichbar.invalid/nas/filelink.lua?id=535f52fbb2016f4f';
   const redis = redisMit({
     [REDIS_KEY]: [{
@@ -1497,7 +1503,7 @@ test('mit einer abgelaufenen Nummer wird nicht mehr losgespielt', async () => {
     musik_fritz_sid: { link, sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() - 9 * 60_000 },
   });
 
-  const r = await skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis);
+  const r = await mitBudget(6500, () => skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis));
   // Die dynamischen Werte gehen mit (der Satz ist eine Rueckfrage wert) -
   // eine Wiedergabe nicht.
   assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive mit toter Nummer');
@@ -1781,11 +1787,16 @@ test('fuenf Minuten sind die Grenze', async () => {
   });
 
   assert.equal(await sidDerDirektive(mit(4), 'Schlaflieder'), 'eigenesitzung11', 'vier Minuten: noch gut');
-  // Sechs Minuten: Es wird eine neue geholt, das scheitert am toten Host - und
-  // damit ist die gemerkte aus dem Rennen. Sie mag noch gut sein oder nicht;
-  // darauf zu wetten hiess im Betrieb, dem Hoerenden Stille zu servieren.
-  assert.equal(await sidDerDirektive(mit(6), 'Schlaflieder'), null);
-  assert.match(await satzBeimSpielen(mit(6), 'Schlaflieder'), /nicht an die FRITZ!Box/);
+  // Sechs Minuten: Es wird nachgefragt und eine neue geholt, beides scheitert
+  // am toten Host - und damit ist die gemerkte aus dem Rennen. Sie mag noch
+  // gut sein oder nicht; darauf zu wetten hiess im Betrieb, dem Hoerenden
+  // Stille zu servieren.
+  //
+  // Mit Budget, denn geprueft wird die Antwort der Box, nicht die Uhr.
+  await mitBudget(6500, async () => {
+    assert.equal(await sidDerDirektive(mit(6), 'Schlaflieder'), null);
+    assert.match(await satzBeimSpielen(mit(6), 'Schlaflieder'), /nicht an die FRITZ!Box/);
+  });
 });
 
 test('der alte Zwischenspeicher je Freigabe wird als leer gelesen', async () => {
@@ -2567,10 +2578,19 @@ test('alexaVorlaufMs traut zwei Uhren nicht weiter als noetig', () => {
   assert.equal(alexaVorlaufMs({}, jetzt), null);
 });
 
-test('ein langer Vorlauf laesst den Login aus und sagt einen Satz', async () => {
-  // Der Kaltstart hat fuenfeinhalb Sekunden gefressen. Frueher lief der Login
-  // trotzdem los und die Antwort kam zu spaet - also gar nicht. Jetzt bleibt
-  // der Boden, der Login unterbleibt, und es kommt ein Satz, der ankommt.
+test('ein langer Vorlauf laesst den Login aus und spielt mit der gemerkten Nummer', async () => {
+  // Der Kaltstart hat fuenfeinhalb Sekunden gefressen. Fuer Nachfrage und
+  // Anmeldung reicht das Budget nicht mehr - die Box wird also **gar nicht
+  // angefasst**, und genau das ist der Punkt: Ueber die gemerkte Nummer liegt
+  // dann keine schlechte Auskunft vor, sondern gar keine. "Ausserhalb der
+  // Frist" heisst bloss *aelter als fuenf Minuten*, und die Box verlaengert
+  // eine Sitzung bei jedem Zugriff.
+  //
+  // Frueher sagte der Skill hier ab. Das war der sichere Weg, solange ein
+  // Fehlschlag das Ende war - inzwischen ist er es nicht mehr: Kommt der Echo
+  // nicht an die Datei, meldet er PlaybackFailed, und dieser Request hat
+  // frische acht Sekunden und eine warme Function. Aus "Versuch es gleich
+  // noch einmal" werden ein, zwei Sekunden.
   const redis = boxRedis('aaaaaaaaaaaaaaaa', 9); // ausserhalb der Frist
   const box = boxAmDraht('aaaaaaaaaaaaaaaa');
   try {
@@ -2579,6 +2599,57 @@ test('ein langer Vorlauf laesst den Login aus und sagt einen Satz', async () => 
       timestamp: new Date(Date.now() - 5500).toISOString(),
     }, {}, redis);
     assert.deepEqual(box.abrufe, [], 'kein Abruf bei der Box - dafuer ist keine Zeit mehr');
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.equal(
+      new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'),
+      'aaaaaaaaaaaaaaaa',
+      'die gemerkte Nummer, ungeprueft aber unwiderlegt',
+    );
+    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('gefragt und abgelehnt bleibt eine Absage - auch bei knappem Budget', async () => {
+  // Die Gegenprobe, und die Grenze der Regel darueber: Hat die Box zu dieser
+  // Nummer etwas gesagt, zaehlt das. Hier reicht das Budget fuer die
+  // Nachfrage, die Box lehnt ab, und fuer die Anmeldung ist es dann zu spaet.
+  // Mit einer Nummer loszuspielen, von der man weiss, dass sie tot ist, waere
+  // genau das Versprechen ins Leere, das es nicht mehr geben soll.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('totetotetotetote');
+  const vorher = process.env.MUSIK_BUDGET_MS;
+  // Genug zum Fragen (>= 1300), zu wenig zum Anmelden (< 2500).
+  process.env.MUSIK_BUDGET_MS = '2000';
+  try {
+    const r = await skill(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, null, redis);
+    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'gefragt, nicht angemeldet');
+    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
+    assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
+  } finally {
+    process.env.MUSIK_BUDGET_MS = vorher;
+    box.zurueck();
+  }
+});
+
+test('ohne gemerkte Nummer wird auch bei knappem Budget nicht geraten', async () => {
+  // Dann stehen in der Playlist nur die Adressen aus der Importzeit. Die sind
+  // mit Sicherheit abgelaufen - es gibt nichts, worauf sich ein Versuch
+  // stuetzen koennte.
+  const redis = redisMit({
+    [REDIS_KEY]: [{
+      name: 'Udo CD eins',
+      quelle: { typ: 'fritz', link: BOX_LINK },
+      titel: [{ url: boxTitel(1, 'uralt00000000000'), name: '01' }],
+    }],
+  });
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget({
+      ...intent('PlayPlaylistIntent', 'Udo CD eins'),
+      timestamp: new Date(Date.now() - 5500).toISOString(),
+    }, {}, redis);
     assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
     assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
   } finally {
