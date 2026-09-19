@@ -39,6 +39,7 @@ import {
   adresseKurz,
   handleSkill,
   alexaVorlaufMs,
+  handleWarm,
   handleManage,
   fritzSidMerken,
   istAudioUrl,
@@ -2601,4 +2602,120 @@ test('ein kurzer Vorlauf aendert nichts', async () => {
   } finally {
     box.zurueck();
   }
+});
+
+// --- Die Sitzung von aussen warm halten --------------------------------------
+//
+// **Der stumme Versuch ist immer der mit dem Login.** Zwei Abrufe bei einer
+// langsamen Box, gemessen 1951 ms, und zwar in genau dem Request, der sich
+// Alexas Fenster mit allem anderen teilt. Der zweite Versuch findet die Nummer
+// gemerkt vor, ist in einem Drittel der Zeit fertig und spielt.
+//
+// Der Skill kann diesen Login nur verschieben, nicht vermeiden - beim
+// Ein-Satz-Aufruf gibt es keinen LaunchRequest, in dessen Ruhe er fiele. Wer
+// von aussen alle paar Minuten anklopft, nimmt ihn heraus: Die Box verlaengert
+// die Sitzung bei jedem Zugriff, und wer sie nie ablaufen laesst, meldet sich
+// nie wieder an.
+
+const warmRuf = (redis, method = 'POST') => {
+  const res = antwortFaenger();
+  return handleWarm({ method }, res, redis).then(() => res);
+};
+
+test('warm halten fragt nach, statt sich anzumelden', async () => {
+  // Der Regelfall: Die Nummer lebt, ein einziger data.lua-Abruf verlaengert
+  // sie - und beendet dabei nichts.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const res = await warmRuf(redis);
+    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'nachgefragt, nicht angemeldet');
+    assert.equal(res.body.warm, true);
+    assert.equal(res.body.erneuert, false);
+    assert.ok(Date.now() - redis.speicher.musik_fritz_sid.zeit < 5000, 'die Frist beginnt von vorn');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('warm halten fragt auch innerhalb der Frist - sonst fasst es die Box nie an', async () => {
+  // Ohne das Erzwingen kaeme dieser Aufruf innerhalb der Fuenf-Minuten-Frist
+  // zurueck, ohne die Box beruehrt zu haben: genau das Gegenteil seines Zwecks.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await warmRuf(redis);
+    assert.equal(box.abrufe.length, 1, 'die Box wurde angefasst');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('eine wirklich tote Nummer wird hier ersetzt, nicht erst im Sprachbefehl', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('totetotetotetote');
+  try {
+    const res = await warmRuf(redis);
+    assert.deepEqual(
+      box.abrufe,
+      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua'],
+      'nachgefragt, abgelehnt, angemeldet, gegengeprueft',
+    );
+    assert.equal(res.body.erneuert, true);
+    assert.equal(redis.speicher.musik_fritz_sid.sid, 'cccccccccccccccc');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('die Antwort nennt nie die ganze Sitzungsnummer', async () => {
+  // Sie ist der Schluessel zur Freigabe, und diese Antwort landet im Log eines
+  // Cron-Laufs auf dem VPS.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const res = await warmRuf(redis);
+    assert.equal(res.body.sid, '…aaaa');
+    assert.doesNotMatch(JSON.stringify(res.body), /aaaaaaaaaaaaaaaa/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('ohne FRITZ!NAS-Playlist wird die Box nicht angefasst', async () => {
+  const redis = redisMit({ [REDIS_KEY]: [KINDER] });
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const res = await warmRuf(redis);
+    assert.deepEqual(box.abrufe, []);
+    assert.equal(res.body.warm, false);
+    assert.match(res.body.grund, /keine FRITZ!NAS-Playlist/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('bei zwei Freigaben wird nicht geraten', async () => {
+  // Jede Anmeldung beendet alle Sitzungen der Box. Die falsche Wahl naehme der
+  // richtigen gerade die ihre - derselbe Grund wie beim Vorwaermen.
+  const redis = redisMit({
+    [REDIS_KEY]: [
+      { name: 'A', quelle: { typ: 'fritz', link: BOX_LINK }, titel: [] },
+      { name: 'B', quelle: { typ: 'fritz', link: `${BOX}/nas/filelink.lua?id=andere` }, titel: [] },
+    ],
+  });
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const res = await warmRuf(redis);
+    assert.deepEqual(box.abrufe, []);
+    assert.equal(res.body.warm, false);
+    assert.match(res.body.grund, /2 Ordner-Freigaben/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('ein GET faellt durch', async () => {
+  const res = await warmRuf(redisMit({ [REDIS_KEY]: [] }), 'GET');
+  assert.equal(res.statusCode, 405);
 });
