@@ -38,6 +38,7 @@ import {
   laengerAlsSitzung,
   adresseKurz,
   handleSkill,
+  alexaVorlaufMs,
   handleManage,
   fritzSidMerken,
   istAudioUrl,
@@ -2527,6 +2528,77 @@ test('ohne Budget fuer den Weckruf wird trotzdem gespielt', async () => {
     assert.equal(r.directives[0].type, 'AudioPlayer.Play');
   } finally {
     process.env.MUSIK_BUDGET_MS = vorher;
+    box.zurueck();
+  }
+});
+
+// --- Das Budget rechnet ab Alexa, nicht ab dem ersten Befehl -----------------
+//
+// **Der blinde Fleck hinter "geht erst beim zweiten Versuch".** Gemeldet war
+// ein stummer Start, bei dem alles stimmte, was der Skill selbst sehen kann:
+//
+//   musik-box FRITZ!NAS-Login ok nach 1951 ms, 4426 ms Budget uebrig
+//   musik-box Geraet kann: AudioPlayer
+//   musik-box spielt Das doppelte Lottchen … ab 1/9 bei 0 ms: … sid…f154
+//   musik-box Datei angetippt: HTTP 206, audio/mpeg nach 613 ms, 3798 ms Budget
+//   musik-box IntentRequest in 2705 ms
+//
+// Sitzung gueltig, Datei in 613 ms abrufbar, Geraet kann AudioPlayer - und
+// danach kein einziges AudioPlayer-Ereignis. Der Echo hat die Direktive nie
+// zu sehen bekommen. Was das Log nicht zeigte: die Zeit **vor** dem ersten
+// Befehl. Das Budget begann bei Null zu zaehlen, obwohl der Kaltstart der
+// Function da schon gelaufen war - der Skill rechnete mit Sekunden, die es
+// nicht mehr gab, und liess den Login noch durchgehen.
+
+test('alexaVorlaufMs misst, was vor dem Skill lag', () => {
+  const jetzt = Date.parse('2026-09-19T20:00:05.000Z');
+  assert.equal(alexaVorlaufMs({ request: { timestamp: '2026-09-19T20:00:00.000Z' } }, jetzt), 5000);
+  assert.equal(alexaVorlaufMs({ request: { timestamp: '2026-09-19T20:00:05.000Z' } }, jetzt), 0);
+});
+
+test('alexaVorlaufMs traut zwei Uhren nicht weiter als noetig', () => {
+  const jetzt = Date.parse('2026-09-19T20:00:05.000Z');
+  // Eine Uhr, die vorgeht: Der Zeitstempel liegt in der Zukunft.
+  assert.equal(alexaVorlaufMs({ request: { timestamp: '2026-09-19T20:00:09.000Z' } }, jetzt), null);
+  // Und eine, die weit nachgeht - daraus ein Budget zu rechnen waere schlimmer
+  // als gar keines.
+  assert.equal(alexaVorlaufMs({ request: { timestamp: '2026-09-19T19:59:00.000Z' } }, jetzt), null);
+  assert.equal(alexaVorlaufMs({ request: {} }, jetzt), null, 'ohne Zeitstempel gilt das volle Fenster');
+  assert.equal(alexaVorlaufMs({}, jetzt), null);
+});
+
+test('ein langer Vorlauf laesst den Login aus und sagt einen Satz', async () => {
+  // Der Kaltstart hat fuenfeinhalb Sekunden gefressen. Frueher lief der Login
+  // trotzdem los und die Antwort kam zu spaet - also gar nicht. Jetzt bleibt
+  // der Boden, der Login unterbleibt, und es kommt ein Satz, der ankommt.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9); // ausserhalb der Frist
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget({
+      ...intent('PlayPlaylistIntent', 'Udo CD eins'),
+      timestamp: new Date(Date.now() - 5500).toISOString(),
+    }, {}, redis);
+    assert.deepEqual(box.abrufe, [], 'kein Abruf bei der Box - dafuer ist keine Zeit mehr');
+    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
+    assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('ein kurzer Vorlauf aendert nichts', async () => {
+  // Die warme Function: Zweihundert Millisekunden Vorlauf sind kein Grund,
+  // irgendetwas auszulassen.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget({
+      ...intent('PlayPlaylistIntent', 'Udo CD eins'),
+      timestamp: new Date(Date.now() - 200).toISOString(),
+    }, {}, redis);
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
+  } finally {
     box.zurueck();
   }
 });

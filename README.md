@@ -412,6 +412,18 @@ So **before the first note the skill fetches one byte of the track itself** — 
 
 **A timeout there is not a No either.** It is the normal answer from a disk that is spinning up, and it is the whole reason the wake-up call exists: refusing on it would refuse precisely when it just helped. Only an answer that is not audio — an error, a redirect to the login page, the FRITZ!NAS interface in HTML — stops the start, because the Echo would get the same thing a second later. The line `musik-box Datei angetippt: HTTP 206, audio/mpeg nach 140 ms` is also the counter-check for the diagnosis above: if it says the file was there and the Echo still stays silent, it was not the disk, and the next search starts at the device instead of at the box again.
 
+**And the counter-check said it was not the disk.** The very line that was added for it answered on the next cold attempt:
+
+```
+musik-box FRITZ!NAS-Login ok nach 1951 ms, 4426 ms Budget uebrig
+musik-box Geraet kann: AudioPlayer
+musik-box spielt Das doppelte Lottchen … ab 1/9 bei 0 ms: … sid…f154
+musik-box Datei angetippt: HTTP 206, audio/mpeg nach 613 ms, 3798 ms Budget uebrig
+musik-box IntentRequest in 2705 ms
+```
+
+Session valid, file fetched in 613 ms, device reports `AudioPlayer` — and then not one AudioPlayer event. No `PlaybackStarted`, no `PlaybackFailed`. A device that tried and failed reports back; this one never saw the directive. So the wake-up call stays (it costs half a second and rules the disk out for good), but the cause is elsewhere: see **the budget starts at Alexa** below.
+
 **Silence from the box is not a No.** The check has three outcomes, and the difference matters: on a No the skill logs in, on no answer at all it does not — whoever cannot be reached will not accept a login either, and then the remembered number, still inside its window, is the best word there is. The same applies when the remaining budget is too small for a check: the window keeps its say. Staying silent while the number is very probably fine would be the worse choice.
 
 Only the playlist this request is about gets refreshed — fetching a number costs two calls to the box, and Alexa allows the skill eight seconds. The number is cached in Redis for five minutes — AVM grants ten, extended by every active access. A track the Echo failed to load overtakes that window: `PlaybackFailed` re-checks the number immediately rather than sitting the window out, because an expired one is by far the likeliest cause and the next track would carry the same. If the box cannot be reached at all, the skill says so instead of starting: the remembered number is past its window by then, and playing with it produced exactly the failure that was reported — *"Ich spiele das doppelte Lottchen"*, then silence, every first attempt. A sentence that explains beats a promise that does not hold. The card in the dashboard marks such a playlist with **FRITZ!NAS**; clicking that reveals which folder it came from (`/Musik/Schlaflieder`), as a link that opens the share itself in a new tab, and *Edit* puts the share link back into the *Import folder* field, so it can be looked up, copied or replaced. Changing that field alone does not change the playlist — the link is only taken over by pressing *Import folder*, and saving with an unapplied one says so instead of quietly keeping the old.
@@ -600,6 +612,27 @@ remaining budget minus a reserve for the answer itself, roughly five and a half
 seconds in the normal case, and the threshold below which it is skipped dropped
 accordingly.
 
+**The budget starts at Alexa, not at the skill's first statement.** This was
+the blind spot behind every remaining *"only works on the second try"*. The
+eight-second window belongs to Alexa and starts when she creates the request;
+the skill's budget started counting at the first line of its own handler and
+knew nothing of what came before — the trip to Frankfurt, the TLS handshake,
+and above all the **cold start** of the function after a long pause. On a warm
+function the two are nearly the same. On a cold one they are not: the skill
+still reckoned with six and a half seconds it no longer had, let the login
+(about two seconds) go ahead on that arithmetic, and its answer arrived after
+Alexa had hung up. The second attempt found the function warm and the number
+remembered, and everything worked — exactly the reported pattern, with nothing
+wrong in the answer itself, only in when it arrived.
+
+Every request carries Alexa's own timestamp (`api/skill.js` already reads it to
+reject stale requests), so the distance to now is precisely that lead time. The
+budget subtracts it. When a lot has been eaten, a floor of 1.2 s remains: no
+login, no check, and instead of silence the sentence *"Ich komme gerade nicht an
+die FRITZ!Box"* — which arrives, and leaves a line in the log saying why. Two
+clocks never agree exactly, so a negative or absurd lead time is discarded and
+the full window applies; a wrong budget would be worse than none.
+
 Each request logs its own duration as `musik-box <type> in <n> ms`, and every
 login logs `musik-box FRITZ!NAS-Login ok nach <n> ms, <n> ms Budget uebrig`.
 Those two lines separate the skill's own work from the cold start, which the
@@ -610,6 +643,10 @@ healthy album looks like, and a login between two tracks is now the thing worth
 explaining. A starting playback adds a third line, `musik-box Datei angetippt:
 HTTP 206, audio/mpeg nach <n> ms`: that is the track itself, fetched one byte
 deep before anything is promised — see **the disk has to be awake too** above.
+The duration line now carries the number that matters most: `musik-box
+IntentRequest in 2705 ms, Alexa wartet seit 8123 ms (Vorlauf 5418 ms)`. Anything
+over eight thousand there means Alexa had already hung up — the answer was not
+wrong, it was late, and no other line in the log would ever have said so.
 
 **The functions run in Frankfurt** (`"regions": ["fra1"]` in `vercel.json`).
 Without that line Vercel places them in Virginia by default, and every request
@@ -624,6 +661,7 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence — always on the first attempt, FRITZ!NAS | the login sat in the second step of the call and did not fit there; the Echo was handed an expired number | fixed: the session is fetched when the skill is opened — see **Why the skill never goes silent** |
 | Alexa confirms, then silence — the first attempt after a longer break, FRITZ!NAS, and the second attempt plays the same address with the same session number | the box's disk had spun down; the first fetch waits for it to spin up and the Echo does not sit that out. The skill only ever touched the session, never a file | fixed: one byte of the track is fetched before the answer goes out, which wakes the disk. Look for `musik-box Datei angetippt: …` in the log |
+| Silence on the first attempt although the log shows a valid session, a reachable file and `Geraet kann: AudioPlayer` — and **no** AudioPlayer event follows | the answer was late, not wrong: the cold start ran before the skill's budget started counting, so the skill spent two seconds on a login it could no longer afford, and Alexa had hung up by the time it answered | fixed: the budget subtracts Alexa's own lead time. Check `Alexa wartet seit <n> ms` in the duration line — over 8000 is past the window |
 | Silence on a Fire TV from a FRITZ!NAS **folder** share, while a **file** share plays | not the skill: with the announcement off, both responses are structurally identical and differ only in the stream address. The device fetches — or refuses — that address without reporting anything back | none. Use an Echo for those playlists; see **Not every Alexa device reports back** |
 | Alexa confirms, then silence — on a Fire TV, a tablet, or anything that is not an Echo | the device does not offer the `AudioPlayer` interface, so it drops the `Play` directive without a word; only the sentence was left, and it promised something that never came | fixed: a device that does not report `AudioPlayer` now hears why instead of a promise. The log line `musik-box Geraet kann: …` lists what the device actually reported |
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
