@@ -396,6 +396,22 @@ AVM documents none of this, so the call that returns the listing is **tried rath
 
 **A start does not trust the window either.** A silent start was reported where the log held three lines and ended with `musik-box IntentRequest in 34 ms` — no login (about 1550 ms), no check (about 640 ms), because the remembered number was less than a minute old and the five-minute window said so. But the window measures time, and on this box a session dies of events, not of time: a login for the second share, an import, someone in the FRITZ!NAS web interface. While a playlist is playing that hardly matters — the Echo keeps the session alive with every range request, and a bad guess costs one track. Before the first note nobody keeps it alive, and a bad guess costs the whole answer: *"Ich spiele …"*, then silence. So *"spiele …"*, *"weiter"*, *"von vorn"* and the play button check first; *"nächster Titel"*, shuffling and the queueing at the end of a track do not, because they happen inside a running playback.
 
+**And the session was never the whole story: the disk has to be awake too.** Reported after all of the above was in place — the first attempt after a longer break stays silent, the second plays. The two logs differ only in how the number was obtained:
+
+```
+musik-box FRITZ!NAS-Login ok nach 2039 ms, 4338 ms Budget uebrig
+musik-box spielt Das doppelte Lottchen … ab 1/9 bei 2808 ms: …456/nas/cgi-bin/luacgi_notimeout sid…95f3
+
+musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch nach 946 ms, 5527 ms Budget uebrig
+musik-box spielt Das doppelte Lottchen … ab 1/9 bei 2808 ms: …456/nas/cgi-bin/luacgi_notimeout sid…95f3
+```
+
+Same number, same address, same offset — the second attempt was handed byte for byte what the first was handed, so nothing about the skill's answer explains the difference. What the first attempt changed is the storage: `check_nas_rights` is answered from the box's head and never touches a file, and a disk on a FRITZ!Box spins down after a few minutes of quiet. The first fetch after that waits for it to spin up, which is exactly the wait the Echo will not sit through. The Echo's failed attempt woke the disk, and the second attempt found it turning.
+
+So **before the first note the skill fetches one byte of the track itself** — a `Range: bytes=0-0` on the very address that is about to go into the directive. It is capped at 2.5 s and aborted after that; it does not have to finish, it only has to arrive, because the spin-up happens in the box and not in that connection. Aborting before the answer goes out also matters: two simultaneous fetches on `luacgi_notimeout` are a lot for that hardware, and the second one would be the Echo's. It runs on the three ways a playback *starts* — *"spiele …"*, *"weiter"* / the play button, *"von vorn"* — and never at a track change, where the disk is turning anyway.
+
+**A timeout there is not a No either.** It is the normal answer from a disk that is spinning up, and it is the whole reason the wake-up call exists: refusing on it would refuse precisely when it just helped. Only an answer that is not audio — an error, a redirect to the login page, the FRITZ!NAS interface in HTML — stops the start, because the Echo would get the same thing a second later. The line `musik-box Datei angetippt: HTTP 206, audio/mpeg nach 140 ms` is also the counter-check for the diagnosis above: if it says the file was there and the Echo still stays silent, it was not the disk, and the next search starts at the device instead of at the box again.
+
 **Silence from the box is not a No.** The check has three outcomes, and the difference matters: on a No the skill logs in, on no answer at all it does not — whoever cannot be reached will not accept a login either, and then the remembered number, still inside its window, is the best word there is. The same applies when the remaining budget is too small for a check: the window keeps its say. Staying silent while the number is very probably fine would be the worse choice.
 
 Only the playlist this request is about gets refreshed — fetching a number costs two calls to the box, and Alexa allows the skill eight seconds. The number is cached in Redis for five minutes — AVM grants ten, extended by every active access. A track the Echo failed to load overtakes that window: `PlaybackFailed` re-checks the number immediately rather than sitting the window out, because an expired one is by far the likeliest cause and the next track would carry the same. If the box cannot be reached at all, the skill says so instead of starting: the remembered number is past its window by then, and playing with it produced exactly the failure that was reported — *"Ich spiele das doppelte Lottchen"*, then silence, every first attempt. A sentence that explains beats a promise that does not hold. The card in the dashboard marks such a playlist with **FRITZ!NAS**; clicking that reveals which folder it came from (`/Musik/Schlaflieder`), as a link that opens the share itself in a new tab, and *Edit* puts the share link back into the *Import folder* field, so it can be looked up, copied or replaced. Changing that field alone does not change the playlist — the link is only taken over by pressing *Import folder*, and saving with an unapplied one says so instead of quietly keeping the old.
@@ -591,7 +607,9 @@ Vercel timing alone cannot, and say whether the login was the reason. The step
 in front of it logs too — `musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch`
 or `… ist tot` — so a log full of the first and empty of logins is what a
 healthy album looks like, and a login between two tracks is now the thing worth
-explaining.
+explaining. A starting playback adds a third line, `musik-box Datei angetippt:
+HTTP 206, audio/mpeg nach <n> ms`: that is the track itself, fetched one byte
+deep before anything is promised — see **the disk has to be awake too** above.
 
 **The functions run in Frankfurt** (`"regions": ["fra1"]` in `vercel.json`).
 Without that line Vercel places them in Virginia by default, and every request
@@ -605,6 +623,7 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | Nothing at all happens after the second sentence | the session had already closed, or the answer arrived too late | should no longer occur — see **Why the skill never goes silent** below; check the `musik-box … ms` line in the Vercel logs |
 | "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence — always on the first attempt, FRITZ!NAS | the login sat in the second step of the call and did not fit there; the Echo was handed an expired number | fixed: the session is fetched when the skill is opened — see **Why the skill never goes silent** |
+| Alexa confirms, then silence — the first attempt after a longer break, FRITZ!NAS, and the second attempt plays the same address with the same session number | the box's disk had spun down; the first fetch waits for it to spin up and the Echo does not sit that out. The skill only ever touched the session, never a file | fixed: one byte of the track is fetched before the answer goes out, which wakes the disk. Look for `musik-box Datei angetippt: …` in the log |
 | Silence on a Fire TV from a FRITZ!NAS **folder** share, while a **file** share plays | not the skill: with the announcement off, both responses are structurally identical and differ only in the stream address. The device fetches — or refuses — that address without reporting anything back | none. Use an Echo for those playlists; see **Not every Alexa device reports back** |
 | Alexa confirms, then silence — on a Fire TV, a tablet, or anything that is not an Echo | the device does not offer the `AudioPlayer` interface, so it drops the `Play` directive without a word; only the sentence was left, and it promised something that never came | fixed: a device that does not report `AudioPlayer` now hears why instead of a promise. The log line `musik-box Geraet kann: …` lists what the device actually reported |
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |

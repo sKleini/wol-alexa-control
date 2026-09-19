@@ -1854,9 +1854,13 @@ function boxAntwort(typ, text) {
  * eigentliche Zusicherung dieser Tests: dass `filelink.lua` **nicht** vorkommt,
  * solange die gemerkte Nummer noch gilt.
  */
-function boxAmDraht(gueltig, neue = 'cccccccccccccccc') {
+function boxAmDraht(gueltig, neue = 'cccccccccccccccc', ton = 'audio') {
   const abrufe = [];
   const zustand = { gueltig };
+  // Welche Adresse der Weckruf angetippt hat und mit welchem Kopf - beides
+  // gehoert zur Aussage: Eine andere Datei weckt die falsche Stelle, und ohne
+  // `Range` zoege der Weckruf die ganze Datei ueber die Leitung.
+  const box = { abrufe, zustand, geweckt: null, weckkopf: null };
   const vorher = globalThis.fetch;
   globalThis.fetch = async (eingabe, init = {}) => {
     const url = String(eingabe);
@@ -1871,9 +1875,22 @@ function boxAmDraht(gueltig, neue = 'cccccccccccccccc') {
       return boxAntwort('application/json', JSON.stringify(daten));
     }
     if (url.includes('/nas/cgi-bin/luacgi_notimeout')) {
-      // Der Abruf, den der Echo macht - und den "Check URLs" nachstellt. Mit
-      // toter Nummer schickt die Box ihre Oberflaeche statt der Datei.
+      // Der Abruf, den der Echo macht - und den "Check URLs" und der Weckruf
+      // nachstellen. Mit toter Nummer schickt die Box ihre Oberflaeche statt
+      // der Datei.
       if (new URL(url).searchParams.get('sid') !== zustand.gueltig) {
+        return boxAntwort('text/html', '<title>FRITZ!NAS</title>Anmeldung erforderlich');
+      }
+      // `ton` stellt die schlafende Platte nach: Sie antwortet nicht, obwohl
+      // die Sitzung gilt - genau der Fall, fuer den es den Weckruf gibt.
+      box.geweckt = url;
+      box.weckkopf = init.headers || null;
+      if (ton === 'keiner') {
+        const err = new Error('The operation was aborted due to timeout');
+        err.name = 'TimeoutError';
+        throw err;
+      }
+      if (ton === 'oberflaeche') {
         return boxAntwort('text/html', '<title>FRITZ!NAS</title>Anmeldung erforderlich');
       }
       return new Response(new Uint8Array(64), {
@@ -1887,7 +1904,8 @@ function boxAmDraht(gueltig, neue = 'cccccccccccccccc') {
     }
     throw new Error(`unerwarteter Abruf: ${url}`);
   };
-  return { abrufe, zustand, zurueck() { globalThis.fetch = vorher; } };
+  box.zurueck = () => { globalThis.fetch = vorher; };
+  return box;
 }
 
 /** Der Skill mit einem Budget, das fuer Nachfrage und Anmeldung reicht. */
@@ -2316,7 +2334,11 @@ test('ein Start fragt nach, auch wenn die Frist noch laeuft', async () => {
   const box = boxAmDraht('aaaaaaaaaaaaaaaa');
   try {
     const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'nachgefragt, nicht angemeldet');
+    assert.deepEqual(
+      box.abrufe,
+      ['/nas/api/data.lua', '/nas/cgi-bin/luacgi_notimeout'],
+      'nachgefragt, nicht angemeldet - und die Datei angetippt',
+    );
     assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
   } finally {
     box.zurueck();
@@ -2332,8 +2354,8 @@ test('eine tote Nummer innerhalb der Frist wird beim Start ersetzt', async () =>
     const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
     assert.deepEqual(
       box.abrufe,
-      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua'],
-      'nachgefragt, abgelehnt, angemeldet, gegengeprueft',
+      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua', '/nas/cgi-bin/luacgi_notimeout'],
+      'nachgefragt, abgelehnt, angemeldet, gegengeprueft, Datei angetippt',
     );
     assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
@@ -2372,5 +2394,139 @@ test('schweigt die Box, gilt die Frist weiter', async () => {
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
   } finally {
     globalThis.fetch = vorher;
+  }
+});
+
+// --- Der Weckruf an die Datei ------------------------------------------------
+//
+// **Gemeldet:** Nach einer laengeren Pause bleibt der erste Versuch stumm, der
+// zweite spielt. Die beiden Logs sind bis auf die Sitzungsbeschaffung gleich:
+//
+//   musik-box FRITZ!NAS-Login ok nach 2039 ms, 4338 ms Budget uebrig
+//   musik-box spielt Das doppelte Lottchen … ab 1/9 bei 2808 ms: … sid…95f3
+//
+//   musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch nach 946 ms, …
+//   musik-box spielt Das doppelte Lottchen … ab 1/9 bei 2808 ms: … sid…95f3
+//
+// Dieselbe Nummer, dieselbe Adresse, derselbe Offset - der zweite Versuch
+// bekam Byte fuer Byte, was der erste bekam. An der Antwort des Skills kann es
+// also nicht liegen. Was der erste Versuch geaendert hat, ist die Platte der
+// Box: Sein Abruf hat sie aufgeweckt und ist dabei selbst in Alexas Ladefrist
+// gelaufen. Deshalb weckt sie jetzt der Skill, bevor er etwas verspricht.
+
+test('vor dem ersten Ton wird die Datei selbst angetippt', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'die Datei wurde abgerufen');
+    // Angetippt wird genau die Adresse, die der Echo gleich bekommt - eine
+    // andere weckt die richtige Platte vielleicht, die richtige Datei nicht.
+    assert.equal(box.geweckt, r.directives[0].audioItem.stream.url);
+    assert.equal(box.weckkopf.Range, 'bytes=0-0', 'ein Byte genuegt zum Wecken');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('eine Box, die zur Datei schweigt, haelt die Wiedergabe nicht auf', async () => {
+  // Der Regelfall beim Wecken: Die Platte laeuft an und antwortet nicht in der
+  // Frist. Genau dafuer gibt es den Weckruf - wer hier absagt, sagt immer dann
+  // ab, wenn er gerade geholfen hat.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'keiner');
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('schickt die Box statt Ton ihre Oberflaeche, wird nichts versprochen', async () => {
+  // Die Nummer gilt fuer data.lua, die Datei kommt trotzdem nicht - dann
+  // bekaeme der Echo gleich dasselbe. Ein Satz ist besser als "Ich spiele …"
+  // und danach Stille.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'oberflaeche');
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
+    assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
+    assert.doesNotMatch(r.outputSpeech.text, /Ich spiele/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('"weiter" nach langer Pause weckt die Datei ebenso', async () => {
+  // Derselbe kalte Start, nur ohne gesprochenen Namen: Der Echo weiss den
+  // Stream noch, die Platte schlaeft trotzdem.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget(
+      intent('AMAZON.ResumeIntent'),
+      { token: 'Udo CD eins|0|0|0', offset: 120000 },
+      redis,
+    );
+    assert.equal(box.geweckt, r.directives[0].audioItem.stream.url);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('der Play-Knopf bekommt keinen Satz, wenn die Box keinen Ton liefert', async () => {
+  // PlaybackController ist kein Gespraech - Sprache ist in der Antwort darauf
+  // nicht erlaubt. Dann bleibt es bei der leeren Antwort, nur ohne das stumme
+  // Versprechen einer Play-Direktive.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'oberflaeche');
+  try {
+    const r = await skillMitBudget(
+      { type: 'PlaybackController.PlayCommandIssued' },
+      { token: 'Udo CD eins|0|0|0' },
+      redis,
+    );
+    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
+    assert.equal(r.outputSpeech, undefined, 'und kein Wort');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('mitten in der Wiedergabe wird nicht geweckt', async () => {
+  // Am Titelwechsel dreht die Platte laengst, und ein zweiter Abruf waere
+  // ausgerechnet dort einer zu viel: Der Echo laedt den naechsten Titel schon
+  // vor, waehrend der laufende noch streamt.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await skillMitBudget(
+      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
+      { token: 'Udo CD eins|0|0|0' },
+      redis,
+    );
+    assert.ok(!box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'kein Weckruf');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('ohne Budget fuer den Weckruf wird trotzdem gespielt', async () => {
+  // Die Antwort an Alexa hat Vorrang: Ein Weckruf, der das Fenster sprengt,
+  // kostet die ganze Wiedergabe statt sie zu retten.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  const vorher = process.env.MUSIK_BUDGET_MS;
+  process.env.MUSIK_BUDGET_MS = '1200';
+  try {
+    const r = await skill(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, null, redis);
+    assert.ok(!box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'kein Weckruf');
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+  } finally {
+    process.env.MUSIK_BUDGET_MS = vorher;
+    box.zurueck();
   }
 });
