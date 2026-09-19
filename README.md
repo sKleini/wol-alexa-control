@@ -386,13 +386,17 @@ AVM documents none of this, so the call that returns the listing is **tried rath
 
 **The addresses carry a session number, and the FRITZ!Box forgets a session after roughly twenty minutes of quiet** — so a stored one would only be good for the evening it was imported. The playlist therefore also stores where it came from, and the skill swaps `sid=` for a current one before every answer. The path to the file never changes, only the number in it, so a FRITZ!NAS playlist stays an ordinary list of URLs and only one place in the skill knows about any of this.
 
-**The box keeps one NAS session, and that shapes what is possible.** AVM's technical note on session IDs is explicit: the number of sessions is limited, a program should use only one per box — and an access *without* a valid session terminates all existing ones for security reasons. Opening a share link is exactly such an access, so every refresh throws every other playback out of the box. Hence one remembered session per box, not one per share. What follows from it:
+**The box keeps one NAS session, and that shapes what is possible.** AVM's technical note on session IDs is explicit: the number of sessions is limited, a program should use only one per box — and an access *without* a valid session terminates all existing ones for security reasons. Opening a share link is exactly such an access, so every **login** throws every other playback out of the box. Hence one remembered session per box, not one per share. What follows from it:
 
 - Two FRITZ!NAS playlists **at the same time on two Echos** do not work — the second would cut off the first. One after another works with any number of shares.
-- **Importing while something is playing** cuts that playback off. It recovers on the next track (`PlaybackFailed` fetches a new session immediately), but the running track stops.
+- **Importing while something is playing** cuts that playback off — an import always logs in. The skill recovers: `PlaybackFailed` notices the dead number, fetches a new one and resumes the same track where it broke off.
 - Someone working in the FRITZ!NAS web interface at the same time has the same effect.
 
-Only the playlist this request is about gets refreshed — fetching a number costs two calls to the box, and Alexa allows the skill eight seconds. The number is cached in Redis for five minutes — AVM grants ten, extended by every active access, and that extension is not a promise worth trading silence at the Echo for. A track the Echo failed to load overtakes that: `PlaybackFailed` fetches a fresh number immediately, because an expired one is by far the likeliest cause and the next track would carry the same. If the box cannot be reached at all, the skill says so instead of starting: the remembered number is past its window by then, and playing with it produced exactly the failure that was reported — *"Ich spiele das doppelte Lottchen"*, then silence, every first attempt. A sentence that explains beats a promise that does not hold. The card in the dashboard marks such a playlist with **FRITZ!NAS**; clicking that reveals which folder it came from (`/Musik/Schlaflieder`), as a link that opens the share itself in a new tab, and *Edit* puts the share link back into the *Import folder* field, so it can be looked up, copied or replaced. Changing that field alone does not change the playlist — the link is only taken over by pressing *Import folder*, and saving with an unapplied one says so instead of quietly keeping the old.
+**Asking beats logging in, and that distinction is the fix for a playback error mid-album.** An expired cache window used to mean a login, and a login terminates every session on the box — including the one the Echo is streaming with right now. With tracks of four or five minutes and a five-minute window, the window fell inside a running track almost every time: the Echo lost the file mid-play and reported `MEDIA_ERROR_INTERNAL_SERVER_ERROR — Device playback error`, and the skill skipped to the next track. So there is a cheaper step in front of the login now: a single `data.lua` call with the remembered number, which terminates nothing and, as an active access, extends the session at the box. While a playlist is playing that call always succeeds — the Echo has been keeping the session alive with every range request — so the session now carries a whole album, and a login only happens when the number is genuinely dead (box restarted, another share opened, the web interface used). When that does happen on a failed track, the track is **retried** at the point it broke off instead of being skipped: the file was fine, only its address was not. It retries exactly once — on the next failure the check says "still valid", no new number is fetched, and the skill moves on as before.
+
+Only the playlist this request is about gets refreshed — fetching a number costs two calls to the box, and Alexa allows the skill eight seconds. The number is cached in Redis for five minutes — AVM grants ten, extended by every active access. A track the Echo failed to load overtakes that window: `PlaybackFailed` re-checks the number immediately rather than sitting the window out, because an expired one is by far the likeliest cause and the next track would carry the same. If the box cannot be reached at all, the skill says so instead of starting: the remembered number is past its window by then, and playing with it produced exactly the failure that was reported — *"Ich spiele das doppelte Lottchen"*, then silence, every first attempt. A sentence that explains beats a promise that does not hold. The card in the dashboard marks such a playlist with **FRITZ!NAS**; clicking that reveals which folder it came from (`/Musik/Schlaflieder`), as a link that opens the share itself in a new tab, and *Edit* puts the share link back into the *Import folder* field, so it can be looked up, copied or replaced. Changing that field alone does not change the playlist — the link is only taken over by pressing *Import folder*, and saving with an unapplied one says so instead of quietly keeping the old.
+
+**Everything outside the skill runs without a deadline, and that used to mean without a cache.** *Check URLs* and the import have no Alexa window, so they pass `Infinity` as the remaining budget. `setTimeout` turns that into **one millisecond** — it warns once with `TimeoutOverflowWarning` and then loses every race against a real Upstash call. The remembered session number therefore counted as absent (`musik_fritz_sid nicht rechtzeitig: nach Infinity ms`), and *Check URLs* logged in every single time: precisely the access that terminates every session on the box. Pressing it during playback threw out the track it was meant to be checking. A deadline of `Infinity` now simply means no timer at all.
 
 **Check URLs** uses the same refresh, so it tests what the Echo would actually be handed rather than the stored address: without that it reported every FRITZ!NAS playlist as broken while it was playing perfectly — and a check nobody believes is worse than none. It says so in its first line when it did. It also slows down for a FRITZ!Box: one request at a time instead of four, seven seconds instead of four, and six tracks per call instead of twenty. A box serves each track through a Lua script from its own storage over a household uplink, and four at once means none of them answers in time.
 
@@ -440,7 +444,7 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 
 **Afterwards:** *"Alexa, weiter"* works even when the Echo has forgotten the stream — after the radio in between, or the next day. Without a running stream the skill falls back on the newest resume mark and carries on with the playlist that was stopped last. Only playlists with *Resume* set leave such a mark, and it is taken up in that playlist's gait.
 
-**While playing:** *"Alexa, nächster Titel"*, *"voriger Titel"*, *"Pause"*, *"weiter"*, *"von vorn"* and *"Stopp"* work as usual, as do the buttons on Echo Show and in the Alexa app. *"Zufallswiedergabe an"* and *"aus"* reshuffle the running playback without touching the stored playlist — the order lives in the token, so the change reaches exactly this one stream. Asking Alexa to repeat, on the other hand, only reports how the running playlist is set and points at the dashboard: flipping that one by voice would change the playlist for good and for everyone. A track that fails to load is skipped; if every track of a round fails, playback stops instead of circling forever.
+**While playing:** *"Alexa, nächster Titel"*, *"voriger Titel"*, *"Pause"*, *"weiter"*, *"von vorn"* and *"Stopp"* work as usual, as do the buttons on Echo Show and in the Alexa app. *"Zufallswiedergabe an"* and *"aus"* reshuffle the running playback without touching the stored playlist — the order lives in the token, so the change reaches exactly this one stream. Asking Alexa to repeat, on the other hand, only reports how the running playlist is set and points at the dashboard: flipping that one by voice would change the playlist for good and for everyone. A track that fails to load is skipped — unless the failure came from a session number that had just been renewed, in which case the same track is picked up again where it broke off. If every track of a round fails, playback stops instead of circling forever.
 
 **With Repeat off**, nothing is queued behind the last track, so it plays to its end and the playlist stops — a `Stop` at that moment would cut the last track off mid-song. *"Nächster Titel"* on the last track ends playback; *"voriger Titel"* on the first one replays it rather than jumping to the end.
 
@@ -449,11 +453,13 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 ##### One long file is not one long track
 
 A session number for the FRITZ!NAS lasts about ten minutes, extended by active
-use. A three-minute song is done long before that. **An hour-long audio play is
-not**: the Echo pulls it in ranges across that whole hour, every range carrying
-the same number, and nothing guarantees it survives. Any refresh elsewhere ends
-*all* sessions on the box as well, so a second playlist or a press of *Check
-URLs* can pull the ground out from under a running one.
+use — and the skill's own check between tracks counts as use, so an ordinary
+playlist keeps its session alive by playing. A three-minute song is done long
+before the ten minutes are up. **An hour-long audio play is not**: the Echo
+pulls it in ranges across that whole hour, every range carrying the same
+number, and nothing guarantees it survives. Any *login* elsewhere ends *all*
+sessions on the box as well, so an import, a second share or the FRITZ!NAS web
+interface can still pull the ground out from under a running one.
 
 *Check URLs* therefore reports the size, the bit rate and the playing time of
 every track, and marks with ⏳ whatever plays longer than a session lasts.
@@ -541,7 +547,11 @@ accordingly.
 Each request logs its own duration as `musik-box <type> in <n> ms`, and every
 login logs `musik-box FRITZ!NAS-Login ok nach <n> ms, <n> ms Budget uebrig`.
 Those two lines separate the skill's own work from the cold start, which the
-Vercel timing alone cannot, and say whether the login was the reason.
+Vercel timing alone cannot, and say whether the login was the reason. The step
+in front of it logs too — `musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch`
+or `… ist tot` — so a log full of the first and empty of logins is what a
+healthy album looks like, and a login between two tracks is now the thing worth
+explaining.
 
 **The functions run in Frankfurt** (`"regions": ["fra1"]` in `vercel.json`).
 Without that line Vercel places them in Virginia by default, and every request
@@ -557,6 +567,8 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | Alexa confirms, then silence — always on the first attempt, FRITZ!NAS | the login sat in the second step of the call and did not fit there; the Echo was handed an expired number | fixed: the session is fetched when the skill is opened — see **Why the skill never goes silent** |
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
 | Alexa confirms, then silence — FRITZ!NAS, large file | the track plays longer than a session number lasts | **Check URLs** now shows ⏳ for those; split the file into chapters, see below |
+| Playback stops when *Check URLs* or an import is pressed, FRITZ!NAS | *Check URLs* dropped the remembered session number (`musik_fritz_sid nicht rechtzeitig: nach Infinity ms`) and logged in, which terminates every session on the box | fixed: no deadline now means no timer, so the cache is read. An import still logs in — that is unavoidable, but the skill resumes the running track |
+| `MEDIA_ERROR_INTERNAL_SERVER_ERROR – Device playback error` mid-album, FRITZ!NAS, and the track is skipped | the skill logged in to the box while that very track was streaming, and a login terminates every session on the box | fixed: an expired cache window now asks whether the number still holds instead of logging in, and a track that did fail on a dead number is retried rather than skipped — see **FRITZ!NAS folder shares**. The log line `musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch` is the one to look for |
 | "Ich komme gerade nicht an die FRITZ!Box" | no current session number, and the remembered one is past its window | the box was unreachable or slow; say it again. The skill no longer starts with a number it does not trust — see below |
 | First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |
 | "Weiter" restarts the track | host without range support | **Check URLs** shows ⚠️ — pick another host |
