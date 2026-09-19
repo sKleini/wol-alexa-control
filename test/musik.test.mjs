@@ -1879,8 +1879,9 @@ function boxAmDraht(gueltig, neue = 'cccccccccccccccc', ton = 'audio') {
   // `Range` zoege der Weckruf die ganze Datei ueber die Leitung.
   const box = {
     abrufe, zustand, geweckt: null, weckkopf: null,
-    tonZaehler: 0, nurEinmalTon: false,
+    tonZaehler: 0, nurEinmalTon: false, umleitung: false,
     tonNurEinmal() { box.nurEinmalTon = true; },
+    leitetUm() { box.umleitung = true; },
   };
   const vorher = globalThis.fetch;
   globalThis.fetch = async (eingabe, init = {}) => {
@@ -1891,6 +1892,9 @@ function boxAmDraht(gueltig, neue = 'cccccccccccccccc', ton = 'audio') {
       return boxAntwort('text/html', `<html><body data-sid="${neue}"></body></html>`);
     }
     if (url.includes('/nas/api/data.lua')) {
+      // Die Box, die eine unbekannte Nummer mit einer Umleitung auf die
+      // Anmeldung beantwortet statt mit JSON - der gemeldete HTTP 303.
+      if (box.umleitung) return new Response('', { status: 303, headers: { Location: '/nas/login.lua' } });
       const sid = new URLSearchParams(String(init.body || '')).get('sid');
       const daten = sid === zustand.gueltig ? { root: '/Musik', rights: { read: true } } : { error: 'no session' };
       return boxAntwort('application/json', JSON.stringify(daten));
@@ -2810,6 +2814,88 @@ test('der zweite Weckruf faellt nicht der eigenen Pause zum Opfer', async () => 
   } finally {
     process.env.MUSIK_WECK_ABSTAND_MS = vorherA;
     process.env.MUSIK_BUDGET_MS = vorherB;
+    box.zurueck();
+  }
+});
+
+// --- Atempause vor dem naechsten Anlauf --------------------------------------
+//
+// **Gemeldet:** `MEDIA_ERROR_INTERNAL_SERVER_ERROR`, `Offset: 1`, Titel 4 von
+// "Udo CD eins", Sitzung gerade geprueft ("gilt noch") - und danach spielte die
+// Musik nicht mehr. Sitzung und Datei waren in Ordnung; was fehlte, war Luft.
+// Der Wiederholversuch lief sofort los und traf damit dieselbe ueberlastete
+// Box, der naechste Titel danach wieder, bis die Runde herum war.
+
+test('vor dem Wiederholversuch wird die Datei angetippt', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget(
+      { type: 'AudioPlayer.PlaybackFailed', token: 'Udo CD eins|0|0|0',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' } },
+      { token: 'Udo CD eins|0|0|0', offset: 1 },
+      redis,
+    );
+    assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'die Datei wurde angetippt');
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play', 'und dann wiederholt');
+    assert.match(r.directives[0].audioItem.stream.token, /\|1$/, 'als zweiter Versuch');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('schweigt die Box beim Antippen, wird trotzdem wiederholt', async () => {
+  // Was hier gemessen wird, ist der Zustand von einer Sekunde her. Den Titel
+  // deswegen zu ueberspringen waere schlechter, als ihn zu versuchen - die
+  // Pause allein ist schon der halbe Zweck.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'keiner');
+  try {
+    const r = await skillMitBudget(
+      { type: 'AudioPlayer.PlaybackFailed', token: 'Udo CD eins|0|0|0',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' } },
+      { token: 'Udo CD eins|0|0|0', offset: 1 },
+      redis,
+    );
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('auch der Sprung zum naechsten Titel bekommt die Pause', async () => {
+  // Nach dem zweiten Fehlschlag geht es weiter - und zwar zu einer Box, die
+  // gerade eben zweimal nicht geliefert hat. Ohne Pause reihte sich hier der
+  // dritte Fehlschlag an, und so weiter bis zum Ende der Runde.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget(
+      { type: 'AudioPlayer.PlaybackFailed', token: 'Udo CD eins|0|0|0|1',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' } },
+      { token: 'Udo CD eins|0|0|0|1', offset: 1 },
+      redis,
+    );
+    assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'auch hier angetippt');
+    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('path'), '/02.mp3',
+      'und der naechste Titel kommt');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('eine Umleitung der Box gilt als tote Nummer, nicht als Schweigen', async () => {
+  // Der gemeldete HTTP 303. Frueher hiess das "ohne Antwort", und mit laufender
+  // Frist spielte der Skill mit dieser Nummer los - "Ich spiele ...", dann
+  // Stille. Jetzt zaehlt es als Nein und loest die Anmeldung aus.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);   // innerhalb der Frist
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  box.leitetUm();
+  try {
+    await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    assert.ok(box.abrufe.includes('/nas/filelink.lua'),
+      'die Umleitung fuehrt zur Anmeldung statt zum Weiterwursteln');
+  } finally {
     box.zurueck();
   }
 });

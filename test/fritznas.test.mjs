@@ -16,6 +16,7 @@ import {
   mitSid,
   textAuszug,
   weckUrteil,
+  sitzungsUrteil,
 } from '../lib/fritznas.js'
 
 const FREIGABE = 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fbb2016f4f';
@@ -188,4 +189,39 @@ test('weckUrteil sagt nein, wo die Box etwas anderes als Ton schickt', () => {
   assert.equal(weckUrteil(302, 'text/html').ok, false, 'die Umleitung auf die Anmeldung');
   assert.equal(weckUrteil(404, 'text/html').ok, false);
   assert.equal(weckUrteil(500, 'audio/mpeg').ok, false, 'ein Fehler bleibt einer, auch mit Audio-Etikett');
+});
+
+// --- Was eine Antwort der Box ueber die Sitzungsnummer aussagt ---------------
+//
+// **Gemeldet:** `FRITZ!NAS-Sitzung nachgefragt: ohne Antwort (HTTP 303)`.
+// Eine Umleitung ist kein Schweigen - sie ist die Box, die sagt "diese Nummer
+// kenne ich nicht, geh zur Anmeldung". Als "nicht zu erfahren" verbucht,
+// konnte der Skill innerhalb seiner Frist damit losspielen, und der Echo bekam
+// die Anmeldeseite statt der Datei.
+
+test('sitzungsUrteil liest die Zustimmung aus den Daten', () => {
+  assert.equal(sitzungsUrteil(200, { root: '/Musik', rights: { read: true } }), true);
+  assert.equal(sitzungsUrteil(200, { rights: { read: true } }), true, 'rights allein genuegt');
+  assert.equal(sitzungsUrteil(200, { error: 'no session' }), false, 'JSON ohne Rechte ist ein Nein');
+});
+
+test('sitzungsUrteil wertet jede Antwort unter 500 als Ablehnung', () => {
+  // Der gemeldete Fall und seine Verwandten: Umleitung auf die Anmeldung,
+  // Fehlerstatus, oder die FRITZ!NAS-Oberflaeche als HTML mit Status 200.
+  assert.equal(sitzungsUrteil(303, null), false, 'die Umleitung auf die Anmeldung');
+  assert.equal(sitzungsUrteil(403, null), false);
+  assert.equal(sitzungsUrteil(404, null), false);
+  assert.equal(sitzungsUrteil(200, null), false, 'HTTP 200, aber kein lesbares JSON');
+});
+
+test('sitzungsUrteil laesst 5xx und Schweigen unklar', () => {
+  // **Hier bleibt "Schweigen ist kein Nein" genau dort, wo es gemeint war.**
+  // Bei 5xx ist die Box ueberlastet oder kaputt; das sagt nichts ueber die
+  // Nummer. Sie deswegen fuer tot zu erklaeren hiesse, sich mitten in einer
+  // laufenden Wiedergabe anzumelden - und eine Anmeldung beendet alle
+  // Sitzungen der Box.
+  assert.equal(sitzungsUrteil(500, null), null);
+  assert.equal(sitzungsUrteil(503, null), null);
+  assert.equal(sitzungsUrteil(null, null), null, 'nicht erreichbar');
+  assert.equal(sitzungsUrteil(undefined, null), null, 'Zeit abgelaufen');
 });

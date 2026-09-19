@@ -450,6 +450,14 @@ musik-box Weckruf ausgelassen, nur noch 1300 ms Budget
 
 **The 1.5 seconds are a bet, not a measurement**, so they live in an environment variable (`MUSIK_WECK_ABSTAND_MS`) rather than in the code: if the box needs longer, that is a number in Vercel's dashboard and not a deploy; `0` switches the whole second round off. And if the second probe comes back with the FRITZ!NAS interface instead of audio, nothing is promised — the Echo would get the same thing.
 
+**A redirect is not silence.** The line that says why the box said nothing paid for itself the first time it ran:
+
+```
+musik-box FRITZ!NAS-Sitzung nachgefragt: ohne Antwort (HTTP 303) nach 753 ms
+```
+
+An `HTTP 303` on `data.lua` is the box saying *"I do not know this number, go to the login"* — a No, not a shrug. Booked as "cannot be determined", the skill could go on to start playback with it while its own window was still running, and the Echo got the login page instead of the file: precisely the reported *"Ich spiele …"*, then silence. So any answer below 500 now counts as a rejection — a redirect, an error status, or the FRITZ!NAS interface as HTML with status 200. A **5xx stays undetermined**: there the box is overloaded or broken, which says nothing about the number, and declaring it dead would mean logging in during a running playback — which ends every session on the box. The protection that "silence is not a No" was built for stays exactly where it was meant to be.
+
 **Silence from the box is not a No.** The check has three outcomes, and the difference matters: on a No the skill logs in, on no answer at all it does not — whoever cannot be reached will not accept a login either, and then the remembered number, still inside its window, is the best word there is. The same applies when the remaining budget is too small for a check: the window keeps its say. Staying silent while the number is very probably fine would be the worse choice.
 
 Only the playlist this request is about gets refreshed — fetching a number costs two calls to the box, and Alexa allows the skill eight seconds. The number is cached in Redis for five minutes — AVM grants ten, extended by every active access. A track the Echo failed to load overtakes that window: `PlaybackFailed` re-checks the number immediately rather than sitting the window out, because an expired one is by far the likeliest cause and the next track would carry the same. If the box cannot be reached at all, the skill says so instead of starting: the remembered number is past its window by then, and playing with it produced exactly the failure that was reported — *"Ich spiele das doppelte Lottchen"*, then silence, every first attempt. A sentence that explains beats a promise that does not hold.
@@ -541,6 +549,8 @@ So for a Fire TV the practical rule is: **file shares play, folder shares do not
 ##### One retry, and only one
 
 A track the Echo could not load is played again before the skill moves on. The reason is in the log of the case that prompted it: session number checked valid seconds earlier, `Offset: 1` — the track had never started — and *Check URLs* reported the whole playlist green. The files were fine and the session was fine, so what is left is the box. It serves every file through a Lua script, and at a track change the Echo starts fetching the next one while the current is still streaming. Two fetches at once is a lot for that hardware — the same narrowness that made *Check URLs* drop to one request at a time for a FRITZ!Box. A failure that comes from load is gone on the next attempt, and skipping the track punishes the listener for one bad second of the box's.
+
+**And it takes a breath first.** Reported with the retry already in place: `MEDIA_ERROR_INTERNAL_SERVER_ERROR`, `Offset: 1`, track 4 of an album, the session checked seconds earlier and valid — and afterwards the music did not come back at all. Session and file were fine; what was missing was air. The retry went out immediately and therefore hit the same overloaded box, the next track after it did too, and so on until the round was through and playback ended. Both the retry and the step to the next track now probe the file first: half a second of distance, and a line in the log saying whether the box is serving *now*. It plays either way — what is measured there is a second old, and skipping the track over it would be worse than trying it.
 
 The retry resumes where the track broke off, minus the usual pre-roll: at the start in the ordinary "never got going" case, and at the exact spot if the session died mid-stream.
 
