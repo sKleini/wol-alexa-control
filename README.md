@@ -460,6 +460,22 @@ Three phrasings had to go for this, since the slot must sit at the end: *"Tasche
 
 **Alexa routine** (optional): *Mehr → Routinen → +* → *Wenn: Sprache* `musik an` → *Aktion: Angepasst → Skills → Meine Plattenkiste*. A routine cannot pass a parameter, so it opens the skill and Alexa asks which playlist.
 
+##### Not every Alexa device reports back
+
+A Fire TV plays a one-track playlist and never sends a single `AudioPlayer` event — no `PlaybackStarted`, no `PlaybackFailed`, no `PlaybackStopped`. The skill's own request log shows the `IntentRequest` and nothing after it, on a call that audibly worked. Everything the skill builds on those events is therefore inert there:
+
+- **The next track is never queued.** `PlaybackNearlyFinished` is what appends it, so a playlist plays its first track and stops.
+- **A failed track is never retried**, and a dead session number is never noticed — the recovery above never runs.
+- **No resume mark is written**, because that happens on `PlaybackStarted` and `PlaybackStopped`.
+
+None of this is fixable from the skill: a device that does not report cannot be answered. Long-form audio playlists belong on an Echo. The log is the only way to see it — a device that plays without leaving a `PlaybackStarted` line behind is one of these.
+
+##### Spaces in the address are `%20`, not `+`
+
+`URLSearchParams` writes a space as `+`, which is what the form-encoded format wants, and the FRITZ!Box reads it correctly — an Echo plays such an address without complaint. Another player need not. `+` only means "space" in that one format; in an address it is an ordinary character, and a client that reassembles the query by its own rules turns it into `%2B` and then looks for a file called `01.+Die+Buehne.mp3`. `%20` means the same thing in both readings and decodes to the identical path, so it is the narrower choice and costs nothing.
+
+`mitSid` used to undo this. Its comment claimed it left everything but the session number alone; in fact `searchParams.set` marks the query dirty and `href` reassembles all of it, so the import's `%20` came back out as `+` on every play. The reassembly itself is lossless — only the spelling of the spaces is straightened afterwards, so both paths produce the same address.
+
 ##### One retry, and only one
 
 A track the Echo could not load is played again before the skill moves on. The reason is in the log of the case that prompted it: session number checked valid seconds earlier, `Offset: 1` — the track had never started — and *Check URLs* reported the whole playlist green. The files were fine and the session was fine, so what is left is the box. It serves every file through a Lua script, and at a track change the Echo starts fetching the next one while the current is still streaming. Two fetches at once is a lot for that hardware — the same narrowness that made *Check URLs* drop to one request at a time for a FRITZ!Box. A failure that comes from load is gone on the next attempt, and skipping the track punishes the listener for one bad second of the box's.

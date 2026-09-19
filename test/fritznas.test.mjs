@@ -114,3 +114,53 @@ test('textAuszug kappt und kommt ohne title aus', () => {
   assert.equal(textAuszug('<p>nur Text</p>'), 'nur Text');
   assert.equal(textAuszug(''), '');
 });
+
+// --- Leerzeichen in der Adresse ----------------------------------------------
+//
+// **Warum das eine Frage ist.** URLSearchParams schreibt ein Leerzeichen als
+// "+" - so will es das Formular-Format, und die FRITZ!Box versteht es: Der Echo
+// spielt damit tadellos. Ein anderer Abspieler muss es aber nicht verstehen.
+// "+" heisst nur im Formular-Format "Leerzeichen"; in einer Adresse ist es
+// sonst ein gewoehnliches Zeichen, und wer die Abfrage nach eigenen Regeln neu
+// zusammensetzt, sucht anschliessend eine Datei namens "01.+Die+Buehne.mp3".
+
+test('streamUrl schreibt Leerzeichen als %20', () => {
+  const url = streamUrl('https://box.myfritz.net:456', 'aaaaaaaaaaaaaaaa', '/01. Die Bühne Ist Angerichtet.mp3');
+  assert.ok(!url.includes('+'), 'kein + in der Adresse');
+  assert.match(url, /%20Die%20B%C3%BChne%20/);
+  assert.equal(
+    new URL(url).searchParams.get('path'),
+    '/01. Die Bühne Ist Angerichtet.mp3',
+    'und der Pfad kommt unveraendert wieder heraus',
+  );
+});
+
+test('ein + im Dateinamen bleibt ein +', () => {
+  // URLSearchParams macht daraus %2B, bevor irgendjemand ersetzt. Sonst wuerde
+  // aus "Best Of + Mehr.mp3" beim Abspielen "Best Of   Mehr.mp3".
+  const url = streamUrl('https://box.myfritz.net:456', 'aaaaaaaaaaaaaaaa', '/Best Of + Mehr.mp3');
+  assert.equal(new URL(url).searchParams.get('path'), '/Best Of + Mehr.mp3');
+});
+
+test('mitSid zieht die Schreibweise der Leerzeichen gerade', () => {
+  // **Hier lag der Haken.** searchParams.set markiert die Abfrage als
+  // geaendert, und href setzt sie danach komplett neu zusammen - aus dem %20
+  // des Imports wurde beim Abspielen wieder ein +. Die Funktion hat also
+  // genau das zurueckgedreht, was streamUrl vermeidet.
+  const importiert = streamUrl('https://box.myfritz.net:456', 'aaaaaaaaaaaaaaaa', '/01. Die Bühne.mp3');
+  const gespielt = mitSid(importiert, 'bbbbbbbbbbbbbbbb');
+  assert.ok(!gespielt.includes('+'), 'auch nach dem Austausch kein +');
+  assert.equal(new URL(gespielt).searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
+  assert.equal(new URL(gespielt).searchParams.get('path'), '/01. Die Bühne.mp3');
+  assert.equal(gespielt, importiert.replace('aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb'), 'nur die Nummer ist anders');
+});
+
+test('mitSid raeumt auch eine alt gespeicherte Adresse mit + auf', () => {
+  // Die Playlists in der Datenbank tragen die alte Schreibweise. Sie werden
+  // nicht umgeschrieben - beim Abspielen wird die Adresse ohnehin neu gebaut.
+  const alt = 'https://box.myfritz.net:456/nas/cgi-bin/luacgi_notimeout'
+    + '?script=%2Fapi%2Fdata.lua&sid=aaaaaaaaaaaaaaaa&c=music&a=get&path=%2F01.+Die+B%C3%BChne.mp3';
+  const neu = mitSid(alt, 'bbbbbbbbbbbbbbbb');
+  assert.ok(!neu.includes('+'));
+  assert.equal(new URL(neu).searchParams.get('path'), '/01. Die Bühne.mp3');
+});
