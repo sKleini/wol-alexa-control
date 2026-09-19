@@ -853,6 +853,9 @@ test('Durchgelaufen vergisst den Stand, sonst begaenne der naechste Start am End
   const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 5000 });
   const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Hörspiel|2|0|0' }, {}, null, redis);
   assert.deepEqual(r, {}, 'ohne Wiederholung wird nichts angehaengt');
+  assert.equal(redis.speicher.musik_stand['hörspiel'].fertig, undefined, 'der letzte Titel laeuft ja noch');
+
+  await skill({ type: 'AudioPlayer.PlaybackFinished', token: 'Hörspiel|2|0|0' }, {}, null, redis);
   assert.equal(redis.speicher.musik_stand['hörspiel'].fertig, true);
 
   const neu = await skill(sucheIntent('hörspiel'), {}, null, redis);
@@ -861,19 +864,30 @@ test('Durchgelaufen vergisst den Stand, sonst begaenne der naechste Start am End
   assert.equal(neu.directives[0].audioItem.stream.offsetInMilliseconds, 0);
 });
 
+// Wer waehrend des letzten Titels stoppt, ist nicht durchgelaufen: Der Stand
+// gehoert auf diesen Titel, nicht auf den Anfang der Playlist.
+test('Ein Stopp im letzten Titel merkt sich den letzten Titel', async () => {
+  const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 0 });
+  await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Hörspiel|2|0|0' }, {}, null, redis);
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Hörspiel|2|0|0', offsetInMilliseconds: 40000 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].fertig, undefined);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].position, 2);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 40000);
+});
+
 // Der Vermerk statt des Loeschens ist der Grund, warum dieser Test existiert:
-// Der letzte Titel laeuft beim NearlyFinished noch, und sein Stopp kam frueher
-// hinterher und legte die Stelle am Ende der Playlist wieder an.
+// Ein Stopp aus den letzten Sekunden kann dem PlaybackFinished hinterherlaufen
+// und legte die Stelle am Ende der Playlist wieder an.
 test('Ein Stopp nach dem Durchlauf legt keine Stelle am Ende mehr an', async () => {
   const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 5000 });
-  await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Hörspiel|2|0|0' }, {}, null, redis);
+  await skill({ type: 'AudioPlayer.PlaybackFinished', token: 'Hörspiel|2|0|0' }, {}, null, redis);
   await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Hörspiel|2|0|0', offsetInMilliseconds: 178000 }, {}, null, redis);
   assert.equal(redis.speicher.musik_stand['hörspiel'].fertig, true);
   assert.equal(redis.speicher.musik_stand['hörspiel'].position, 0);
 });
 
-// Eine Playlist, die weiterhoert UND sich wiederholt - fuer den Endspurt, in
-// dem Alexa den naechsten Titel schon angehaengt hat.
+// Eine Playlist, die weiterhoert UND sich wiederholt - fuer die Frage, was das
+// Anhaengen des naechsten Titels mit dem gemerkten Stand macht.
 const ENDLOS = { name: 'Endlos', fortsetzen: true, wiederholen: true, titel: KINDER.titel };
 
 test('einstieg geht den Vorlauf zurueck, aber nie unter null', () => {
@@ -915,23 +929,39 @@ test('MUSIK_VORLAUF_MS bestimmt den Vorlauf', async () => {
   }
 });
 
-test('Der Endspurt schiebt den Stand auf den angehaengten Titel', async () => {
+test('Das Anhaengen des naechsten Titels laesst den Stand, wo er ist', async () => {
+  // Der Echo fragt den naechsten Titel an, sobald seine Warteschlange Platz
+  // hat - oft Sekunden nach dem Titelanfang. Der laufende Titel ist also
+  // laengst nicht vorbei, und der Stand gehoert noch auf ihn.
   const redis = mitStand(ENDLOS, { position: 0, runde: 0, seed: 0, offset: 12000 });
   const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Endlos|0|0|0' }, {}, null, redis);
   assert.equal(r.directives[0].playBehavior, 'ENQUEUE');
+  assert.equal(r.directives[0].audioItem.stream.token, 'Endlos|1|0|0');
   assert.deepEqual(
     { ...redis.speicher.musik_stand['endlos'], zeit: undefined },
-    { position: 1, runde: 0, seed: 0, offset: 0, zeit: undefined },
+    { position: 0, runde: 0, seed: 0, offset: 12000, zeit: undefined },
   );
 });
 
-test('Ein Stopp im Endspurt zieht den Stand nicht zurueck', async () => {
-  // Wer in den letzten Sekunden stoppt, will beim naechsten Mal den naechsten
-  // Titel hoeren und nicht dessen Vorgaenger ausklingen. Der Stopp traegt aber
-  // noch den alten Token.
+test('Ein Stopp nach dem Anhaengen merkt sich den Titel, der laeuft', async () => {
+  // Der Fehler, der diesen Test hervorgebracht hat: Das Anhaengen schob den
+  // Stand auf den naechsten Titel vor, der Stopp mitten im Stueck fiel damit
+  // in die Sperre gegen zurueckspringende Staende - und "weiter" begann beim
+  // naechsten Lied statt bei dem, das gerade lief.
   const redis = mitStand(ENDLOS, { position: 0, runde: 0, seed: 0, offset: 0 });
   await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Endlos|0|0|0' }, {}, null, redis);
-  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Endlos|0|0|0', offsetInMilliseconds: 178000 }, {}, null, redis);
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Endlos|0|0|0', offsetInMilliseconds: 42000 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['endlos'].position, 0);
+  assert.equal(redis.speicher.musik_stand['endlos'].offset, 42000);
+});
+
+test('Der Titelwechsel traegt den neuen Titel ein, nicht der Endspurt', async () => {
+  // Die Gegenprobe: Ist der Titel wirklich durch, meldet der Echo Finished und
+  // gleich darauf den Anfang des angehaengten Titels. Der Stand folgt dem
+  // Anfang - mit dem Token, der wirklich laeuft.
+  const redis = mitStand(ENDLOS, { position: 0, runde: 0, seed: 0, offset: 42000 });
+  await skill({ type: 'AudioPlayer.PlaybackFinished', token: 'Endlos|0|0|0', offsetInMilliseconds: 178000 }, {}, null, redis);
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Endlos|1|0|0', offsetInMilliseconds: 0 }, {}, null, redis);
   assert.equal(redis.speicher.musik_stand['endlos'].position, 1);
   assert.equal(redis.speicher.musik_stand['endlos'].offset, 0);
 });
@@ -1002,6 +1032,21 @@ test('Album: der gemerkte Titel faengt wieder von vorn an', async () => {
   assert.equal(r.outputSpeech.text, 'Ich spiele Album weiter.');
   assert.equal(r.directives[0].audioItem.stream.token, 'Album|2|0|0');
   assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+});
+
+test('Album: gestoppt wird das Lied, das laeuft - nicht das angehaengte', async () => {
+  // Der gemeldete Fehler, vom Titelanfang bis zum naechsten Start: Lied zwei
+  // laeuft, der Echo hat sich laengst Lied drei anhaengen lassen, und mitten
+  // im Stueck faellt "Alexa, stopp". Wer danach die Playlist startet, soll
+  // Lied zwei hoeren - von vorn, wie die Einstellung es zusagt.
+  const redis = mitStand(ALBUM);
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Album|1|0|0', offsetInMilliseconds: 0 }, {}, null, redis);
+  await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Album|1|0|0' }, {}, null, redis);
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Album|1|0|0', offsetInMilliseconds: 47000 }, {}, null, redis);
+
+  const r = await skill(sucheIntent('album'), {}, null, redis);
+  assert.equal(r.directives[0].audioItem.stream.token, 'Album|1|0|0', 'dasselbe Lied, nicht das naechste');
+  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0, 'und von vorn');
 });
 
 test('Hoerbuch: derselbe Stand fuehrt auf die Sekunde', async () => {
