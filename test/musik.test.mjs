@@ -12,6 +12,11 @@ import assert from 'node:assert/strict'
 // bei jedem Request neu liest - eine Konstante beim Laden des Moduls waere hier
 // nicht mehr zu erreichen, denn ES-Module fuehren ihre Importe vorher aus.
 process.env.MUSIK_BUDGET_MS = '300';
+// Der Abstand nach einer Anmeldung auf praktisch null. In Wirklichkeit sind es
+// anderthalb Sekunden (siehe WECKRUF_ABSTAND_MS); hier wuerde jede davon die
+// Testdauer verlaengern, ohne etwas zu beweisen - dass gewartet wird, zeigt
+// der zweite Weckruf, nicht die Uhr.
+process.env.MUSIK_WECK_ABSTAND_MS = '1';
 import {
   titelnameAusUrl,
   validierePlaylist,
@@ -1872,7 +1877,11 @@ function boxAmDraht(gueltig, neue = 'cccccccccccccccc', ton = 'audio') {
   // Welche Adresse der Weckruf angetippt hat und mit welchem Kopf - beides
   // gehoert zur Aussage: Eine andere Datei weckt die falsche Stelle, und ohne
   // `Range` zoege der Weckruf die ganze Datei ueber die Leitung.
-  const box = { abrufe, zustand, geweckt: null, weckkopf: null };
+  const box = {
+    abrufe, zustand, geweckt: null, weckkopf: null,
+    tonZaehler: 0, nurEinmalTon: false,
+    tonNurEinmal() { box.nurEinmalTon = true; },
+  };
   const vorher = globalThis.fetch;
   globalThis.fetch = async (eingabe, init = {}) => {
     const url = String(eingabe);
@@ -1897,6 +1906,12 @@ function boxAmDraht(gueltig, neue = 'cccccccccccccccc', ton = 'audio') {
       // die Sitzung gilt - genau der Fall, fuer den es den Weckruf gibt.
       box.geweckt = url;
       box.weckkopf = init.headers || null;
+      box.tonZaehler += 1;
+      // Stellt die Box nach, die im Moment der Anmeldung noch liefert und
+      // kurz darauf nicht mehr - der Fall, fuer den es den zweiten Weckruf gibt.
+      if (box.nurEinmalTon && box.tonZaehler > 1) {
+        return boxAntwort('text/html', '<title>FRITZ!NAS</title>Anmeldung erforderlich');
+      }
       if (ton === 'keiner') {
         const err = new Error('The operation was aborted due to timeout');
         err.name = 'TimeoutError';
@@ -2366,8 +2381,9 @@ test('eine tote Nummer innerhalb der Frist wird beim Start ersetzt', async () =>
     const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
     assert.deepEqual(
       box.abrufe,
-      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua', '/nas/cgi-bin/luacgi_notimeout'],
-      'nachgefragt, abgelehnt, angemeldet, gegengeprueft, Datei angetippt',
+      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua',
+        '/nas/cgi-bin/luacgi_notimeout', '/nas/cgi-bin/luacgi_notimeout'],
+      'nachgefragt, abgelehnt, angemeldet, gegengeprueft, Datei zweimal angetippt',
     );
     assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
@@ -2670,6 +2686,95 @@ test('ein kurzer Vorlauf aendert nichts', async () => {
     assert.equal(r.directives[0].type, 'AudioPlayer.Play');
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
   } finally {
+    box.zurueck();
+  }
+});
+
+// --- Abstand zwischen Anmeldung und dem Abruf des Echos ----------------------
+//
+// **Das Ergebnis des Ausschlussverfahrens.** Gemessen und bestaetigt:
+//
+//   * Die Antwort kommt rechtzeitig an - "Alexa wartet seit 3683 ms" von 8000.
+//   * Alexa spricht den Satz, die Direktive wird also angenommen.
+//   * Das Geraet meldet AudioPlayer und spielt nach derselben langen Pause
+//     eine Playlist von einem anderen Server ohne Zoegern.
+//   * Der Weckruf des Skills kommt 668 ms nach der Anmeldung noch durch.
+//   * Der Abruf des Echos, ein bis zwei Sekunden spaeter, nicht mehr.
+//   * Eine Minute danach spielt dieselbe Adresse mit derselben Nummer.
+//
+// Uebrig bleibt die Box in den Sekunden nach `filelink.lua` ohne Sitzung - dem
+// Aufruf, der laut AVM alle Sitzungen beendet. Der Abstand schiebt den Abruf
+// des Echos von diesem Moment weg; der zweite Weckruf sagt im Log, ob die Box
+// dann noch liefert.
+
+test('nach einer Anmeldung wird die Datei ein zweites Mal angetippt', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // Frist abgelaufen
+  const box = boxAmDraht('totetotetotetote');      // ... und die Nummer tot: Anmeldung
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
+    assert.equal(weckrufe.length, 2, 'zweimal angetippt, mit Abstand dazwischen');
+    assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'es gab wirklich eine Anmeldung');
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('ohne Anmeldung bleibt es bei einem Weckruf', async () => {
+  // Der Regelfall, und er darf nicht teurer werden: Wo nicht angemeldet wurde,
+  // gibt es das Problem nicht, und zwei Sekunden Stille vor jedem Titel waeren
+  // ein hoher Preis fuer nichts.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
+    assert.equal(weckrufe.length, 1);
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'keine Anmeldung, also kein Abstand');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('sagt die Box beim zweiten Weckruf nein, wird nichts versprochen', async () => {
+  // Genau der Fall, den der zweite Weckruf sichtbar machen soll: Beim ersten
+  // Mal liefert die Box noch Ton, kurz darauf ihre Oberflaeche. Dann bekaeme
+  // der Echo dasselbe - und ein Satz ist besser als "Ich spiele ...".
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('totetotetotetote');
+  box.tonNurEinmal();
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
+    assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('der Abstand laesst sich abschalten', async () => {
+  // **Die Zahl steht in einer Umgebungsvariablen, weil sie eine Wette ist**
+  // (siehe WECKRUF_ABSTAND_MS): Braucht die Box laenger, wird sie groesser;
+  // stellt sich der Abstand als nutzlos heraus, wird sie 0 - beides ohne
+  // Deploy. Bei 0 bleibt es beim einen Weckruf, auch nach einer Anmeldung.
+  //
+  // Die Budget-Grenze davor hat dieselbe Form wie die des ersten Weckrufs und
+  // ist ueber "ohne Budget fuer den Weckruf wird trotzdem gespielt" gedeckt;
+  // sie hier noch einmal nachzustellen hiesse, die Antwortzeiten einer
+  // erfundenen Box auf die Millisekunde zu treffen.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('totetotetotetote');
+  const vorher = process.env.MUSIK_WECK_ABSTAND_MS;
+  process.env.MUSIK_WECK_ABSTAND_MS = '0';
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
+    assert.equal(weckrufe.length, 1, 'nur der erste Weckruf');
+    assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'und es gab wirklich eine Anmeldung');
+    assert.equal(r.directives[0].type, 'AudioPlayer.Play', 'gespielt wird trotzdem');
+  } finally {
+    process.env.MUSIK_WECK_ABSTAND_MS = vorher;
     box.zurueck();
   }
 });
