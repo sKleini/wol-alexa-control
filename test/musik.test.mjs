@@ -2246,3 +2246,86 @@ test('was ohne AudioPlayer trotzdem geht, geht weiter', async () => {
   assert.match((await skill(intent('AMAZON.HelpIntent'), ohne)).outputSpeech.text, /spiele/i);
   assert.deepEqual((await skill(intent('AMAZON.StopIntent'), ohne)).directives, [{ type: 'AudioPlayer.Stop' }]);
 });
+
+// --- Der Start traut der Frist nicht -----------------------------------------
+//
+// **Gemeldet:** Ein stummer Start, und im Log nur drei Zeilen:
+//
+//   musik-box Geraet kann: AudioPlayer
+//   musik-box spielt Udo CD eins (gehoert: "udo cd eins") ab 8/13 bei 0 ms: … sid…a9ef
+//   musik-box IntentRequest in 34 ms
+//
+// Vierunddreissig Millisekunden: kein Login (rund 1550 ms), keine Nachfrage
+// (rund 640 ms), keine Zeile darueber. Der Skill nahm die gemerkte Nummer, weil
+// ihre Fuenf-Minuten-Frist noch lief.
+//
+// Die Frist misst aber Zeit, und auf dieser Box stirbt eine Sitzung nicht an
+// Zeit, sondern an Ereignissen: eine Anmeldung fuer die zweite Freigabe, ein
+// Import, die FRITZ!NAS-Oberflaeche. Waehrend gespielt wird, faellt das kaum
+// ins Gewicht - der Echo haelt die Sitzung mit jedem Bereichsabruf selbst am
+// Leben, und ein Fehler kostet einen Titel. Vor dem ersten Ton haelt sie
+// niemand, und ein Fehler kostet die ganze Antwort.
+
+test('ein Start fragt nach, auch wenn die Frist noch laeuft', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0); // keine Minute alt
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'nachgefragt, nicht angemeldet');
+    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('eine tote Nummer innerhalb der Frist wird beim Start ersetzt', async () => {
+  // Der gemeldete Fall. Vorher gab der Skill diese Nummer heraus, sagte "Ich
+  // spiele Udo CD eins" und der Echo bekam nichts.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('totetotetotetote');
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    assert.deepEqual(
+      box.abrufe,
+      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua'],
+      'nachgefragt, abgelehnt, angemeldet, gegengeprueft',
+    );
+    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
+    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('mitten in der Wiedergabe bleibt die Frist, was sie war', async () => {
+  // Der Titelwechsel darf nicht teurer werden: Dort haelt der Echo die Sitzung
+  // selbst am Leben, und eine halbe Sekunde je Titel waere reine Verschwendung.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await skillMitBudget(
+      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
+      { token: 'Udo CD eins|0|0|0' },
+      redis,
+    );
+    assert.deepEqual(box.abrufe, [], 'kein einziger Abruf');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('schweigt die Box, gilt die Frist weiter', async () => {
+  // Wer nicht antwortet, nimmt auch keine Anmeldung entgegen. Die gemerkte
+  // Nummer ist dann das beste Wort, das es gibt - stumm zu bleiben, obwohl sie
+  // sehr wahrscheinlich gut ist, waere die schlechtere Wahl.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const vorher = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('keine Verbindung'); };
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
+    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
+  } finally {
+    globalThis.fetch = vorher;
+  }
+});
