@@ -2399,9 +2399,10 @@ test('eine tote Nummer innerhalb der Frist wird beim Start ersetzt', async () =>
     const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
     assert.deepEqual(
       box.abrufe,
-      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua',
+      ['/nas/api/data.lua', '/nas/filelink.lua',
         '/nas/cgi-bin/luacgi_notimeout', '/nas/cgi-bin/luacgi_notimeout'],
-      'nachgefragt, abgelehnt, angemeldet, gegengeprueft, Datei zweimal angetippt',
+      'nachgefragt, abgelehnt, angemeldet, Datei zweimal angetippt'
+      + ' - die Gegenprobe der Anmeldung faellt vor einem Start der Eile zum Opfer',
     );
     assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
@@ -3117,5 +3118,59 @@ test('wer eine Adresse herausgibt, frischt weiterhin auf', async () => {
     } finally {
       box.zurueck();
     }
+  }
+});
+
+// --- Die Anmeldung ohne Gegenprobe ------------------------------------------
+//
+// Zwei Wege zur Box, gemessen 1443 bis 2635 ms zusammen - vor dem ersten Ton
+// der groesste Posten. Die Gegenprobe ist die entbehrlichere Haelfte: Die
+// erste Nummer stammt aus der Antwort, die die Box gerade auf diese Anmeldung
+// gegeben hat. Und ein Irrtum traegt sich selbst, ueber PlaybackFailed.
+
+test('vor einem Start wird die Anmeldung nicht gegengeprueft', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('totetotetotetote');
+  try {
+    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
+    const datalua = box.abrufe.filter(p => p === '/nas/api/data.lua');
+    assert.equal(datalua.length, 1, 'nur die Nachfrage vorher, keine Gegenprobe danach');
+    assert.equal(
+      new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc',
+      'gespielt wird mit der Nummer aus der Anmeldung',
+    );
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('ohne Eile bleibt die Gegenprobe', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('totetotetotetote');
+  try {
+    await mitEilziel('0', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
+    const datalua = box.abrufe.filter(p => p === '/nas/api/data.lua');
+    assert.equal(datalua.length, 2, 'Nachfrage und Gegenprobe');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('mitten in der Wiedergabe bleibt die Gegenprobe ebenso', async () => {
+  // Dorthin reicht fritzAufgefrischt gar kein Eilziel - und eine Anmeldung
+  // mitten im Titel ist ohnehin der seltene Ausnahmefall, der sich die
+  // Gewissheit leisten darf.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
+  const box = boxAmDraht('totetotetotetote');
+  try {
+    await skillMitBudget(
+      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
+      { token: 'Udo CD eins|0|0|0' },
+      redis,
+    );
+    const datalua = box.abrufe.filter(p => p === '/nas/api/data.lua');
+    assert.equal(datalua.length, 2, 'Nachfrage und Gegenprobe');
+  } finally {
+    box.zurueck();
   }
 });
