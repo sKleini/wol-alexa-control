@@ -195,18 +195,32 @@ test('findePlaylist ist kulant beim gehoerten Wort', () => {
 test('Token hin und zurueck', () => {
   assert.equal(tokenBauen('Kinderlieder', 2, 1), 'Kinderlieder|2|1|0');
   assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711), 'Kinderlieder|2|1|4711');
-  assert.deepEqual(tokenLesen('Kinderlieder|2|1|4711'), { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711 });
+  assert.deepEqual(tokenLesen('Kinderlieder|2|1|4711'), { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711, versuch: 0 });
   assert.equal(tokenLesen('fremd'), null);
   assert.equal(tokenLesen('a|x|1|0'), null);
   assert.equal(tokenLesen('a|-1|1|0'), null);
   assert.equal(tokenLesen('a|0|0|-1'), null);
+  assert.equal(tokenLesen('a|0|0|0|-1'), null);
+  assert.equal(tokenLesen('a|0|0|0|0|0'), null, 'sechs Teile sind nicht von hier');
   assert.equal(tokenLesen(undefined), null);
+});
+
+test('Der Versuchszaehler steht nur im Token, wenn es einen Versuch gab', () => {
+  // Eine 0 wegzulassen ist kein Geiz: Ein Token, bei dem nichts schiefging,
+  // sieht damit aus wie vor dieser Fassung - und jeder Stream, der beim
+  // Deploy laeuft, bleibt gueltig.
+  assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711, 0), 'Kinderlieder|2|1|4711');
+  assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711, 1), 'Kinderlieder|2|1|4711|1');
+  assert.deepEqual(
+    tokenLesen('Kinderlieder|2|1|4711|1'),
+    { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711, versuch: 1 },
+  );
 });
 
 test('Ein Token aus der Zeit vor der Mischung bleibt lesbar', () => {
   // Ein Stream, der beim Deploy noch laeuft, traegt drei Teile. Wuerde der
   // ploetzlich als fremd gelten, braeche die Wiedergabe mitten im Titel ab.
-  assert.deepEqual(tokenLesen('Kinderlieder|1|2'), { name: 'Kinderlieder', position: 1, runde: 2, seed: 0 });
+  assert.deepEqual(tokenLesen('Kinderlieder|1|2'), { name: 'Kinderlieder', position: 1, runde: 2, seed: 0, versuch: 0 });
 });
 
 test('schritt laeuft vorwaerts mit Umbruch und zaehlt die Runde hoch', () => {
@@ -404,11 +418,38 @@ test('Naechster und voriger Titel - per Sprache und per Knopf', async () => {
   assert.equal(v.outputSpeech, undefined);
 });
 
-test('PlaybackFailed springt weiter, aber nicht ueber das Ende der Runde hinaus', async () => {
-  const mitte = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
-  assert.equal(mitte.directives[0].audioItem.stream.token, 'Kinderlieder|1|0|0');
-  const ende = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|2|0|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
+test('PlaybackFailed wiederholt den Titel einmal - und nur einmal', async () => {
+  // Erster Fehler: derselbe Titel noch einmal, der Token traegt jetzt die 1.
+  const erst = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
+  assert.equal(erst.directives[0].audioItem.stream.token, 'Kinderlieder|0|0|0|1');
+
+  // Zweiter Fehler am selben Titel: jetzt wird uebersprungen, und das Budget
+  // des naechsten faengt wieder bei null an.
+  const dann = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0|1', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
+  assert.equal(dann.directives[0].audioItem.stream.token, 'Kinderlieder|1|0|0');
+});
+
+test('PlaybackFailed springt nicht ueber das Ende der Runde hinaus', async () => {
+  // Der letzte Titel, schon einmal versucht: Ein Sprung waere ein Umbruch,
+  // und dann endet die Wiedergabe, statt endlos um die Liste zu kreisen.
+  const ende = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|2|0|0|1', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
   assert.deepEqual(ende.directives, [{ type: 'AudioPlayer.Stop' }]);
+});
+
+test('der wiederholte Titel steigt dort ein, wo er abbrach', async () => {
+  // Der uebliche Fall ist "nie angelaufen" - dann ist das der Anfang. Riss er
+  // mitten im Stueck ab, greift derselbe Vorlauf wie beim Weiterhoeren.
+  const anfang = await skill(
+    { type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR' } },
+    { token: 'Kinderlieder|0|0|0', offset: 1 },
+  );
+  assert.equal(anfang.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+
+  const mittendrin = await skill(
+    { type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR' } },
+    { token: 'Kinderlieder|0|0|0', offset: 240_000 },
+  );
+  assert.equal(mittendrin.directives[0].audioItem.stream.offsetInMilliseconds, einstieg(240_000));
 });
 
 test('Shuffle antwortet mit einem Satz', async () => {
@@ -1878,10 +1919,10 @@ test('erst eine wirklich tote Nummer loest die Anmeldung aus', async () => {
   }
 });
 
-test('nach einer Anmeldung bekommt der gescheiterte Titel einen zweiten Versuch', async () => {
-  // War die Nummer tot, lag es nicht am Titel, sondern an der Adresse. Ihn zu
-  // ueberspringen hiesse, den Hoerenden fuer einen Fehler der Box zu bestrafen -
-  // er faengt dort wieder an, wo er abbrach.
+test('nach einer Anmeldung bekommt der gescheiterte Titel die neue Nummer mit', async () => {
+  // War die Nummer tot, lag es nicht am Titel, sondern an der Adresse. Der
+  // zweite Versuch traegt deshalb die frisch geholte - sonst waere er
+  // vergebens.
   const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
   const box = boxAmDraht('totetotetotetote');
   try {
@@ -1895,7 +1936,7 @@ test('nach einer Anmeldung bekommt der gescheiterte Titel einen zweiten Versuch'
       redis,
     );
     const stream = r.directives[0].audioItem.stream;
-    assert.equal(stream.token, 'Udo CD eins|0|0|0', 'derselbe Titel, nicht der naechste');
+    assert.equal(stream.token, 'Udo CD eins|0|0|0|1', 'derselbe Titel, zweiter Versuch');
     assert.equal(new URL(stream.url).searchParams.get('sid'), 'cccccccccccccccc', 'mit der neuen Nummer');
     assert.equal(stream.offsetInMilliseconds, einstieg(90_000), 'dort, wo er abbrach - mit Vorlauf');
   } finally {
@@ -1903,10 +1944,10 @@ test('nach einer Anmeldung bekommt der gescheiterte Titel einen zweiten Versuch'
   }
 });
 
-test('galt die Nummer noch, geht es nach einem Fehler mit dem naechsten Titel weiter', async () => {
-  // Kein Sitzungsproblem, also auch kein zweiter Versuch: Dieselbe Adresse
-  // noch einmal zu laden ergaebe nur denselben Fehler. Und das alte Verhalten
-  // bleibt, wo es richtig ist.
+test('ein Stolperer bei gueltiger Nummer wird wiederholt, ohne die Box anzufassen', async () => {
+  // Der gemeldete Fall: Sitzung gerade geprueft, Offset 1, und die Box
+  // antwortet trotzdem mit 5xx. Dann ist die Last der wahrscheinlichste Grund,
+  // und beim naechsten Versuch ist sie weg. Angemeldet wird dafuer nichts.
   const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
   const box = boxAmDraht('aaaaaaaaaaaaaaaa');
   try {
@@ -1916,13 +1957,35 @@ test('galt die Nummer noch, geht es nach einem Fehler mit dem naechsten Titel we
         token: 'Udo CD eins|0|0|0',
         error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
       },
-      { token: 'Udo CD eins|0|0|0', offset: 90_000 },
+      { token: 'Udo CD eins|0|0|0', offset: 1 },
       redis,
     );
     assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'ein Stolperer beendet nicht alle Sitzungen der Box');
     const stream = r.directives[0].audioItem.stream;
-    assert.equal(stream.token, 'Udo CD eins|1|0|0', 'der naechste Titel');
-    assert.equal(stream.offsetInMilliseconds, 0);
+    assert.equal(stream.token, 'Udo CD eins|0|0|0|1', 'derselbe Titel noch einmal');
+    assert.equal(stream.offsetInMilliseconds, 0, 'er war nie angelaufen');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('beim zweiten Fehler am selben Titel geht es weiter', async () => {
+  // Die Gegenprobe zum Test darueber: Hilft die Wiederholung nicht, liegt es
+  // nicht an der Last. Dann kostet ein dritter Versuch nur Zeit.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const r = await skillMitBudget(
+      {
+        type: 'AudioPlayer.PlaybackFailed',
+        token: 'Udo CD eins|0|0|0|1',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
+      },
+      { token: 'Udo CD eins|0|0|0|1', offset: 1 },
+      redis,
+    );
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'));
+    assert.equal(r.directives[0].audioItem.stream.token, 'Udo CD eins|1|0|0', 'der naechste Titel, Budget wieder bei null');
   } finally {
     box.zurueck();
   }
@@ -1995,4 +2058,61 @@ test('Check URLs meldet sich nicht an, nur weil Redis eine Weile braucht', async
   } finally {
     box.zurueck();
   }
+});
+
+test('die Fehlerzeile nennt den Titel, nicht nur die Stelle in der Mischung', async () => {
+  // **Warum das im Log stehen muss.** Gemeldet wurde
+  // "Token: Udo|23|0|251337043" - und damit war nicht zu sagen, welche Datei
+  // es getroffen hat: Mit Mischung ist Stelle 23 nicht Titel 24, und die
+  // Reihenfolge steht nirgends, sie wird aus dem Seed gerechnet. Ohne den
+  // Namen laesst sich die Zeile im Dashboard nicht nachschlagen, ohne die
+  // Adresse nicht sehen, welche Sitzungsnummer der Abruf getragen hat.
+  //
+  // Bei drei Titeln und diesem Seed steht an Stelle 0 der Titel mit der
+  // Nummer 1 - also "02", der zweite der Liste.
+  const gesagt = [];
+  const vorher = console.warn;
+  console.warn = (...teile) => gesagt.push(teile.join(' '));
+  try {
+    await skill(
+      {
+        type: 'AudioPlayer.PlaybackFailed',
+        token: 'Kinderlieder|0|0|251337043',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
+      },
+      { token: 'Kinderlieder|0|0|251337043', offset: 1 },
+    );
+  } finally {
+    console.warn = vorher;
+  }
+
+  const zeile = gesagt.find(z => z.startsWith('Alexa konnte nicht abspielen:'));
+  assert.ok(zeile, 'der Fehler wird ueberhaupt protokolliert');
+  assert.match(zeile, /Titel: 2\. 02 /, 'Nummer in der Liste und Name');
+  assert.match(zeile, /example\.org\/k\/02\.mp3 ohne sid/, 'und die Adresse');
+  assert.match(zeile, /Offset: 1\b/, 'der Offset trennt "nie angelaufen" von "mittendrin abgerissen"');
+});
+
+test('eine gekuerzte Playlist bringt die Fehlerzeile nicht durcheinander', async () => {
+  // Stelle 9 gibt es in einer Liste mit drei Titeln nicht mehr. Dann wird kein
+  // Titel genannt - und protokolliert wird trotzdem.
+  const gesagt = [];
+  const vorher = console.warn;
+  console.warn = (...teile) => gesagt.push(teile.join(' '));
+  try {
+    await skill(
+      {
+        type: 'AudioPlayer.PlaybackFailed',
+        token: 'Kinderlieder|9|0|0',
+        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
+      },
+      { token: 'Kinderlieder|9|0|0' },
+    );
+  } finally {
+    console.warn = vorher;
+  }
+
+  const zeile = gesagt.find(z => z.startsWith('Alexa konnte nicht abspielen:'));
+  assert.ok(zeile);
+  assert.doesNotMatch(zeile, /Titel:/);
 });
