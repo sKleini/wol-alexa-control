@@ -2973,3 +2973,85 @@ test('das Leeren laesst sich abschalten', async () => {
     process.env.MUSIK_CLEAR_QUEUE = vorher;
   }
 });
+
+// --- Das Eilziel: was entbehrlich ist, weicht der Antwortzeit ----------------
+//
+// **Nicht Alexas Fenster entscheidet, sondern eine viel engere Grenze.** Alexa
+// hat jede Antwort angenommen und den Satz gesprochen; ob der Echo die
+// Play-Direktive danach ausfuehrt, ist eine andere Frage. Gemessen an einem
+// Echo, der laenger untaetig war:
+//
+//   stumm:   3683, 3846, 4537, 5204, 5771 ms  - und kein einziges
+//                                               AudioPlayer-Ereignis danach
+//   spielt:  1868, 2524 ms                    - PlaybackStarted nach 18 ms
+//
+// Der Echo hat es auf der stummen Seite nicht einmal versucht. Was dazwischen
+// anders war, ist nichts als die Zeit.
+
+const mitEilziel = async (wert, tu) => {
+  const vorher = process.env.MUSIK_EILZIEL_MS;
+  process.env.MUSIK_EILZIEL_MS = wert;
+  try { return await tu(); } finally { process.env.MUSIK_EILZIEL_MS = vorher; }
+};
+
+test('bei aufgebrauchtem Eilziel entfaellt die Nachfrage, wenn die Frist ohnehin um ist', async () => {
+  // Die Nachfrage kostet rund 740 ms und hat genau eine Aufgabe: eine
+  // Anmeldung zu vermeiden, die einen laufenden Titel aus der Box wirft. Vor
+  // dem ersten Ton laeuft nichts, das sie schuetzen koennte.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // ausserhalb der Frist
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await mitEilziel('1', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
+    assert.equal(box.abrufe[0], '/nas/filelink.lua', 'direkt zur Anmeldung');
+    assert.ok(!box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'und kein Weckruf');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('innerhalb der Frist bleibt die Nachfrage - auch in Eile', async () => {
+  // Dort ist sie fast immer erfolgreich und erspart die Anmeldung wirklich.
+  // Eine Anmeldung beendet alle Sitzungen der Box; diesen Preis zahlt die Eile
+  // nicht.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await mitEilziel('1', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
+    assert.equal(box.abrufe[0], '/nas/api/data.lua', 'zuerst gefragt');
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'und nicht angemeldet');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('ohne Eile bleibt alles beim Alten', async () => {
+  // MUSIK_EILZIEL_MS=0 heisst ausdruecklich "keine Eile" - dann gilt nur noch
+  // das Antwortbudget. Die Gegenprobe zum ersten Test: dieselbe Lage, und die
+  // Nachfrage findet wieder statt.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await mitEilziel('0', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
+    assert.equal(box.abrufe[0], '/nas/api/data.lua', 'erst gefragt');
+    assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'und der Weckruf laeuft');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('das Eilziel bremst den Titelwechsel nicht aus', async () => {
+  // Mitten in der Wiedergabe gibt es keine Eile-Frage: Dort wartet niemand auf
+  // einen gesprochenen Satz, und der Echo haengt den Titel selbst an.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);   // Frist abgelaufen
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await mitEilziel('1', () => skillMitBudget(
+      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
+      { token: 'Udo CD eins|0|0|0' },
+      redis,
+    ));
+    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'die Nachfrage bleibt, die Anmeldung unterbleibt');
+  } finally {
+    box.zurueck();
+  }
+});
