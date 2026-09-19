@@ -65,6 +65,18 @@ function redisMit(daten = {}) {
   };
 }
 
+/**
+ * Die Play-Direktive einer Antwort - egal, was vor ihr steht.
+ *
+ * **Hier stand ueberall `directives[0]`, und das war eine Wette auf die
+ * Reihenfolge.** Seit vor einem Start ein `AudioPlayer.ClearQueue` steht,
+ * ist die Wiedergabe nicht mehr die erste Direktive - und vierundvierzig
+ * Tests fielen auf einmal um, ohne dass an ihrer Aussage etwas falsch war.
+ * Gesucht wird deshalb nach dem Typ: Das ist die Frage, die sie stellen
+ * wollten.
+ */
+const spielt = (r) => (r.directives || []).find(d => d.type === 'AudioPlayer.Play');
+
 function antwortFaenger() {
   const res = { statusCode: null, body: null };
   res.status = (code) => { res.statusCode = code; return res; };
@@ -365,9 +377,11 @@ test('PlayPlaylistIntent startet den ersten Titel', async () => {
   // Ohne Titelzahl: Die Ansage steht vor der Musik und bleibt deshalb kurz.
   assert.equal(r.outputSpeech.text, 'Ich spiele Kinderlieder.');
   assert.equal(r.shouldEndSession, true);
-  assert.equal(r.directives.length, 1);
-  assert.equal(r.directives[0].playBehavior, 'REPLACE_ALL');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|0|0');
+  // Die Warteschlange wird geleert, dann gespielt - und sonst geht nichts mit,
+  // besonders keine dynamischen Werte neben einer AudioPlayer-Direktive.
+  assert.deepEqual(r.directives.map(d => d.type), ['AudioPlayer.ClearQueue', 'AudioPlayer.Play']);
+  assert.equal(spielt(r).playBehavior, 'REPLACE_ALL');
+  assert.equal(spielt(r).audioItem.stream.token, 'Kinderlieder|0|0|0');
 });
 
 test('PlayPlaylistIntent fragt bei unbekanntem Namen nach und zaehlt auf', async () => {
@@ -394,8 +408,8 @@ test('PlaybackNearlyFinished haengt den naechsten Titel an', async () => {
 
 test('Nach dem letzten Titel folgt wieder der erste - die Endlosschleife', async () => {
   const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|2|0|0' }, { token: 'Kinderlieder|2|0|0' });
-  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|1|0');
-  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[0].url);
+  assert.equal(spielt(r).audioItem.stream.token, 'Kinderlieder|0|1|0');
+  assert.equal(spielt(r).audioItem.stream.url, KINDER.titel[0].url);
 });
 
 test('PlaybackNearlyFinished mit fremdem oder verwaistem Token bleibt still', async () => {
@@ -411,8 +425,8 @@ test('Pause stoppt, Weiter setzt am Offset fort - um den Vorlauf zurueck', async
   assert.equal(pause.outputSpeech, undefined);
 
   const weiter = await skill(intent('AMAZON.ResumeIntent'), { token: 'Kinderlieder|1|0|0', offset: 30000 });
-  assert.equal(weiter.directives[0].audioItem.stream.token, 'Kinderlieder|1|0|0');
-  assert.equal(weiter.directives[0].audioItem.stream.offsetInMilliseconds, 25000);
+  assert.equal(spielt(weiter).audioItem.stream.token, 'Kinderlieder|1|0|0');
+  assert.equal(spielt(weiter).audioItem.stream.offsetInMilliseconds, 25000);
 });
 
 test('Weiter ohne laufenden Stream fragt nach der Playlist', async () => {
@@ -422,21 +436,21 @@ test('Weiter ohne laufenden Stream fragt nach der Playlist', async () => {
 
 test('Naechster und voriger Titel - per Sprache und per Knopf', async () => {
   const n = await skill(intent('AMAZON.NextIntent'), { token: 'Kinderlieder|0|0|0' });
-  assert.equal(n.directives[0].audioItem.stream.token, 'Kinderlieder|1|0|0');
+  assert.equal(spielt(n).audioItem.stream.token, 'Kinderlieder|1|0|0');
   const v = await skill({ type: 'PlaybackController.PreviousCommandIssued' }, { token: 'Kinderlieder|0|0|0' });
-  assert.equal(v.directives[0].audioItem.stream.token, 'Kinderlieder|2|1|0');
+  assert.equal(spielt(v).audioItem.stream.token, 'Kinderlieder|2|1|0');
   assert.equal(v.outputSpeech, undefined);
 });
 
 test('PlaybackFailed wiederholt den Titel einmal - und nur einmal', async () => {
   // Erster Fehler: derselbe Titel noch einmal, der Token traegt jetzt die 1.
   const erst = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
-  assert.equal(erst.directives[0].audioItem.stream.token, 'Kinderlieder|0|0|0|1');
+  assert.equal(spielt(erst).audioItem.stream.token, 'Kinderlieder|0|0|0|1');
 
   // Zweiter Fehler am selben Titel: jetzt wird uebersprungen, und das Budget
   // des naechsten faengt wieder bei null an.
   const dann = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0|1', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
-  assert.equal(dann.directives[0].audioItem.stream.token, 'Kinderlieder|1|0|0');
+  assert.equal(spielt(dann).audioItem.stream.token, 'Kinderlieder|1|0|0');
 });
 
 test('PlaybackFailed springt nicht ueber das Ende der Runde hinaus', async () => {
@@ -453,13 +467,13 @@ test('der wiederholte Titel steigt dort ein, wo er abbrach', async () => {
     { type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR' } },
     { token: 'Kinderlieder|0|0|0', offset: 1 },
   );
-  assert.equal(anfang.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+  assert.equal(spielt(anfang).audioItem.stream.offsetInMilliseconds, 0);
 
   const mittendrin = await skill(
     { type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR' } },
     { token: 'Kinderlieder|0|0|0', offset: 240_000 },
   );
-  assert.equal(mittendrin.directives[0].audioItem.stream.offsetInMilliseconds, einstieg(240_000));
+  assert.equal(spielt(mittendrin).audioItem.stream.offsetInMilliseconds, einstieg(240_000));
 });
 
 test('Shuffle antwortet mit einem Satz', async () => {
@@ -577,14 +591,14 @@ test('SuchePlaylistIntent spielt einen Namen, der im Modell nirgends steht', asy
   const neu = { name: 'Taschenlampe', titel: [{ url: 'https://example.org/t.mp3', name: 't' }] };
   const r = await skill(sucheIntent('taschenlampe'), {}, [KINDER, neu]);
   assert.equal(r.outputSpeech.text, 'Ich spiele Taschenlampe.');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Taschenlampe|0|0|0');
+  assert.equal(spielt(r).audioItem.stream.token, 'Taschenlampe|0|0|0');
 });
 
 test('SuchePlaylistIntent uebersteht Fuellwoerter im freien Text', async () => {
   const neu = { name: 'Taschenlampe', titel: [{ url: 'https://example.org/t.mp3', name: 't' }] };
   for (const gesagt of ['die taschenlampe', 'mal die taschenlampe bitte', 'taschen lampe']) {
     const r = await skill(sucheIntent(gesagt), {}, [KINDER, neu]);
-    assert.equal(r.directives?.[0]?.audioItem.stream.token, 'Taschenlampe|0|0|0', gesagt);
+    assert.equal(spielt(r)?.audioItem.stream.token, 'Taschenlampe|0|0|0', gesagt);
   }
 });
 
@@ -685,15 +699,15 @@ test('Ohne Ansage startet die Musik ohne ein Wort davor', async () => {
   // Die Sitzung endet trotzdem, sonst horcht der Echo nach dem stillen Start
   // weiter. Neben einer Play-Direktive ist `true` erlaubt, nur `false` nicht.
   assert.equal(r.shouldEndSession, true, 'die Sitzung endet auch ohne Ansage');
-  assert.equal(r.directives.length, 1);
-  assert.equal(r.directives[0].playBehavior, 'REPLACE_ALL');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Leise|0|0|0');
+  assert.deepEqual(r.directives.map(d => d.type), ['AudioPlayer.ClearQueue', 'AudioPlayer.Play']);
+  assert.equal(spielt(r).playBehavior, 'REPLACE_ALL');
+  assert.equal(spielt(r).audioItem.stream.token, 'Leise|0|0|0');
 });
 
 test('Mit Ansage bleibt der Satz vor der Musik', async () => {
   const r = await skill(intent('PlayPlaylistIntent', 'kinderlieder'));
   assert.equal(r.outputSpeech.text, 'Ich spiele Kinderlieder.');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Kinderlieder|0|0|0');
+  assert.equal(spielt(r).audioItem.stream.token, 'Kinderlieder|0|0|0');
 });
 
 test('Die Ansage schweigt nur vorn - Rueckfragen und Fehler bleiben hoerbar', async () => {
@@ -712,7 +726,7 @@ test('Ohne Wiederholung wird hinter dem letzten Titel nichts angehaengt', async 
 
 test('Ohne Wiederholung laeuft die Playlist bis dahin normal weiter', async () => {
   const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Einmal|0|0|0' }, { token: 'Einmal|0|0|0' }, [EINMAL]);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Einmal|1|0|0');
+  assert.equal(spielt(r).audioItem.stream.token, 'Einmal|1|0|0');
 });
 
 test('Ohne Wiederholung stoppt naechster Titel am Ende und bleibt am Anfang stehen', async () => {
@@ -720,7 +734,7 @@ test('Ohne Wiederholung stoppt naechster Titel am Ende und bleibt am Anfang steh
   assert.deepEqual(ende.directives, [{ type: 'AudioPlayer.Stop' }]);
 
   const anfang = await skill(intent('AMAZON.PreviousIntent'), { token: 'Einmal|0|0|0' }, [EINMAL]);
-  assert.equal(anfang.directives[0].audioItem.stream.token, 'Einmal|0|0|0');
+  assert.equal(spielt(anfang).audioItem.stream.token, 'Einmal|0|0|0');
 });
 
 // --- Das Mikrofon nach dem Befehl -------------------------------------------
@@ -824,8 +838,8 @@ test('Der naechste Start setzt an der gemerkten Stelle fort, mit Offset und Ansa
   const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 65000 });
   const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
   assert.equal(r.outputSpeech.text, 'Ich spiele Hörspiel weiter.');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|2|0|0');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 60000, 'fuenf Sekunden Vorlauf');
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|2|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 60000, 'fuenf Sekunden Vorlauf');
 });
 
 test('Am Anfang stehengeblieben heisst nicht "weiter"', async () => {
@@ -837,16 +851,16 @@ test('Am Anfang stehengeblieben heisst nicht "weiter"', async () => {
 test('Ein Stand jenseits der gekuerzten Playlist faellt auf den Anfang', async () => {
   const redis = mitStand(HOERSPIEL, { position: 9, runde: 0, seed: 0, offset: 1000 });
   const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|0|0|0');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|0|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
 test('Beim Fortsetzen gilt der gemerkte Seed weiter', async () => {
   // Nur mit demselben Seed steht an dieser Stelle wieder derselbe Titel.
   const redis = mitStand({ ...HOERSPIEL, zufall: true }, { position: 1, runde: 0, seed: 2024, offset: 0 });
   const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|1|0|2024');
-  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[reihenfolge(3, 2024)[1]].url);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|2024');
+  assert.equal(spielt(r).audioItem.stream.url, KINDER.titel[reihenfolge(3, 2024)[1]].url);
 });
 
 test('"Von vorn" vergisst den Stand', async () => {
@@ -866,8 +880,8 @@ test('Durchgelaufen vergisst den Stand, sonst begaenne der naechste Start am End
 
   const neu = await skill(sucheIntent('hörspiel'), {}, null, redis);
   assert.equal(neu.outputSpeech.text, 'Ich spiele Hörspiel.');
-  assert.equal(neu.directives[0].audioItem.stream.token, 'Hörspiel|0|0|0');
-  assert.equal(neu.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+  assert.equal(spielt(neu).audioItem.stream.token, 'Hörspiel|0|0|0');
+  assert.equal(spielt(neu).audioItem.stream.offsetInMilliseconds, 0);
 });
 
 // Wer waehrend des letzten Titels stoppt, ist nicht durchgelaufen: Der Stand
@@ -909,8 +923,8 @@ test('Nach dreissig Sekunden gestoppt heisst beim naechsten Mal ab fuenfundzwanz
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 30000 });
   const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
   assert.equal(r.outputSpeech.text, 'Ich spiele Hörspiel weiter.');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|1|0|0');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 25000);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 25000);
 });
 
 test('Ein Stand kurz nach dem Titelanfang ist keiner', async () => {
@@ -919,7 +933,7 @@ test('Ein Stand kurz nach dem Titelanfang ist keiner', async () => {
   const redis = mitStand(HOERSPIEL, { position: 0, runde: 0, seed: 0, offset: 3000 });
   const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
   assert.equal(r.outputSpeech.text, 'Ich spiele Hörspiel.');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
 test('MUSIK_VORLAUF_MS bestimmt den Vorlauf', async () => {
@@ -928,7 +942,7 @@ test('MUSIK_VORLAUF_MS bestimmt den Vorlauf', async () => {
   try {
     const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 30000 });
     const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
-    assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 30000);
+    assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 30000);
   } finally {
     if (vorher === undefined) delete process.env.MUSIK_VORLAUF_MS;
     else process.env.MUSIK_VORLAUF_MS = vorher;
@@ -941,8 +955,8 @@ test('Das Anhaengen des naechsten Titels laesst den Stand, wo er ist', async () 
   // laengst nicht vorbei, und der Stand gehoert noch auf ihn.
   const redis = mitStand(ENDLOS, { position: 0, runde: 0, seed: 0, offset: 12000 });
   const r = await skill({ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Endlos|0|0|0' }, {}, null, redis);
-  assert.equal(r.directives[0].playBehavior, 'ENQUEUE');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Endlos|1|0|0');
+  assert.equal(spielt(r).playBehavior, 'ENQUEUE');
+  assert.equal(spielt(r).audioItem.stream.token, 'Endlos|1|0|0');
   assert.deepEqual(
     { ...redis.speicher.musik_stand['endlos'], zeit: undefined },
     { position: 0, runde: 0, seed: 0, offset: 12000, zeit: undefined },
@@ -992,8 +1006,8 @@ test('"Weiter" ohne laufenden Stream nimmt die zuletzt gestoppte Playlist auf', 
   // Stelle steht aber in der Datenbank, und genau dort sagt jemand "weiter".
   const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 65000, zeit: 1000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|2|0|0');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 60000);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|2|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 60000);
   assert.equal(r.outputSpeech, undefined, '"weiter" kommt auch vom Knopf in der App');
 });
 
@@ -1007,8 +1021,8 @@ test('"Weiter" nimmt die juengste von mehreren gemerkten Playlists auf', async (
     },
   });
   const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Zweites|2|0|0');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 35000);
+  assert.equal(spielt(r).audioItem.stream.token, 'Zweites|2|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 35000);
 });
 
 test('"Weiter" greift nicht auf Playlists ohne den Schalter zurueck', async () => {
@@ -1023,8 +1037,8 @@ test('"Weiter" greift nicht auf Playlists ohne den Schalter zurueck', async () =
 test('Ein durchgelaufener Vermerk ist fuer "weiter" kein Stand', async () => {
   const redis = mitStand(HOERSPIEL, { position: 0, runde: 0, seed: 0, offset: 0, fertig: true, zeit: 1000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|0|0|0', 'von vorn statt gar nicht');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|0|0|0', 'von vorn statt gar nicht');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
 // Ein Album: setzt fort, aber titelgenau. Drei Titel wie ueberall hier.
@@ -1036,8 +1050,8 @@ test('Album: der gemerkte Titel faengt wieder von vorn an', async () => {
   const redis = mitStand(ALBUM, { position: 2, runde: 0, seed: 0, offset: 47000 });
   const r = await skill(sucheIntent('album'), {}, null, redis);
   assert.equal(r.outputSpeech.text, 'Ich spiele Album weiter.');
-  assert.equal(r.directives[0].audioItem.stream.token, 'Album|2|0|0');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+  assert.equal(spielt(r).audioItem.stream.token, 'Album|2|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
 test('Album: gestoppt wird das Lied, das laeuft - nicht das angehaengte', async () => {
@@ -1051,22 +1065,22 @@ test('Album: gestoppt wird das Lied, das laeuft - nicht das angehaengte', async 
   await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Album|1|0|0', offsetInMilliseconds: 47000 }, {}, null, redis);
 
   const r = await skill(sucheIntent('album'), {}, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Album|1|0|0', 'dasselbe Lied, nicht das naechste');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0, 'und von vorn');
+  assert.equal(spielt(r).audioItem.stream.token, 'Album|1|0|0', 'dasselbe Lied, nicht das naechste');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0, 'und von vorn');
 });
 
 test('Hoerbuch: derselbe Stand fuehrt auf die Sekunde', async () => {
   // Die Gegenprobe zum Album - derselbe Stand, nur die Gangart ist anders.
   const redis = mitStand({ ...ALBUM, name: 'Hoerbuch', fortsetzen: 'sekunde' }, { position: 2, runde: 0, seed: 0, offset: 47000 });
   const r = await skill(sucheIntent('hoerbuch'), {}, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 42000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 42000);
 });
 
 test('Album am ersten Titel heisst nicht "weiter"', async () => {
   const redis = mitStand(ALBUM, { position: 0, runde: 0, seed: 0, offset: 47000 });
   const r = await skill(sucheIntent('album'), {}, null, redis);
   assert.equal(r.outputSpeech.text, 'Ich spiele Album.');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
 test('Album merkt sich die Sekunde trotzdem', async () => {
@@ -1082,7 +1096,7 @@ test('Album: eine Pause fuehrt trotzdem an derselben Stelle weiter', async () =>
   // will nicht das halbe Lied noch einmal.
   const redis = mitStand(ALBUM);
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Album|1|0|0', offset: 47000 }, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 42000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 42000);
 });
 
 test('Album: "weiter" ohne laufenden Stream nimmt den Titelanfang', async () => {
@@ -1090,8 +1104,8 @@ test('Album: "weiter" ohne laufenden Stream nimmt den Titelanfang', async () => 
   // dort gilt die Gangart wieder.
   const redis = mitStand(ALBUM, { position: 2, runde: 0, seed: 0, offset: 47000, zeit: 1000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Album|2|0|0');
-  assert.equal(r.directives[0].audioItem.stream.offsetInMilliseconds, 0);
+  assert.equal(spielt(r).audioItem.stream.token, 'Album|2|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
 test('handleManage haelt die Gangart ueber eine Titelaenderung hinweg', async () => {
@@ -1135,7 +1149,7 @@ test('Ein kaputtes Redis bricht die Wiedergabe nicht', async () => {
     async set() { throw new Error('offline'); },
   };
   const r = await skill(sucheIntent('hörspiel'), {}, null, kaputt);
-  assert.equal(r.directives[0].audioItem.stream.token, 'Hörspiel|0|0|0', 'faengt eben von vorn an');
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|0|0|0', 'faengt eben von vorn an');
 });
 
 // --- Zufallswiedergabe im Betrieb --------------------------------------------------
@@ -1143,26 +1157,26 @@ test('Ein kaputtes Redis bricht die Wiedergabe nicht', async () => {
 test('Mit dem Schalter startet die Playlist gemischt', async () => {
   const gemischt = { name: 'Bunt', zufall: true, titel: KINDER.titel };
   const r = await skill(sucheIntent('bunt'), {}, [gemischt]);
-  const token = tokenLesen(r.directives[0].audioItem.stream.token);
+  const token = tokenLesen(spielt(r).audioItem.stream.token);
   assert.ok(token.seed > 0, 'ein Seed wurde gezogen');
-  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[reihenfolge(3, token.seed)[0]].url);
+  assert.equal(spielt(r).audioItem.stream.url, KINDER.titel[reihenfolge(3, token.seed)[0]].url);
 });
 
 test('Ohne den Schalter bleibt die Reihenfolge der Liste', async () => {
   const r = await skill(sucheIntent('kinderlieder'));
-  assert.equal(tokenLesen(r.directives[0].audioItem.stream.token).seed, 0);
-  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[0].url);
+  assert.equal(tokenLesen(spielt(r).audioItem.stream.token).seed, 0);
+  assert.equal(spielt(r).audioItem.stream.url, KINDER.titel[0].url);
 });
 
 test('Die Sprachbefehle mischen nur den laufenden Stream', async () => {
   const an = await skill(intent('AMAZON.ShuffleOnIntent'), { token: 'Kinderlieder|1|0|0' });
-  const neu = tokenLesen(an.directives[0].audioItem.stream.token);
+  const neu = tokenLesen(spielt(an).audioItem.stream.token);
   assert.ok(neu.seed > 0);
   assert.equal(neu.runde, 1, 'neue Runde, damit der Token sich unterscheidet');
   assert.equal(an.outputSpeech, undefined, 'die Musik spricht nicht dazwischen');
 
   const aus = await skill(intent('AMAZON.ShuffleOffIntent'), { token: 'Kinderlieder|1|0|4711' });
-  assert.equal(tokenLesen(aus.directives[0].audioItem.stream.token).seed, 0);
+  assert.equal(tokenLesen(spielt(aus).audioItem.stream.token).seed, 0);
 });
 
 test('Mischen ohne laufende Wiedergabe verweist aufs Dashboard', async () => {
@@ -1437,7 +1451,7 @@ test('eine Playlist ohne Herkunft ruehrt der Skill nicht an', async () => {
   // Kein Netzabruf, keine Aenderung an den Adressen: Wer keine
   // FRITZ!NAS-Playlist hat, merkt von der Auffrischung nichts.
   const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'));
-  assert.equal(r.directives[0].audioItem.stream.url, KINDER.titel[0].url);
+  assert.equal(spielt(r).audioItem.stream.url, KINDER.titel[0].url);
 });
 
 /** Eine FRITZ!NAS-Playlist samt gemerkter, noch gueltiger Sitzungsnummer. */
@@ -1459,7 +1473,7 @@ function mitSitzung(sid, alterMs = 0) {
 test('der Skill setzt die gemerkte Sitzungsnummer in jede Adresse ein', async () => {
   const redis = mitSitzung('bbbbbbbbbbbbbbbb');
   const r = await skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis);
-  const url = new URL(r.directives[0].audioItem.stream.url);
+  const url = new URL(spielt(r).audioItem.stream.url);
   assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb', 'die frische Nummer, nicht die gespeicherte');
   assert.equal(url.searchParams.get('path'), '/01.mp3', 'der Pfad bleibt');
 });
@@ -1475,7 +1489,7 @@ test('auch der naechste Titel bekommt die frische Nummer', async () => {
     null,
     redis,
   );
-  const url = new URL(r.directives[0].audioItem.stream.url);
+  const url = new URL(spielt(r).audioItem.stream.url);
   assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
   assert.equal(url.searchParams.get('path'), '/02.mp3');
 });
@@ -1740,7 +1754,7 @@ function unerreichbar(name, id) {
  */
 async function sidDerDirektive(redis, name) {
   const r = await skill(intent('PlayPlaylistIntent', name), {}, null, redis);
-  const url = r.directives?.[0]?.audioItem?.stream?.url;
+  const url = spielt(r)?.audioItem?.stream?.url;
   return url ? new URL(url).searchParams.get('sid') : null;
 }
 
@@ -1984,7 +1998,7 @@ test('eine abgelaufene Frist fragt nach, statt sich neu anzumelden', async () =>
     );
     assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'keine Anmeldung, solange die Nummer gilt');
     assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'genau ein Abruf: die Nachfrage');
-    const url = new URL(r.directives[0].audioItem.stream.url);
+    const url = new URL(spielt(r).audioItem.stream.url);
     assert.equal(url.searchParams.get('sid'), 'aaaaaaaaaaaaaaaa', 'dieselbe Nummer bleibt');
     assert.equal(url.searchParams.get('path'), '/02.mp3');
     assert.ok(Date.now() - redis.speicher.musik_fritz_sid.zeit < 5000, 'die Frist beginnt von vorn');
@@ -2010,7 +2024,7 @@ test('erst eine wirklich tote Nummer loest die Anmeldung aus', async () => {
       ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua'],
       'nachgefragt, abgelehnt, angemeldet, gegengeprueft',
     );
-    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
+    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
     assert.equal(redis.speicher.musik_fritz_sid.sid, 'cccccccccccccccc');
   } finally {
     box.zurueck();
@@ -2033,7 +2047,7 @@ test('nach einer Anmeldung bekommt der gescheiterte Titel die neue Nummer mit', 
       { token: 'Udo CD eins|0|0|0', offset: 90_000 },
       redis,
     );
-    const stream = r.directives[0].audioItem.stream;
+    const stream = spielt(r).audioItem.stream;
     assert.equal(stream.token, 'Udo CD eins|0|0|0|1', 'derselbe Titel, zweiter Versuch');
     assert.equal(new URL(stream.url).searchParams.get('sid'), 'cccccccccccccccc', 'mit der neuen Nummer');
     assert.equal(stream.offsetInMilliseconds, einstieg(90_000), 'dort, wo er abbrach - mit Vorlauf');
@@ -2059,7 +2073,7 @@ test('ein Stolperer bei gueltiger Nummer wird wiederholt, ohne die Box anzufasse
       redis,
     );
     assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'ein Stolperer beendet nicht alle Sitzungen der Box');
-    const stream = r.directives[0].audioItem.stream;
+    const stream = spielt(r).audioItem.stream;
     assert.equal(stream.token, 'Udo CD eins|0|0|0|1', 'derselbe Titel noch einmal');
     assert.equal(stream.offsetInMilliseconds, 0, 'er war nie angelaufen');
   } finally {
@@ -2083,7 +2097,7 @@ test('beim zweiten Fehler am selben Titel geht es weiter', async () => {
       redis,
     );
     assert.ok(!box.abrufe.includes('/nas/filelink.lua'));
-    assert.equal(r.directives[0].audioItem.stream.token, 'Udo CD eins|1|0|0', 'der naechste Titel, Budget wieder bei null');
+    assert.equal(spielt(r).audioItem.stream.token, 'Udo CD eins|1|0|0', 'der naechste Titel, Budget wieder bei null');
   } finally {
     box.zurueck();
   }
@@ -2264,10 +2278,10 @@ test('der Ein-Satz-Aufruf spielt auch, wenn Alexa die Ziffer verstanden hat', as
   // LaunchRequest davor, keine aufgeloesten Werte - nur der gehoerte Text.
   const UDO = { name: 'Udo CD eins', titel: [{ url: 'https://example.org/u/01.mp3', name: '01' }] };
   const wort = await skill(sucheIntent('Udo CD eins'), {}, [UDO]);
-  assert.equal(wort.directives[0].audioItem.stream.token, 'Udo CD eins|0|0|0');
+  assert.equal(spielt(wort).audioItem.stream.token, 'Udo CD eins|0|0|0');
 
   const ziffer = await skill(sucheIntent('Udo CD 1'), {}, [UDO]);
-  assert.equal(ziffer.directives[0].audioItem.stream.token, 'Udo CD eins|0|0|0');
+  assert.equal(spielt(ziffer).audioItem.stream.token, 'Udo CD eins|0|0|0');
   assert.match(ziffer.outputSpeech.text, /Ich spiele Udo CD eins/, 'gesagt wird der richtige Name');
 });
 
@@ -2309,7 +2323,7 @@ test('ein Geraet ohne AudioPlayer bekommt einen Satz statt eines Versprechens', 
 
 test('ein Echo spielt wie bisher', async () => {
   const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'), { geraet: ['AudioPlayer'] });
-  assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+  assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
   assert.match(r.outputSpeech.text, /Ich spiele Kinderlieder/);
 });
 
@@ -2318,7 +2332,7 @@ test('ohne Auskunft ueber das Geraet wird gespielt', async () => {
   // sich sagt, ist kein Grund, ihm die Musik zu verweigern. Alle anderen Tests
   // in dieser Datei laufen ueber genau diesen Weg.
   const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'));
-  assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+  assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
 });
 
 test('der Riegel gilt fuer jeden Weg, der Musik ausgeben will', async () => {
@@ -2370,7 +2384,7 @@ test('ein Start fragt nach, auch wenn die Frist noch laeuft', async () => {
       ['/nas/api/data.lua', '/nas/cgi-bin/luacgi_notimeout'],
       'nachgefragt, nicht angemeldet - und die Datei angetippt',
     );
-    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
+    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
   } finally {
     box.zurueck();
   }
@@ -2389,7 +2403,7 @@ test('eine tote Nummer innerhalb der Frist wird beim Start ersetzt', async () =>
         '/nas/cgi-bin/luacgi_notimeout', '/nas/cgi-bin/luacgi_notimeout'],
       'nachgefragt, abgelehnt, angemeldet, gegengeprueft, Datei zweimal angetippt',
     );
-    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
+    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
   } finally {
     box.zurueck();
@@ -2422,7 +2436,7 @@ test('schweigt die Box, gilt die Frist weiter', async () => {
   globalThis.fetch = async () => { throw new Error('keine Verbindung'); };
   try {
     const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
+    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
   } finally {
     globalThis.fetch = vorher;
@@ -2454,7 +2468,7 @@ test('vor dem ersten Ton wird die Datei selbst angetippt', async () => {
     assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'die Datei wurde abgerufen');
     // Angetippt wird genau die Adresse, die der Echo gleich bekommt - eine
     // andere weckt die richtige Platte vielleicht, die richtige Datei nicht.
-    assert.equal(box.geweckt, r.directives[0].audioItem.stream.url);
+    assert.equal(box.geweckt, spielt(r).audioItem.stream.url);
     assert.equal(box.weckkopf.Range, 'bytes=0-0', 'ein Byte genuegt zum Wecken');
   } finally {
     box.zurueck();
@@ -2469,7 +2483,7 @@ test('eine Box, die zur Datei schweigt, haelt die Wiedergabe nicht auf', async (
   const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'keiner');
   try {
     const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
   } finally {
     box.zurueck();
@@ -2503,7 +2517,7 @@ test('"weiter" nach langer Pause weckt die Datei ebenso', async () => {
       { token: 'Udo CD eins|0|0|0', offset: 120000 },
       redis,
     );
-    assert.equal(box.geweckt, r.directives[0].audioItem.stream.url);
+    assert.equal(box.geweckt, spielt(r).audioItem.stream.url);
   } finally {
     box.zurueck();
   }
@@ -2556,7 +2570,7 @@ test('ohne Budget fuer den Weckruf wird trotzdem gespielt', async () => {
   try {
     const r = await skill(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, null, redis);
     assert.ok(!box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'kein Weckruf');
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
   } finally {
     process.env.MUSIK_BUDGET_MS = vorher;
     box.zurueck();
@@ -2619,9 +2633,9 @@ test('ein langer Vorlauf laesst den Login aus und spielt mit der gemerkten Numme
       timestamp: new Date(Date.now() - 5500).toISOString(),
     }, {}, redis);
     assert.deepEqual(box.abrufe, [], 'kein Abruf bei der Box - dafuer ist keine Zeit mehr');
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
     assert.equal(
-      new URL(r.directives[0].audioItem.stream.url).searchParams.get('sid'),
+      new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'),
       'aaaaaaaaaaaaaaaa',
       'die gemerkte Nummer, ungeprueft aber unwiderlegt',
     );
@@ -2687,7 +2701,7 @@ test('ein kurzer Vorlauf aendert nichts', async () => {
       ...intent('PlayPlaylistIntent', 'Udo CD eins'),
       timestamp: new Date(Date.now() - 200).toISOString(),
     }, {}, redis);
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
     assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
   } finally {
     box.zurueck();
@@ -2719,7 +2733,7 @@ test('nach einer Anmeldung wird die Datei ein zweites Mal angetippt', async () =
     const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
     assert.equal(weckrufe.length, 2, 'zweimal angetippt, mit Abstand dazwischen');
     assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'es gab wirklich eine Anmeldung');
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
   } finally {
     box.zurueck();
   }
@@ -2776,7 +2790,7 @@ test('der Abstand laesst sich abschalten', async () => {
     const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
     assert.equal(weckrufe.length, 1, 'nur der erste Weckruf');
     assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'und es gab wirklich eine Anmeldung');
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play', 'gespielt wird trotzdem');
+    assert.ok(spielt(r), 'gespielt wird trotzdem');
   } finally {
     process.env.MUSIK_WECK_ABSTAND_MS = vorher;
     box.zurueck();
@@ -2810,7 +2824,7 @@ test('der zweite Weckruf faellt nicht der eigenen Pause zum Opfer', async () => 
     assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'es gab eine Anmeldung');
     const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
     assert.equal(weckrufe.length, 2, 'die Pause laesst dem zweiten Weckruf sein Budget');
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
   } finally {
     process.env.MUSIK_WECK_ABSTAND_MS = vorherA;
     process.env.MUSIK_BUDGET_MS = vorherB;
@@ -2837,8 +2851,8 @@ test('vor dem Wiederholversuch wird die Datei angetippt', async () => {
       redis,
     );
     assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'die Datei wurde angetippt');
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play', 'und dann wiederholt');
-    assert.match(r.directives[0].audioItem.stream.token, /\|1$/, 'als zweiter Versuch');
+    assert.ok(spielt(r), 'und dann wiederholt');
+    assert.match(spielt(r).audioItem.stream.token, /\|1$/, 'als zweiter Versuch');
   } finally {
     box.zurueck();
   }
@@ -2857,7 +2871,7 @@ test('schweigt die Box beim Antippen, wird trotzdem wiederholt', async () => {
       { token: 'Udo CD eins|0|0|0', offset: 1 },
       redis,
     );
-    assert.equal(r.directives[0].type, 'AudioPlayer.Play');
+    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
   } finally {
     box.zurueck();
   }
@@ -2877,7 +2891,7 @@ test('auch der Sprung zum naechsten Titel bekommt die Pause', async () => {
       redis,
     );
     assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'auch hier angetippt');
-    assert.equal(new URL(r.directives[0].audioItem.stream.url).searchParams.get('path'), '/02.mp3',
+    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('path'), '/02.mp3',
       'und der naechste Titel kommt');
   } finally {
     box.zurueck();
@@ -2897,5 +2911,65 @@ test('eine Umleitung der Box gilt als tote Nummer, nicht als Schweigen', async (
       'die Umleitung fuehrt zur Anmeldung statt zum Weiterwursteln');
   } finally {
     box.zurueck();
+  }
+});
+
+// --- Die Warteschlange vor einem Start leeren --------------------------------
+//
+// **Der bekannte Kniff gegen einen Echo, der stumm auf altem Zustand sitzt.**
+// `REPLACE_ALL` ersetzt die Warteschlange ohnehin; `ClearQueue` davor raeumt
+// sie ausdruecklich ab.
+//
+// **Die These dahinter ist schwach, und das steht hier absichtlich.** Gemessen
+// ist, dass derselbe Echo nach derselben langen Pause eine Playlist von einem
+// anderen Server beim ersten Versuch spielt - ein haengender Warteschlangen-
+// Zustand waere dort genauso im Weg gewesen. Der Kniff kostet nichts, aber er
+// behebt vermutlich nicht das, was hier stumm bleibt.
+
+test('vor einem Start steht das Leeren der Warteschlange', async () => {
+  const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'));
+  assert.deepEqual(r.directives[0], { type: 'AudioPlayer.ClearQueue', clearBehavior: 'CLEAR_ALL' });
+  // Die Reihenfolge ist der ganze Zweck: erst abraeumen, dann spielen.
+  assert.equal(r.directives[1].type, 'AudioPlayer.Play');
+});
+
+test('auch "weiter" und "von vorn" raeumen erst ab', async () => {
+  for (const name of ['AMAZON.ResumeIntent', 'AMAZON.StartOverIntent']) {
+    const r = await skill(intent(name), { token: 'Kinderlieder|0|0|0', offset: 5000 });
+    assert.equal(r.directives[0].type, 'AudioPlayer.ClearQueue', name);
+    assert.ok(spielt(r), `${name}: und gespielt wird auch`);
+  }
+});
+
+test('beim Titelwechsel wird NICHT geleert', async () => {
+  // Der naechste Titel wird mit ENQUEUE angehaengt - eine geleerte
+  // Warteschlange davor wuerde genau das abraeumen, was gerade entsteht.
+  const r = await skill(
+    { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|0|0|0' },
+    { token: 'Kinderlieder|0|0|0' },
+  );
+  assert.ok(!r.directives.some(d => d.type === 'AudioPlayer.ClearQueue'), 'kein ClearQueue');
+  assert.equal(spielt(r).playBehavior, 'ENQUEUE');
+});
+
+test('mitten in der Wiedergabe wird nicht geleert', async () => {
+  // "Naechster Titel" und Mischen passieren in einer laufenden Wiedergabe.
+  // Dort gibt es keinen alten Zustand, auf dem jemand sitzen bleiben koennte.
+  for (const name of ['AMAZON.NextIntent', 'AMAZON.ShuffleOnIntent']) {
+    const r = await skill(intent(name), { token: 'Kinderlieder|0|0|0' });
+    assert.ok(!r.directives.some(d => d.type === 'AudioPlayer.ClearQueue'), name);
+  }
+});
+
+test('das Leeren laesst sich abschalten', async () => {
+  // Weil die These schwach ist: MUSIK_CLEAR_QUEUE=0 nimmt es wieder heraus,
+  // ohne Deploy.
+  const vorher = process.env.MUSIK_CLEAR_QUEUE;
+  process.env.MUSIK_CLEAR_QUEUE = '0';
+  try {
+    const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'));
+    assert.deepEqual(r.directives.map(d => d.type), ['AudioPlayer.Play']);
+  } finally {
+    process.env.MUSIK_CLEAR_QUEUE = vorher;
   }
 });
