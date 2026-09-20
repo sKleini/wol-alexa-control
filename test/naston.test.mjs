@@ -162,7 +162,7 @@ test('Kappung und Budget kommen aus der Umgebung', () => {
   try {
     delete process.env.MUSIK_TON_MAX_MB;
     delete process.env.MUSIK_TON_BUDGET_GB;
-    assert.equal(kappungBytes(), 6 * 1024 * 1024, 'Vorgabe 6 MB');
+    assert.equal(kappungBytes(), 4 * 1024 * 1024, 'Vorgabe 4 MB');
     assert.equal(budgetBytes(), 50 * 1024 ** 3, 'Vorgabe 50 GB');
 
     process.env.MUSIK_TON_MAX_MB = '0';
@@ -171,7 +171,7 @@ test('Kappung und Budget kommen aus der Umgebung', () => {
     assert.equal(budgetBytes(), 0, '0 heisst: kein Budget');
 
     process.env.MUSIK_TON_MAX_MB = 'viel';
-    assert.equal(kappungBytes(), 6 * 1024 * 1024, 'Unsinn faellt auf die Vorgabe zurueck');
+    assert.equal(kappungBytes(), 4 * 1024 * 1024, 'Unsinn faellt auf die Vorgabe zurueck');
   } finally {
     if (vorher.max === undefined) delete process.env.MUSIK_TON_MAX_MB; else process.env.MUSIK_TON_MAX_MB = vorher.max;
     if (vorher.budget === undefined) delete process.env.MUSIK_TON_BUDGET_GB; else process.env.MUSIK_TON_BUDGET_GB = vorher.budget;
