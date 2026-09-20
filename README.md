@@ -506,9 +506,30 @@ On the silent side the device did not even try: no `PlaybackStarted`, no `Playba
 So the skill now has a **haste target** of about 2.5 s, counted from Alexa's own timestamp, and everything dispensable gives way to it:
 
 - **The wake-up call is skipped** once the target is spent. It was built for the disk theory, and that is disproven — eight probes out of eight came back `HTTP 206` with audio. What is left of it is half a second on exactly the path where half a second decides between sound and silence.
-- **The check before a login is skipped** when the remembered number is past its window anyway. It costs about 740 ms and has exactly one job: to avoid a login that throws a **running** track out of the box. Before the first note nothing is running that it could protect.
+- **The check before a login is skipped** when the remembered number is past its window anyway and there is not even time for the check itself — and then **nothing else happens either**: the skill plays with the remembered number instead of logging in.
 
 Both only before a start. At a track change nobody is waiting for a spoken sentence, the Echo appends the next track itself, and there the check is worth its 740 ms precisely because it prevents that login. `MUSIK_EILZIEL_MS` moves the target without a deploy; `0` switches the haste off and restores the earlier behaviour.
+
+**That second rule was wrong twice, and the log said so in two consecutive lines.** It measured the haste target against `SID_PRUEF_MS` — the *upper bound* of the check, 2000 ms — rather than against what the check costs, which is 565 to 946 ms measured. And having saved those 650 ms, it went into the login:
+
+```
+musik-box Nachfrage ausgelassen, Frist abgelaufen und 1514 ms Eilziel
+musik-box FRITZ!NAS-Login ok (ohne Gegenprobe) nach 1536 ms, 3977 ms Budget uebrig
+musik-box Weckruf ausgelassen, nur noch -37 ms Eilziel
+musik-box IntentRequest in 1623 ms, Alexa wartet seit 2539 ms (Vorlauf 916 ms)
+```
+
+Then silence — no `PlaybackStarted`, no `PlaybackFailed`, the Echo never tried. Half a minute later the same playlist, the same Echo:
+
+```
+musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch (Ordner "/…/Das doppelte Lottchen") nach 647 ms
+musik-box spielt Das doppelte Lottchen … sid…8757
+musik-box IntentRequest in 1256 ms, Alexa wartet seit 1569 ms (Vorlauf 313 ms)
+```
+
+— and it played. **The session number is identical in both**: `sid…8757`, the one the login had just fetched. The session had been alive the whole time, the login was pure waiting, and that waiting is the entire difference between sound and silence. It also sharpens the boundary: 2539 ms silent against 2524 ms playing, the two closest points yet.
+
+So the threshold is now what the check costs (`SID_PRUEF_ERWARTET_MS`), and below it the skill neither asks nor logs in. That a five-minute window has expired is a statement about the clock, not about the box — the same reasoning as *"no time to ask"* below, and a mistake carries itself through `PlaybackFailed`.
 
 **And before a start the login goes without its counter-check.** Two trips to the box — fetching the scaffold and verifying the number — cost between 1443 and 2635 ms measured, which before the first note is the single largest item there is. The verification is the more dispensable half: `sidKandidaten` puts the explicit `sid=` values first, and those come from the answer the box gave to *this very* login, so it is the likeliest candidate rather than a guess. And a mistake carries itself: if the number is wrong after all, the Echo gets the login page, reports `PlaybackFailed`, and that request has a fresh eight seconds and a warm function — the session is checked under duress and the same track retried. The same path that already caught a `MEDIA_ERROR_SERVICE_UNAVAILABLE` in practice, with `PlaybackStarted` 18 ms after the second attempt.
 
@@ -762,6 +783,7 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence — always on the first attempt, FRITZ!NAS | the login sat in the second step of the call and did not fit there; the Echo was handed an expired number | fixed: the session is fetched when the skill is opened — see **Why the skill never goes silent** |
 | Alexa confirms, then silence — the first attempt after a longer break, FRITZ!NAS, and the second attempt plays the same address with the same session number | the box's disk had spun down; the first fetch waits for it to spin up and the Echo does not sit that out. The skill only ever touched the session, never a file | fixed: the start of the track is fetched before the answer goes out, which wakes the disk. Look for `musik-box Datei angetippt: …` in the log |
+| Silence on the first attempt, `Nachfrage ausgelassen …` followed by `FRITZ!NAS-Login ok` in the same request, and the second attempt plays with **the same** session number | the haste rule dropped the 650 ms check and then spent 1536 ms on a login for a session that was alive all along — `Alexa wartet seit 2539 ms`, past the boundary | fixed: the threshold is what the check costs, and below it the skill neither asks nor logs in but plays with the remembered number |
 | Silence on the first attempt although the log shows a valid session, a reachable file and `Geraet kann: AudioPlayer` — and **no** AudioPlayer event follows | **not** the cold start: measured at `Alexa wartet seit 3683 ms` of 8000, with Alexa speaking the sentence. What is left after elimination is the box in the seconds after a login | the skill now puts a gap between the login and its answer and probes the file a second time — see **the box, in the seconds after a login** above. Look for `Datei nach <n> ms Abstand noch einmal angetippt` |
 | Silence on a Fire TV from a FRITZ!NAS **folder** share, while a **file** share plays | not the skill: with the announcement off, both responses are structurally identical and differ only in the stream address. The device fetches — or refuses — that address without reporting anything back | none. Use an Echo for those playlists; see **Not every Alexa device reports back** |
 | Alexa confirms, then silence — on a Fire TV, a tablet, or anything that is not an Echo | the device does not offer the `AudioPlayer` interface, so it drops the `Play` directive without a word; only the sentence was left, and it promised something that never came | fixed: a device that does not report `AudioPlayer` now hears why instead of a promise. The log line `musik-box Geraet kann: …` lists what the device actually reported |

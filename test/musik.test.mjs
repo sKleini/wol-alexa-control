@@ -3233,16 +3233,42 @@ const mitEilziel = async (wert, tu) => {
   try { return await tu(); } finally { process.env.MUSIK_EILZIEL_MS = vorher; }
 };
 
-test('bei aufgebrauchtem Eilziel entfaellt die Nachfrage, wenn die Frist ohnehin um ist', async () => {
-  // Die Nachfrage kostet rund 740 ms und hat genau eine Aufgabe: eine
-  // Anmeldung zu vermeiden, die einen laufenden Titel aus der Box wirft. Vor
-  // dem ersten Ton laeuft nichts, das sie schuetzen koennte.
+test('bei aufgebrauchtem Eilziel wird weder gefragt noch angemeldet', async () => {
+  // **Gemeldet, in zwei Zeilen desselben Requests:**
+  //
+  //   musik-box Nachfrage ausgelassen, Frist abgelaufen und 1514 ms Eilziel
+  //   musik-box FRITZ!NAS-Login ok (ohne Gegenprobe) nach 1536 ms
+  //   → Alexa wartet seit 2539 ms, und es blieb stumm.
+  //
+  // Die Nachfrage der Eile wegen auszulassen und danach anzumelden, spart den
+  // billigen Weg, um den teuren zu nehmen. Gespielt wird jetzt mit der
+  // gemerkten Nummer - dass ihre Frist um ist, sagt etwas ueber die Uhr und
+  // nichts ueber die Box, und ein Irrtum traegt sich ueber PlaybackFailed.
   const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // ausserhalb der Frist
   const box = boxAmDraht('aaaaaaaaaaaaaaaa');
   try {
-    await mitEilziel('1', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
-    assert.equal(box.abrufe[0], '/nas/filelink.lua', 'direkt zur Anmeldung');
-    assert.ok(!box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'und kein Weckruf');
+    const r = await mitEilziel('1', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
+    assert.deepEqual(box.abrufe, [], 'die Box wird gar nicht angefasst');
+    assert.equal(
+      new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'),
+      'aaaaaaaaaaaaaaaa',
+      'gespielt wird mit der gemerkten Nummer',
+    );
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('reicht das Eilziel fuer die Nachfrage, wird gefragt statt angemeldet', async () => {
+  // Die Schwelle ist die gemessene Dauer der Nachfrage (565 bis 946 ms), nicht
+  // ihre Obergrenze von 2000. Dazwischen lag der gemeldete Fehlschlag: 1514 ms
+  // Eilziel haetten fuer die Nachfrage bequem gereicht.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // ausserhalb der Frist
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    await mitEilziel('1500', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
+    assert.equal(box.abrufe[0], '/nas/api/data.lua', 'zuerst gefragt');
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'die Anmeldung bleibt aus');
   } finally {
     box.zurueck();
   }
