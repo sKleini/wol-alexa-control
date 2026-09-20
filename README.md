@@ -112,6 +112,9 @@ Custom Skill "Meine Plattenkiste" → /api/skill (same endpoint, routed by skill
 | `DEFAULT_PERSON` | *(optional, location feature)* Fallback person name (e.g. `Julia`) |
 | `MUSIK_SKILL_ID` | *(optional, Meine Plattenkiste)* Skill ID of the **Meine Plattenkiste** custom skill (`amzn1.ask.skill....`, see section 9). Both custom skills point at `/api/skill`; this ID is how the endpoint tells them apart |
 | `MUSIK_VORLAUF_MS` | *(optional, Meine Plattenkiste)* How far *Resume* rewinds behind the remembered spot, in milliseconds, in its **Audiobook** setting. Default `5000`; `0` resumes on the exact millisecond. No effect on **Album**, which always restarts the track. Re-read on every request, like `MUSIK_BUDGET_MS` |
+| `MUSIK_TON_KEY` | *(optional, Meine Plattenkiste)* Signing key for the addresses of a **FRITZ!NAS folder share**, which the Echo fetches from this app instead of from the box (see section 9.2). Unset, `BRIDGE_KEY` is used, then `ADMIN_PASSWORD`; with none of the three set the endpoint answers `401` and such playlists stay silent |
+| `MUSIK_TON_MAX_MB` | *(optional, Meine Plattenkiste)* How much of a file is fetched from the box per request, in MB. Default `16`, `0` switches the cap off. It exists because a Vercel function has a wall clock — the player asks for the rest with the next range |
+| `MUSIK_TON_BUDGET_GB` | *(optional, Meine Plattenkiste)* Monthly ceiling for the audio passed through the app, in GB. Default `50` (the Hobby plan allows 100); above it the endpoint answers `503` instead of quietly running on. `0` means no ceiling. The running total is in Redis (`musik_ton_monat:<YYYY-MM>`) and printed in the dashboard |
 
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
 
@@ -368,7 +371,7 @@ Alexa fetches the files itself — without your login, without cookies. Every UR
 
 Your own web space, a Nextcloud/ownCloud, an S3 bucket or any static file host works. The dashboard's **Check URLs** button fetches every link the way the Echo does and reports status, content type, range support and the port, so you see problems before Alexa turns them into silence.
 
-**A FRITZ!Box works too**, on its default HTTPS port 456 — the certificate of a `…myfritz.net` address comes from a public CA, which is the part that matters. Keep in mind that Alexa then fetches the files over your upstream bandwidth, and that a share link is public to anyone who has it.
+**A FRITZ!Box works too**, on its default HTTPS port 456 — the certificate of a `…myfritz.net` address comes from a public CA, which is the part that matters. That holds for a **file** share, whose link carries no session: the Echo loads it straight from the box. A **folder** share cannot be loaded that way at all and takes the detour described in 9.2. Either way Alexa fetches over your upstream bandwidth, and a share link is public to anyone who has it.
 
 ##### 9.2 Import a whole folder
 
@@ -378,181 +381,46 @@ One link instead of twenty: paste a **folder share link** into *Import folder* a
 - The server fetches the page (the dashboard cannot: its CSP is `connect-src 'self'`) and collects the addresses of files ending in `.mp3`, `.m4a`, `.m4b`, `.mp4`, `.aac` or `.mpga` — from the links first, and from an embedded JSON block only if the page has no links of its own. It reads the shared folder itself, not its subfolders.
 - Nothing is saved. The tracks land in the textarea below, appended to what is already there, so two folders can be combined and single lines removed before **Save Playlist**. Importing the same folder twice adds nothing twice.
 - A link that points at a single file instead of a folder is imported as that one track and says so. A page that lists its files but builds their addresses in the browser cannot be imported — the answer names that case rather than reporting an empty folder.
-##### FRITZ!NAS folder shares
+##### FRITZ!NAS folder shares take a detour — and they have to
 
-A FRITZ!NAS share link opens an empty page — a `<div id="app">` and two scripts. The file list is fetched by the browser afterwards, so there is nothing in the source to parse. `lib/fritznas.js` therefore walks the same route the browser does: open the share link, pick up the session number, ask `data.lua` for the listing, and assemble one stream address per track (`/nas/cgi-bin/luacgi_notimeout?script=/api/data.lua&sid=…&c=music&a=get&path=…`). That address is a plain GET without a cookie and supports range requests — the one form the Echo can load.
+A FRITZ!NAS share link opens an empty page: a `<div id="app">` and two scripts. The file list is fetched by the browser afterwards, so there is nothing in the source to parse. `lib/fritznas.js` therefore walks the same route the browser does — open the share link, pick up the session number, ask `data.lua` for the listing, and assemble one address per track (`/nas/cgi-bin/luacgi_notimeout?script=/api/data.lua&sid=…&c=music&a=get&path=…`).
 
-AVM documents none of this, so the call that returns the listing is **tried rather than assumed**: a handful of plausible controller/action pairs in turn, until one answers with files. The import then fetches the first track exactly the way the Echo would — no cookie, `Range: bytes=0-32767` — and only reports success if a real audio file comes back. Every step appears as a line under the field, so a FRITZ!OS update that renames something produces a usable message instead of an empty result.
-
-**The addresses carry a session number, and the FRITZ!Box forgets a session after roughly twenty minutes of quiet** — so a stored one would only be good for the evening it was imported. The playlist therefore also stores where it came from, and the skill swaps `sid=` for a current one before every answer. The path to the file never changes, only the number in it, so a FRITZ!NAS playlist stays an ordinary list of URLs and only one place in the skill knows about any of this.
-
-**The address is only good for minutes, and that is the whole problem.** AVM's technical note on session IDs is explicit: the number of sessions is limited, a program should use only one per box — and an access *without* a valid session terminates all existing ones for security reasons. Opening a share link is exactly such an access, so every **login** throws every other playback out of the box. What follows from it:
-
-- Two FRITZ!NAS playlists **at the same time on two Echos** do not work — the second would cut off the first. One after another works with any number of shares.
-- **Importing while something is playing** cuts that playback off — an import always logs in. The skill recovers: `PlaybackFailed` notices the dead number, fetches a new one and resumes the same track where it broke off.
-- Someone working in the FRITZ!NAS web interface at the same time has the same effect.
-
-**One remembered number per share, not one per box — the shortcut that read like caution.** From "a login kills every session" the code concluded that a number belonging to a different share must be dead anyway, and kept a single record. What actually followed was not *"the dead number is not used"* but *"it is never even asked about"*: if the record belonged to another share, the skill went straight to the login — the very access that terminates every session on the box, including the track playing right now. With two folder playlists that meant a login on every switch between them, and starting the second one while the first was playing threw the first out of the box. A dead number is something you find out by **asking** (`sitzungGilt`, one call that terminates nothing and costs about 600 ms), not by throwing it away in favour of a login that costs 1500 to 2600 and takes the box down with it. So the store holds `{ [share]: { sid, time } }`, and what a login does is written into the store rather than assumed: it zeroes the *timestamps* of the other shares, so their numbers are no longer used blindly — but are still asked about before anything more expensive happens.
-
-**And the number is now checked against the folder it belongs to.** `check_nas_rights` answers with `root`, the folder that session's share opens — and that answer was being thrown away. A session belonging to a *different* share is alive and answers just as politely; it simply does not hand out the file whose path is in the address. That is exactly the reported shape: `FRITZ!NAS-Sitzung nachgefragt: gilt noch` in the log, and the Echo does not get the file. The import already records the folder (`quelle.ordner`), so the two can be compared; where either is missing the verdict stays what it was.
-
-**The oldest mistake of all: the address was minted minutes before it was used.** `AudioPlayer.PlaybackNearlyFinished` does not mean "nearly finished". The Echo asks for the next track as soon as its queue has room — **seconds after the current one starts**, as the comment on that handler has always said. The address it gets goes into the queue and is fetched when the current track ends: four minutes later for an album, twenty for an audiobook chapter. The session number in it was freshly checked at the moment it was minted, and is four minutes stale by the moment it is used. While the Echo is still downloading, its own fetches keep the session alive; once it has buffered the track, nothing touches the box until the changeover — and the session dies exactly where the next address is needed.
-
-So for a FRITZ!NAS playlist nothing is queued ahead any more. The next track is ordered at `PlaybackFinished`, when the Echo is about to fetch it, and the number in that address is a few hundred milliseconds old instead of as old as the track that just played. The price is a gap of a second or two between tracks; the price before was silence. Every other source keeps the seamless `ENQUEUE` — nothing about those addresses spoils. `MUSIK_FRITZ_NAHTLOS=1` brings the queueing back for FRITZ!NAS too, in case a box holds its sessions longer than this one.
-
-**And every handout of such an address asks first.** "The window is still open" is a statement about the clock, not about the box: five minutes is the safety margin against AVM's ten, and this box is observed to hold its sessions for less. So the track change, *"nächster Titel"*, *"voriger"* and shuffling all check before they answer — about 600 ms, at points where nothing is playing anyway, and each check extends the session at the box in the same breath.
-
-**Asking beats logging in, and that distinction is the fix for a playback error mid-album.** An expired cache window used to mean a login, and a login terminates every session on the box — including the one the Echo is streaming with right now. With tracks of four or five minutes and a five-minute window, the window fell inside a running track almost every time: the Echo lost the file mid-play and reported `MEDIA_ERROR_INTERNAL_SERVER_ERROR — Device playback error`, and the skill skipped to the next track. So there is a cheaper step in front of the login now: a single `data.lua` call with the remembered number, which terminates nothing and, as an active access, extends the session at the box. While a playlist is playing that call always succeeds — the Echo has been keeping the session alive with every range request — so the session now carries a whole album, and a login only happens when the number is genuinely dead (box restarted, another share opened, the web interface used). When that does happen on a failed track, the track is **retried** at the point it broke off instead of being skipped: the file was fine, only its address was not. It retries exactly once — on the next failure the check says "still valid", no new number is fetched, and the skill moves on as before.
-
-**A start does not trust the window either.** A silent start was reported where the log held three lines and ended with `musik-box IntentRequest in 34 ms` — no login (about 1550 ms), no check (about 640 ms), because the remembered number was less than a minute old and the five-minute window said so. But the window measures time, and on this box a session dies of events, not of time: a login for the second share, an import, someone in the FRITZ!NAS web interface. While a playlist is playing that hardly matters — the Echo keeps the session alive with every range request, and a bad guess costs one track. Before the first note nobody keeps it alive, and a bad guess costs the whole answer: *"Ich spiele …"*, then silence. So *"spiele …"*, *"weiter"*, *"von vorn"* and the play button check first. For a FRITZ!NAS playlist so does everything else that hands out an address — see **every handout of such an address asks first** above; for other sources those steps still ride on the window, because nothing about their addresses spoils.
-
-**And the session was never the whole story: the disk has to be awake too.** Reported after all of the above was in place — the first attempt after a longer break stays silent, the second plays. The two logs differ only in how the number was obtained:
+**And that address is exactly what the Echo cannot use.** It carries a session number, and **the box ties a session to the IP address that fetched it**. Its own event log says so:
 
 ```
-musik-box FRITZ!NAS-Login ok nach 2039 ms, 4338 ms Budget uebrig
-musik-box spielt Das doppelte Lottchen … ab 1/9 bei 2808 ms: …456/nas/cgi-bin/luacgi_notimeout sid…95f3
-
-musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch nach 946 ms, 5527 ms Budget uebrig
-musik-box spielt Das doppelte Lottchen … ab 1/9 bei 2808 ms: …456/nas/cgi-bin/luacgi_notimeout sid…95f3
+Abruf der freigegebenen Datei "/Musik/Zahnputzsong.mp3" von IP-Adresse 79.253.153.126.
+Anmeldung an der FRITZ!Box-Benutzeroberflaeche von IP-Adresse 79.253.153.126
+gescheitert (ungueltige Sitzungskennung). Zur Sicherheit werden alle noch
+gueltigen Sitzungen zur IP-Adresse 79.253.153.126 beendet.
 ```
 
-Same number, same address, same offset — the second attempt was handed byte for byte what the first was handed, so nothing about the skill's answer explains the difference. What the first attempt changed is the storage: `check_nas_rights` is answered from the box's head and never touches a file, and a disk on a FRITZ!Box spins down after a few minutes of quiet. The first fetch after that waits for it to spin up, which is exactly the wait the Echo will not sit through. The Echo's failed attempt woke the disk, and the second attempt found it turning.
+79.253.153.126 is the external IPv4 of the box itself — that is how it sees an Echo on the home network, which resolves the MyFRITZ! name and comes back in from outside through NAT loopback. The skill runs on Vercel and fetches its number from an entirely different address, so for the Echo that number is invalid however fresh it is, and every attempt terminates the sessions of that IP on top. A **file** share carries no session, which is why one of those plays and a folder share never did.
 
-So **before the first note the skill fetches the beginning of the track itself** — a `Range: bytes=0-32767` on the very address that is about to go into the directive, and it reads what comes back. It is capped at 2.5 s and aborted after that; it does not have to finish, it only has to arrive, because the spin-up happens in the box and not in that connection. Aborting before the answer goes out also matters: two simultaneous fetches on `luacgi_notimeout` are a lot for that hardware, and the second one would be the Echo's. It runs on the three ways a playback *starts* — *"spiele …"*, *"weiter"* / the play button, *"von vorn"* — and never at a track change, where the disk is turning anyway.
+That one finding explains a whole day of measurements that contradicted each other: the skill asks and is told *"still valid"*, taps the file and gets `HTTP 206, audio/mpeg` — both from *its* IP — and the Echo, handed the very same address a second later, reports `MEDIA_ERROR_INTERNAL_SERVER_ERROR`. Seventeen green probes, not one note.
 
-**A timeout there is not a No either.** It is the normal answer from a disk that is spinning up, and it is the whole reason the wake-up call exists: refusing on it would refuse precisely when it just helped. Only an answer that is not audio — an error, a redirect to the login page, the FRITZ!NAS interface in HTML — stops the start, because the Echo would get the same thing a second later. The line `musik-box Datei angetippt: HTTP 206, audio/mpeg nach 140 ms` is also the counter-check for the diagnosis above: if it says the file was there and the Echo still stays silent, it was not the disk, and the next search starts at the device instead of at the box again.
-
-**And the counter-check said it was not the disk.** The very line that was added for it answered on the next cold attempt:
+**So the Echo is never handed an address with a session number again.** A folder import stores one address per track that points at this app:
 
 ```
-musik-box FRITZ!NAS-Login ok nach 1951 ms, 4426 ms Budget uebrig
-musik-box Geraet kann: AudioPlayer
-musik-box spielt Das doppelte Lottchen … ab 1/9 bei 0 ms: … sid…f154
-musik-box Datei angetippt: HTTP 206, audio/mpeg nach 613 ms, 3798 ms Budget uebrig
-musik-box IntentRequest in 2705 ms
+https://<your-app>.vercel.app/api/skill?ton=<signed token>
 ```
 
-Session valid, file fetched in 613 ms, device reports `AudioPlayer` — and then not one AudioPlayer event. No `PlaybackStarted`, no `PlaybackFailed`. A device that tried and failed reports back; this one never saw the directive. So the wake-up call stays (it costs half a second and rules the disk out for good), but the cause is elsewhere: see **the budget starts at Alexa** below.
+The token carries the share link and the path inside it, signed with HMAC-SHA256 (`MUSIK_TON_KEY`, else `BRIDGE_KEY`, else `ADMIN_PASSWORD`) — so the endpoint is not an open relay into your box, and a leaked address gives out exactly one file, no more than a share link itself does. `lib/naston.js` then does what only it can do: it resolves the session itself, fetches the file from the box and passes the bytes through, with `Range` in both directions. The fetching party and the session's owner are the same address, which is the whole point.
 
-**And then the counter-check itself turned out to be too weak.** A log from 20 September, sixty-five seconds long: nine tracks, each attempted twice, every one of them `MEDIA_ERROR_INTERNAL_SERVER_ERROR – Device playback error` at `Offset: 0` or `1`. Not one `PlaybackStarted` in the whole run. And between the failures, seventeen times:
+Consequences, all of them good:
 
-```
-musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch nach 589 ms, 4830 ms Budget uebrig
-musik-box Datei vor dem naechsten Anlauf angetippt: HTTP 206, audio/mpeg nach 580 ms
-```
+- The address in a playlist **does not spoil**. No refresh before every answer, no wake-up call before the first note, no session number that is four minutes old by the time it is used.
+- Track changes are **seamless again** (`ENQUEUE` at `PlaybackNearlyFinished`, like every other source), and *"Alexa, weiter"* resumes to the second, because range requests pass straight through.
+- The box is only touched while something is actually playing, and only by one address — this app's. Logins become rare, and a login terminating every session on the box stops being a hazard during playback.
 
-Same address, seconds apart, seventeen green probes and not one note. That rules out the file, the path, the session number and the disk — the skill fetched *that exact URL* every single time. What differs is who is fetching. Two things follow from it, and both are in the code now:
+**What it costs, and how you see it.** The audio travels through the app: up your own upstream to Frankfurt (`regions: ["fra1"]`), then down to the Echo. At 64–128 kbit/s that is 30–60 MB per hour; one full run of *Das doppelte Lottchen* is about 200 MB, an hour a night roughly 1.5 GB a month — against the 100 GB of Vercel's Hobby plan. Rather than estimate, the app counts: every response adds the bytes that **actually** flowed (counted on the stream, not taken from `Content-Length`, so an aborted track counts as what it was) to `musik_ton_monat:<YYYY-MM>` in Redis, and the dashboard prints the running total under the playlist list. `MUSIK_TON_BUDGET_GB` (default 50) is the hard stop: above it the endpoint answers `503` instead of quietly running on.
 
-**The probe reads, it does not just knock.** `bytes=0-0` can be answered from the box's head once it has the file open; thirty-two kilobytes cannot. A probe that reports `HTTP 206, audio/mpeg` without ever having seen a byte of audio is a probe that says "all good" about something it did not test, and it sent this search in the wrong direction seventeen times over. The line now reads `HTTP 206, audio/mpeg, Kopf nach 180 ms, 32 KB Ton`, and if the header arrives and the data does not, it says that instead — which is still not a No, because that is what a disk spinning up looks like.
+**Long files are handed over in pieces.** A Vercel function has a wall clock (`maxDuration` for `api/skill.js` is set to 60 s in `vercel.json`; with Fluid Compute enabled you can raise it to 300). The proxy therefore never requests more than `MUSIK_TON_MAX_MB` (default 16) from the box at once and answers `206` with the matching `Content-Range`; the player asks for the rest, exactly as it does after every pause. If a playback ever stops after about a minute, that is the one knob: raise `maxDuration`, or lower the cap. `MUSIK_TON_MAX_MB=0` switches the cap off.
 
-**And the log now says which ways to the box exist.** A MyFRITZ! name carries two addresses. The skill runs on Vercel and goes over IPv4; an Echo on the home network prefers IPv6 and so takes an entirely different route to the same box — one the skill never touches. If that route breaks (a new prefix that the MyFRITZ! name has not caught up with, a share that only holds for IPv4), the skill keeps seeing green while the Echo stays silent, and nothing in the log would ever have said so. On the first track of a losing streak it now logs one line:
+**If the box says something other than audio** — the login page, a redirect, an error — the proxy fetches a fresh session number once and repeats the request; only then does it give up with `502`. That is the same distinction `weckUrteil` has always made, in the one place that still needs it.
 
-```
-musik-box Weg zur Box: dy9….myfritz.net: der Skill geht ueber IPv4 79.253.153.126,
-die Box hat auch IPv6 2003:… – diesen Weg nimmt ein Echo zuerst, und er wird hier nie geprueft
-```
+**Existing playlists need no re-import.** Saving one rewrites its stored addresses: the path is in the old address, the share link is in the playlist's `quelle`, and that is all the token needs.
 
-It is an observation, not a fix — but it is the one the elimination above was missing.
-
-**Three tracks that do not start end the playback.** Retrying once and then skipping is built for a single stumble. When *nothing* starts any more, those two rules turn a silent track into a silent playlist: nine tracks, seventeen fetches at a box that is not serving, and afterwards the remembered position sits at the end of the list instead of where someone wanted to carry on. The streak rides along in the token next to the retry counter (`Kinderlieder|2|1|4711|0|2`), a track that actually played for a second clears it, and at three the skill stops with `musik-box aufgegeben: 3 Titel nacheinander sind nicht angelaufen`. Two broken files next to each other happen; three tracks that do not even begin are not a coincidence.
-
-**What was left after everything else had been excluded: the box, in the seconds after a login.** The measurements, one by one:
-
-| Observation | What it rules out |
-|---|---|
-| `Alexa wartet seit 3683 ms` of a 8000 ms window | the answer being late |
-| Alexa speaks *"Ich spiele Das doppelte Lottchen."* | the answer being rejected |
-| `Geraet kann: AudioPlayer` | the device lacking the interface |
-| the same Echo, after the same long pause, plays a **non-FRITZ!NAS** playlist first time, every time | the device being asleep |
-| `Datei angetippt: HTTP 206, audio/mpeg nach 668 ms` | the file, the path, the session number |
-| a minute later the **same address with the same number** plays | the address, the offset, the token |
-
-What every silent attempt has in common, and no playing one does, is the **login**. `filelink.lua` without a session terminates all sessions on the box, per AVM's own technical note. The skill's own probe, 668 ms later, still gets through; the Echo's fetch, a second or two after that, does not; a minute later the same number works again. What the box does in between is not visible from outside — that it is not fit to serve a second client during it is established by elimination.
-
-So after a login the skill **spends what is left of its budget before answering, and probes the file a second time**. One change, two effects: the Echo's fetch moves away from the login, and the second line in the log says whether the box is still serving at that later moment — the observation about the box that was missing all along. Without a login none of it happens: there is no problem there, and two seconds of silence before every track would be a high price for nothing.
-
-**The first attempt at this gap contained the same class of mistake twice: arithmetic without slack.** Two constants meant the same thing and were different sizes — the pause held back 600 ms, the fetch after it demanded 900 — so the second probe could never happen in a tight budget, which is exactly where it was needed. The log said so, and it took a reported case to read it:
-
-```
-musik-box Datei angetippt: HTTP 206, audio/mpeg nach 644 ms, 2258 ms Budget uebrig
-musik-box Weckruf ausgelassen, nur noch 1300 ms Budget
-```
-
-`2258 − (2258 − 700 − 600) = 1300`. And once that was fixed, the pause landed two milliseconds short, because `setTimeout` never sleeps for exactly as long as it is told. The reserve behind the pause is also deliberately smaller than `SID_ANTWORT_RESERVE_MS`: those 700 ms protect against a network call overrunning, and after the second probe there is no call left, only `res.json()` — while the outer budget already holds a second and a half back. Taking that reserve twice halved the pause.
-
-**The 1.5 seconds are a bet, not a measurement**, so they live in an environment variable (`MUSIK_WECK_ABSTAND_MS`) rather than in the code: if the box needs longer, that is a number in Vercel's dashboard and not a deploy; `0` switches the whole second round off. And if the second probe comes back with the FRITZ!NAS interface instead of audio, nothing is promised — the Echo would get the same thing.
-
-**A redirect is not silence.** The line that says why the box said nothing paid for itself the first time it ran:
-
-```
-musik-box FRITZ!NAS-Sitzung nachgefragt: ohne Antwort (HTTP 303) nach 753 ms
-```
-
-An `HTTP 303` on `data.lua` is the box saying *"I do not know this number, go to the login"* — a No, not a shrug. Booked as "cannot be determined", the skill could go on to start playback with it while its own window was still running, and the Echo got the login page instead of the file: precisely the reported *"Ich spiele …"*, then silence. So any answer below 500 now counts as a rejection — a redirect, an error status, or the FRITZ!NAS interface as HTML with status 200. A **5xx stays undetermined**: there the box is overloaded or broken, which says nothing about the number, and declaring it dead would mean logging in during a running playback — which ends every session on the box. The protection that "silence is not a No" was built for stays exactly where it was meant to be.
-
-**And the queue is cleared before a start.** `AudioPlayer.ClearQueue` with `CLEAR_ALL` goes out ahead of the `Play` directive, the usual remedy in reports of an Echo that sits silently on an old queue. `REPLACE_ALL` replaces the queue anyway; this says it explicitly.
-
-**The theory behind it is weak, and that belongs here.** It is measured that the same Echo, after the same long pause, plays a playlist from a different server on the first attempt — a stuck queue would have been just as much in the way there. It costs nothing and breaks nothing, but it probably does not fix what stays silent here. So it sits behind a switch: `MUSIK_CLEAR_QUEUE=0` takes it out again, without a deploy. Only before a **start**, never at a track change: the next track is appended with `ENQUEUE`, and an emptied queue in front of that would clear away exactly what is being built.
-
-**It is not Alexa's window that decides, but a much tighter one.** Alexa accepted every answer and spoke the sentence; whether the Echo then *executes* the `Play` directive turned out to be a different question. Measured on an Echo that had been idle for a while:
-
-```
-silent:  2539, 2857, 3271, 3683, 3846, 4537, 5204, 5771 ms  — not one AudioPlayer event after it
-plays:   1519, 1569, 1737, 1868, 2039, 2447, 2524 ms       — PlaybackStarted after 18 ms
-```
-
-On the silent side the device did not even try: no `PlaybackStarted`, no `PlaybackFailed`, nothing. On the playing side it reported back in 18 milliseconds. Everything else about the two answers is identical, down to the session number and the byte the box serves. What differs is the time.
-
-So the skill now has a **haste target** of about 2.5 s, counted from Alexa's own timestamp, and everything dispensable gives way to it:
-
-- **The wake-up call is skipped** once the target is spent. It was built for the disk theory, and that is disproven — eight probes out of eight came back `HTTP 206` with audio. What is left of it is half a second on exactly the path where half a second decides between sound and silence.
-- **The check before a login is skipped** when the remembered number is past its window anyway and there is not even time for the check itself — and then **nothing else happens either**: the skill plays with the remembered number instead of logging in.
-
-Both only before a start. At a track change nobody is waiting for a spoken sentence, the Echo appends the next track itself, and there the check is worth its 740 ms precisely because it prevents that login. `MUSIK_EILZIEL_MS` moves the target without a deploy; `0` switches the haste off and restores the earlier behaviour.
-
-**That second rule was wrong twice, and the log said so in two consecutive lines.** It measured the haste target against `SID_PRUEF_MS` — the *upper bound* of the check, 2000 ms — rather than against what the check costs, which is 565 to 946 ms measured. And having saved those 650 ms, it went into the login:
-
-```
-musik-box Nachfrage ausgelassen, Frist abgelaufen und 1514 ms Eilziel
-musik-box FRITZ!NAS-Login ok (ohne Gegenprobe) nach 1536 ms, 3977 ms Budget uebrig
-musik-box Weckruf ausgelassen, nur noch -37 ms Eilziel
-musik-box IntentRequest in 1623 ms, Alexa wartet seit 2539 ms (Vorlauf 916 ms)
-```
-
-Then silence — no `PlaybackStarted`, no `PlaybackFailed`, the Echo never tried. Half a minute later the same playlist, the same Echo:
-
-```
-musik-box FRITZ!NAS-Sitzung nachgefragt: gilt noch (Ordner "/…/Das doppelte Lottchen") nach 647 ms
-musik-box spielt Das doppelte Lottchen … sid…8757
-musik-box IntentRequest in 1256 ms, Alexa wartet seit 1569 ms (Vorlauf 313 ms)
-```
-
-— and it played. **The session number is identical in both**: `sid…8757`, the one the login had just fetched. The session had been alive the whole time, the login was pure waiting, and that waiting is the entire difference between sound and silence. It also sharpens the boundary: 2539 ms silent against 2524 ms playing, the two closest points yet.
-
-**And the login was the one step that never looked at the haste target at all** — the most expensive one of them. The next run said so, this time with a genuinely dead number:
-
-```
-musik-box FRITZ!NAS-Sitzung nachgefragt: ist tot nach 899 ms
-musik-box FRITZ!NAS-Login ok (ohne Gegenprobe) nach 895 ms, 3659 ms Budget uebrig
-musik-box Weckruf ausgelassen, nur noch -355 ms Eilziel
-musik-box IntentRequest in 1880 ms, Alexa wartet seit 2857 ms (Vorlauf 977 ms)
-```
-
-Silent again, no event. The number in that answer was fresh and correct — it was 350 ms late, and that made it worthless. Half a minute later an answer went out after 1737 ms whose address the Echo could **not** load: it reported `MEDIA_ERROR_SERVICE_UNAVAILABLE`, the skill retried the same track, and it played. **A dead number that arrives in time beats a fresh one that arrives late**: the first buys a second round with a fresh eight seconds and a warm function, the second buys silence. So before the first note the login gives way like everything else (`LOGIN_ERWARTET_MS`), and the skill starts with the number it has. Where it does that deliberately, the wake-up call is skipped too — what it would find there is exactly the box's refusal that this decision already accounts for.
-
-So the threshold is now what the check costs (`SID_PRUEF_ERWARTET_MS`), and below it the skill neither asks nor logs in. That a five-minute window has expired is a statement about the clock, not about the box — the same reasoning as *"no time to ask"* below, and a mistake carries itself through `PlaybackFailed`.
-
-**And before a start the login goes without its counter-check.** Two trips to the box — fetching the scaffold and verifying the number — cost between 1443 and 2635 ms measured, which before the first note is the single largest item there is. The verification is the more dispensable half: `sidKandidaten` puts the explicit `sid=` values first, and those come from the answer the box gave to *this very* login, so it is the likeliest candidate rather than a guess. And a mistake carries itself: if the number is wrong after all, the Echo gets the login page, reports `PlaybackFailed`, and that request has a fresh eight seconds and a warm function — the session is checked under duress and the same track retried. The same path that already caught a `MEDIA_ERROR_SERVICE_UNAVAILABLE` in practice, with `PlaybackStarted` 18 ms after the second attempt.
-
-In practice that means *always*, before a start: even the fastest login measured leaves no room for another trip to the box once the lead time is counted. During playback the counter-check stays — no haste target reaches there — and `MUSIK_EILZIEL_MS=0` keeps it everywhere.
-
-**Silence from the box is not a No.** The check has three outcomes, and the difference matters: on a No the skill logs in, on no answer at all it does not — whoever cannot be reached will not accept a login either, and then the remembered number, still inside its window, is the best word there is. The same applies when the remaining budget is too small for a check: the window keeps its say. Staying silent while the number is very probably fine would be the worse choice.
-
-**Only a request that is about to hand out an address refreshes at all.** Reported from a log holding exactly two lines — a login of 1572 ms, then `IntentRequest in 1603 ms`, with no `Geraet kann` and no `spielt` between them. An intent that plays nothing: a misheard sentence, a question back, a stop. And a **login** all the same, which per AVM ends every session on the box — while the Echo was streaming. That is precisely the damage the check in front of the login was built to prevent, on a path nobody had looked at: the refresh ran for *every* request, because `gemeintePlaylist` falls back to the running stream when there is no slot. Listing the playlists, the help, *"das habe ich nicht verstanden"*, stop, and the events at the end of a track now leave the session alone. For intents the list is the same one that decides whether a device without `AudioPlayer` hears a sentence instead of a promise — both questions mean the same thing: *is music about to come out of this?*
-
-Only the playlist this request is about gets refreshed — fetching a number costs two calls to the box, and Alexa allows the skill eight seconds. The number is cached in Redis for five minutes — AVM grants ten, extended by every active access. A track the Echo failed to load overtakes that window: `PlaybackFailed` re-checks the number immediately rather than sitting the window out, because an expired one is by far the likeliest cause and the next track would carry the same. If the box cannot be reached at all, the skill says so instead of starting: the remembered number is past its window by then, and playing with it produced exactly the failure that was reported — *"Ich spiele das doppelte Lottchen"*, then silence, every first attempt. A sentence that explains beats a promise that does not hold.
-
-**With exactly one exception: there was no time to ask.** After a cold start the budget is down to its floor, and neither the check nor the login fits into it — so the box is not touched at all in that request. What exists then is not bad news about the remembered number, it is *no* news. "Past its window" only means *older than five minutes*, and the box extends a session on every access, so the number is quite probably still good. The skill therefore starts with it, and the failure carries itself: if the Echo cannot fetch the file it reports `PlaybackFailed`, and that is a **fresh request with a full eight seconds and a warm function**, where the session is checked under duress and the same track is retried. *"Versuch es gleich noch einmal"* turns into a delay of a second or two — and in the good case into none at all. Once the box has answered, though — with a no, or not at all — the sentence stands: that is exactly where betting on the old number was tried before and produced nothing but silence. The log says which of the two happened (`FRITZ!NAS-Sitzung ungeprueft (keine Zeit zu fragen)` versus `FRITZ!NAS-Sitzung fehlt`).
+**What the box still limits.** A FRITZ!Box allows 20 share links in total, files and folders together — but a folder share now costs exactly one of them per album, not one per track. And two folder playlists on two Echos still share the box's sessions, so the "ask before logging in" step in `fritzSid` stays.
 
 The card in the dashboard marks such a playlist with **FRITZ!NAS**; clicking that reveals which folder it came from (`/Musik/Schlaflieder`), as a link that opens the share itself in a new tab, and *Edit* puts the share link back into the *Import folder* field, so it can be looked up, copied or replaced. Changing that field alone does not change the playlist — the link is only taken over by pressing *Import folder*, and saving with an unapplied one says so instead of quietly keeping the old.
 
