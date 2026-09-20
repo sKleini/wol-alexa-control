@@ -18,7 +18,9 @@
 import { Redis } from '@upstash/redis'
 import { buildLocationSpeech } from '../lib/geo.js'
 import { befehlAnPerson } from '../lib/ring.js'
-import { handleSkill as musikBox } from '../lib/musik.js'
+import { handleSkill as musikBox, fritzSid } from '../lib/musik.js'
+import { nasTon } from '../lib/naston.js'
+import { queryOf } from '../lib/query.js'
 import {
   speak,
   resolvedSlotValue,
@@ -36,6 +38,21 @@ const redis = new Redis({
 })
 
 export default async function handler(req, res) {
+  // **Der Ton einer FRITZ!NAS-Ordnerfreigabe kommt hier heraus** - siehe
+  // lib/naston.js. Er steht vor allem anderen, weil ein GET keinen Rumpf hat
+  // und sonst gleich in der naechsten Zeile im 400 landete.
+  //
+  // Und er steht in *dieser* Function, weil der Hobby-Tarif zwoelf erlaubt und
+  // api/ genau zwoelf hat (siehe .github/workflows/api-funktionen.yml). Nach
+  // /api/manage kann er nicht: Dort haengt das Admin-Passwort davor, und der
+  // Echo schickt keines mit.
+  const ton = queryOf(req).ton;
+  if (ton && (req.method === 'GET' || req.method === 'HEAD')) {
+    return nasTon(req, res, redis, String(ton), (link, erzwingen) => (
+      fritzSid(link, redis, erzwingen).then(e => e.sid)
+    ));
+  }
+
   const body = req.body;
   if (!body || !body.request) return res.status(400).end();
 

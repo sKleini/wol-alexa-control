@@ -198,7 +198,7 @@
                 <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks).<br>
                 Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
                 <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
-                For FRITZ!NAS, saving also keeps the folder link with the playlist, so the skill renews the box's session number on every play. No re-import needed.
+                <strong>FRITZ!NAS folder shares take a detour, and they have to:</strong> such a share hands out its files only with a session number, and the box ties that number to the address that fetched it — for the Echo it is worthless, whoever fetched it. The tracks therefore point at this app, which fetches the file itself and passes the bytes through. Nothing is stored; the counter below the list says how much ran through this month.
             </div>
 
             <form id="playlist-form">
@@ -251,6 +251,7 @@
             <div class="device-list" id="playlist-list">
                 <!-- Playlists loaded here -->
             </div>
+            <div class="hint" id="playlist-ton" hidden></div>
         </div>
     </main>
 
@@ -441,6 +442,21 @@
             el.className = 'form-status ' + kind;
         }
 
+        // Wie viel Ton in diesem Monat durch die App gelaufen ist. Die Zahl
+        // steht hier, weil sie die einzige offene Frage dieses Weges
+        // beantwortet: Der Ton einer FRITZ!NAS-Freigabe laeuft ueber den
+        // Vercel-Tarif, und geschaetzt hat das niemandem geholfen.
+        async function zeigeTonZaehler() {
+            const el = document.getElementById('playlist-ton');
+            const stand = await apiRequest('GET', null, '?type=playlists&ton=1');
+            if (!stand || typeof stand.bytes !== 'number') { el.hidden = true; return; }
+            const monat = new Date().toLocaleDateString('en', { month: 'long', year: 'numeric' });
+            el.textContent = stand.budget
+                ? `Streamed through this app in ${monat}: ${stand.lesbar} of ${stand.budgetLesbar} (FRITZ!NAS playlists only).`
+                : `Streamed through this app in ${monat}: ${stand.lesbar} (FRITZ!NAS playlists only).`;
+            el.hidden = false;
+        }
+
         async function renderPlaylists() {
             const playlists = await apiRequest('GET', null, '?type=playlists');
             if (!playlists) return;
@@ -451,6 +467,7 @@
             document.getElementById('playlist-sort-az').hidden = playlists.length < 2;
 
             zuletztGerendert = playlists;
+            zeigeTonZaehler();
             playlists.forEach((pl, nummer) => {
                 const titel = Array.isArray(pl.titel) ? pl.titel : [];
                 const item = document.createElement('div');
@@ -610,18 +627,11 @@
                     const qs = `?type=playlists&pruefen=1&name=${encodeURIComponent(name)}&ab=${ab}`;
                     const r = await apiRequest('GET', null, qs);
                     if (!r || r.error) { lines.push(`❌ ${esc(r?.error || 'check failed')}`); break; }
-                    // Bei einer FRITZ!NAS-Playlist sind die geprueften
-                    // Adressen nicht die gespeicherten: Sie tragen die
-                    // Sitzungsnummer, die der Echo gleich bekaeme. Ohne diesen
-                    // Satz wundert man sich, warum sie vom Formular abweichen.
-                    if (r.aufgefrischt && ab === 0) {
-                        lines.push('ℹ️ Checked with a current FRITZ!Box session number — the same one the Echo would get.');
-                    }
                     for (const e of r.ergebnisse) {
-                        // Vier Stufen statt zwei. Die Sanduhr ist die neue: Die
-                        // Datei laedt einwandfrei, laeuft aber laenger, als die
-                        // FRITZ!Box-Sitzung gilt - ein Fall, den ein Abruf von
-                        // einem Byte nie zeigen konnte.
+                        // Vier Stufen statt zwei. Die Sanduhr heisst: Die Datei
+                        // laedt einwandfrei, dauert aber ueber eine Stunde - in
+                        // Kapitel geteilt setzt "Weiterhoeren" an einer
+                        // sinnvollen Stelle ein statt mitten darin.
                         const icon = e.fehler ? '❌' : (e.zuLang ? '⏳' : (e.range ? '✅' : '⚠️'));
                         const teile = [];
                         if (e.fehler) {
@@ -638,7 +648,7 @@
                                 teile.push([e.groesse, dauer, rate].filter(Boolean).join(', '));
                             } else teile.push('length not reported');
                             if (!e.range) teile.push('no range support');
-                            if (e.zuLang) teile.push('longer than a FRITZ!Box session lasts — see section 9');
+                            if (e.zuLang) teile.push('over an hour in one file — chapters give "weiter" a sensible place to land');
                         }
                         lines.push(`${icon} ${esc(e.url)} — ${esc(teile.join(' · '))}`);
                     }
