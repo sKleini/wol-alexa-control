@@ -242,6 +242,32 @@ test('nasTon weist ein Token ohne gueltige Unterschrift ab, ohne die Box zu frag
   assert.equal(res.statusCode, 401);
 });
 
+test('ohne Kappung wird gestroemt, mit Kappung am Stueck geliefert', async () => {
+  // Der Unterschied ist keine Geschmacksfrage: Eine eingesammelte Antwort
+  // darf bei Vercel 4,5 MB gross sein, eine gestroemte mehr - und ob gestroemt
+  // wird, entscheidet die Laufzeit. Ein gekapptes Stueck passt in beides.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const ton = Buffer.alloc(2048, 5);
+  const vorherMax = process.env.MUSIK_TON_MAX_MB;
+
+  for (const [kappung, erwartet] of [['1', 2048], ['0', 2048]]) {
+    process.env.MUSIK_TON_MAX_MB = kappung;
+    const res = attrappeRes();
+    const redis = attrappeRedis();
+    await mitAbruf(() => new Response(ton, {
+      status: 206,
+      headers: { 'content-type': 'audio/mpeg', 'content-range': `bytes 0-2047/9000`, 'content-length': '2048' },
+    }), async () => {
+      const lauf = nasTon({ method: 'GET', headers: { range: 'bytes=0-2047' } }, res, redis, token, async () => 'aabbccddeeff0011');
+      await Promise.all([lauf, fertig(res)]);
+    });
+    assert.equal(res.statusCode, 206, `Kappung ${kappung}`);
+    assert.equal(Buffer.concat(res.stuecke).length, erwartet, `Kappung ${kappung}: alle Bytes`);
+    assert.equal(redis.merkzettel.gezaehlt, erwartet, `Kappung ${kappung}: gezaehlt`);
+  }
+  if (vorherMax === undefined) delete process.env.MUSIK_TON_MAX_MB; else process.env.MUSIK_TON_MAX_MB = vorherMax;
+});
+
 test('nasTon reicht die Bytes durch, zaehlt sie und faelscht den Kopf nicht', async () => {
   const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
   const res = attrappeRes();
