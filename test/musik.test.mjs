@@ -3274,6 +3274,34 @@ test('reicht das Eilziel fuer die Nachfrage, wird gefragt statt angemeldet', asy
   }
 });
 
+test('eine tote Nummer rechtzeitig schlaegt eine frische zu spaet', async () => {
+  // **Gemeldet, mit tatsaechlich toter Nummer:**
+  //
+  //   musik-box FRITZ!NAS-Sitzung nachgefragt: ist tot nach 899 ms
+  //   musik-box FRITZ!NAS-Login ok (ohne Gegenprobe) nach 895 ms
+  //   musik-box IntentRequest in 1880 ms, Alexa wartet seit 2857 ms
+  //   → kein einziges AudioPlayer-Ereignis.
+  //
+  // Die Nummer in dieser Antwort war frisch und richtig; sie kam nur 350 ms
+  // zu spaet. Im selben Test spielte eine Antwort nach 1737 ms, deren Adresse
+  // der Echo nicht laden konnte - er meldete PlaybackFailed, der Titel wurde
+  // wiederholt, und es lief. Die Anmeldung weicht dem Eilziel deshalb wie
+  // alles andere auch.
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // ausserhalb der Frist
+  const box = boxAmDraht('totetotetotetote');      // und die Box kennt sie nicht
+  try {
+    const r = await mitEilziel('1200', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
+    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'gefragt, aber nicht angemeldet');
+    assert.equal(
+      new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'),
+      'aaaaaaaaaaaaaaaa',
+      'gestartet wird mit der alten Nummer – PlaybackFailed holt die neue',
+    );
+  } finally {
+    box.zurueck();
+  }
+});
+
 test('innerhalb der Frist bleibt die Nachfrage - auch in Eile', async () => {
   // Dort ist sie fast immer erfolgreich und erspart die Anmeldung wirklich.
   // Eine Anmeldung beendet alle Sitzungen der Box; diesen Preis zahlt die Eile
