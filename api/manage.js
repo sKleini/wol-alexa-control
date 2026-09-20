@@ -1,7 +1,7 @@
 import { Redis } from '@upstash/redis'
 import { buildLocationList } from '../lib/geo.js'
 import { befehlAnPerson } from '../lib/ring.js'
-import { handleManage as handlePlaylists, handleWarm } from '../lib/musik.js'
+import { handleManage as handlePlaylists } from '../lib/musik.js'
 import { queryOf } from '../lib/query.js'
 
 const redis = new Redis({
@@ -55,11 +55,6 @@ export default async function handler(req, res) {
   if (typ === 'zones') return handleZones(req, res);
   if (typ === 'locations') return handleLocations(req, res);
   if (typ === 'playlists') return handlePlaylists(req, res, redis);
-  // Haelt die FRITZ!NAS-Sitzungen am Leben, damit der erste Start nach einer
-  // Pause nicht ueber einen Fehlschlag gehen muss - angerufen vom Zeitplan auf
-  // dem VPS. Kein eigener Endpunkt, weil api/ die zwoelf Functions des
-  // Vercel-Hobby-Tarifs bereits voll hat. MUSIK_WARM=0 schaltet ihn ab.
-  if (typ === 'fritz-warm') return handleWarm(req, res, redis);
 
   if (req.method === 'POST') {
     const { mac, name } = req.body || {};
