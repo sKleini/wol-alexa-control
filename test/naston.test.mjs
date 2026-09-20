@@ -162,7 +162,7 @@ test('Kappung und Budget kommen aus der Umgebung', () => {
   try {
     delete process.env.MUSIK_TON_MAX_MB;
     delete process.env.MUSIK_TON_BUDGET_GB;
-    assert.equal(kappungBytes(), 16 * 1024 * 1024, 'Vorgabe 16 MB');
+    assert.equal(kappungBytes(), 4 * 1024 * 1024, 'Vorgabe 4 MB');
     assert.equal(budgetBytes(), 50 * 1024 ** 3, 'Vorgabe 50 GB');
 
     process.env.MUSIK_TON_MAX_MB = '0';
@@ -171,7 +171,7 @@ test('Kappung und Budget kommen aus der Umgebung', () => {
     assert.equal(budgetBytes(), 0, '0 heisst: kein Budget');
 
     process.env.MUSIK_TON_MAX_MB = 'viel';
-    assert.equal(kappungBytes(), 16 * 1024 * 1024, 'Unsinn faellt auf die Vorgabe zurueck');
+    assert.equal(kappungBytes(), 4 * 1024 * 1024, 'Unsinn faellt auf die Vorgabe zurueck');
   } finally {
     if (vorher.max === undefined) delete process.env.MUSIK_TON_MAX_MB; else process.env.MUSIK_TON_MAX_MB = vorher.max;
     if (vorher.budget === undefined) delete process.env.MUSIK_TON_BUDGET_GB; else process.env.MUSIK_TON_BUDGET_GB = vorher.budget;
@@ -332,4 +332,19 @@ test('nasTon reicht ein 416 durch, statt eine neue Nummer zu holen', async () =>
   assert.equal(res.kopf['Content-Range'], 'bytes */5000000');
   assert.equal(aufrufe.length, 1, 'kein zweiter Anlauf');
   assert.deepEqual(sidRufe, [false], 'und keine erzwungene Anmeldung');
+});
+
+test('ein Absturz nennt seinen Grund, statt die Standardseite zu zeigen', async () => {
+  // Gemeldet aus dem Betrieb: "500 FUNCTION_INVOCATION_FAILED", und dazu kein
+  // Wort darueber, was schiefging. Was hier hochkommt, steht jetzt im Log und
+  // in der Antwort - der naechste Klick sagt selbst, woran es lag.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  await mitAbruf(() => { throw new Error('Netz kaputt'); }, async () => {
+    await nasTon({ method: 'GET', headers: {} }, res, {
+      get: async () => { throw new Error('Redis weg'); },
+    }, token, async () => { throw new Error('Sitzung explodiert'); });
+  });
+  assert.equal(res.statusCode, 500);
+  assert.match(Buffer.concat(res.stuecke).toString(), /Sitzung explodiert/);
 });
