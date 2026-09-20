@@ -497,8 +497,8 @@ An `HTTP 303` on `data.lua` is the box saying *"I do not know this number, go to
 **It is not Alexa's window that decides, but a much tighter one.** Alexa accepted every answer and spoke the sentence; whether the Echo then *executes* the `Play` directive turned out to be a different question. Measured on an Echo that had been idle for a while:
 
 ```
-silent:  3683, 3846, 4537, 5204, 5771 ms   — and not one AudioPlayer event after it
-plays:   1868, 2524 ms                     — PlaybackStarted after 18 ms
+silent:  2539, 2857, 3271, 3683, 3846, 4537, 5204, 5771 ms  — not one AudioPlayer event after it
+plays:   1519, 1569, 1737, 1868, 2039, 2447, 2524 ms       — PlaybackStarted after 18 ms
 ```
 
 On the silent side the device did not even try: no `PlaybackStarted`, no `PlaybackFailed`, nothing. On the playing side it reported back in 18 milliseconds. Everything else about the two answers is identical, down to the session number and the byte the box serves. What differs is the time.
@@ -528,6 +528,17 @@ musik-box IntentRequest in 1256 ms, Alexa wartet seit 1569 ms (Vorlauf 313 ms)
 ```
 
 — and it played. **The session number is identical in both**: `sid…8757`, the one the login had just fetched. The session had been alive the whole time, the login was pure waiting, and that waiting is the entire difference between sound and silence. It also sharpens the boundary: 2539 ms silent against 2524 ms playing, the two closest points yet.
+
+**And the login was the one step that never looked at the haste target at all** — the most expensive one of them. The next run said so, this time with a genuinely dead number:
+
+```
+musik-box FRITZ!NAS-Sitzung nachgefragt: ist tot nach 899 ms
+musik-box FRITZ!NAS-Login ok (ohne Gegenprobe) nach 895 ms, 3659 ms Budget uebrig
+musik-box Weckruf ausgelassen, nur noch -355 ms Eilziel
+musik-box IntentRequest in 1880 ms, Alexa wartet seit 2857 ms (Vorlauf 977 ms)
+```
+
+Silent again, no event. The number in that answer was fresh and correct — it was 350 ms late, and that made it worthless. Half a minute later an answer went out after 1737 ms whose address the Echo could **not** load: it reported `MEDIA_ERROR_SERVICE_UNAVAILABLE`, the skill retried the same track, and it played. **A dead number that arrives in time beats a fresh one that arrives late**: the first buys a second round with a fresh eight seconds and a warm function, the second buys silence. So before the first note the login gives way like everything else (`LOGIN_ERWARTET_MS`), and the skill starts with the number it has. Where it does that deliberately, the wake-up call is skipped too — what it would find there is exactly the box's refusal that this decision already accounts for.
 
 So the threshold is now what the check costs (`SID_PRUEF_ERWARTET_MS`), and below it the skill neither asks nor logs in. That a five-minute window has expired is a statement about the clock, not about the box — the same reasoning as *"no time to ask"* below, and a mistake carries itself through `PlaybackFailed`.
 
