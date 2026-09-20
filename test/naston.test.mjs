@@ -307,3 +307,29 @@ test('nasTon liefert nichts mehr, wenn das Monatsbudget aufgebraucht ist', async
   }
   assert.equal(res.statusCode, 503);
 });
+
+test('nasTon reicht ein 416 durch, statt eine neue Nummer zu holen', async () => {
+  // Hinter dem Ende der Datei gefragt: Das beantwortet die Box richtig, und
+  // eine frische Sitzungsnummer aenderte daran nichts. Ein 502 daraus zu
+  // machen hiesse, dem Abspieler eine Auskunft vorzuenthalten, die er hat.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const sidRufe = [];
+
+  const aufrufe = await mitAbruf(() => new Response('', {
+    status: 416,
+    headers: { 'content-range': 'bytes */5000000' },
+  }), async (gesehen) => {
+    const lauf = nasTon({ method: 'GET', headers: { range: 'bytes=9999999-' } }, res, attrappeRedis(), token, async (_l, e) => {
+      sidRufe.push(e);
+      return 'aabbccddeeff0011';
+    });
+    await Promise.all([lauf, fertig(res)]);
+    return gesehen;
+  });
+
+  assert.equal(res.statusCode, 416);
+  assert.equal(res.kopf['Content-Range'], 'bytes */5000000');
+  assert.equal(aufrufe.length, 1, 'kein zweiter Anlauf');
+  assert.deepEqual(sidRufe, [false], 'und keine erzwungene Anmeldung');
+});
