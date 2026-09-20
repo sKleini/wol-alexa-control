@@ -627,18 +627,11 @@
                     const qs = `?type=playlists&pruefen=1&name=${encodeURIComponent(name)}&ab=${ab}`;
                     const r = await apiRequest('GET', null, qs);
                     if (!r || r.error) { lines.push(`❌ ${esc(r?.error || 'check failed')}`); break; }
-                    // Bei einer FRITZ!NAS-Playlist sind die geprueften
-                    // Adressen nicht die gespeicherten: Sie tragen die
-                    // Sitzungsnummer, die der Echo gleich bekaeme. Ohne diesen
-                    // Satz wundert man sich, warum sie vom Formular abweichen.
-                    if (r.aufgefrischt && ab === 0) {
-                        lines.push('ℹ️ Checked with a current FRITZ!Box session number — the same one the Echo would get.');
-                    }
                     for (const e of r.ergebnisse) {
-                        // Vier Stufen statt zwei. Die Sanduhr ist die neue: Die
-                        // Datei laedt einwandfrei, laeuft aber laenger, als die
-                        // FRITZ!Box-Sitzung gilt - ein Fall, den ein Abruf von
-                        // einem Byte nie zeigen konnte.
+                        // Vier Stufen statt zwei. Die Sanduhr heisst: Die Datei
+                        // laedt einwandfrei, dauert aber ueber eine Stunde - in
+                        // Kapitel geteilt setzt "Weiterhoeren" an einer
+                        // sinnvollen Stelle ein statt mitten darin.
                         const icon = e.fehler ? '❌' : (e.zuLang ? '⏳' : (e.range ? '✅' : '⚠️'));
                         const teile = [];
                         if (e.fehler) {
@@ -655,7 +648,7 @@
                                 teile.push([e.groesse, dauer, rate].filter(Boolean).join(', '));
                             } else teile.push('length not reported');
                             if (!e.range) teile.push('no range support');
-                            if (e.zuLang) teile.push('longer than a FRITZ!Box session lasts — see section 9');
+                            if (e.zuLang) teile.push('over an hour in one file — chapters give "weiter" a sensible place to land');
                         }
                         lines.push(`${icon} ${esc(e.url)} — ${esc(teile.join(' · '))}`);
                     }

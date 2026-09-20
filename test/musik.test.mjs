@@ -12,11 +12,6 @@ import assert from 'node:assert/strict'
 // bei jedem Request neu liest - eine Konstante beim Laden des Moduls waere hier
 // nicht mehr zu erreichen, denn ES-Module fuehren ihre Importe vorher aus.
 process.env.MUSIK_BUDGET_MS = '300';
-// Der Abstand nach einer Anmeldung auf praktisch null. In Wirklichkeit sind es
-// anderthalb Sekunden (siehe WECKRUF_ABSTAND_MS); hier wuerde jede davon die
-// Testdauer verlaengern, ohne etwas zu beweisen - dass gewartet wird, zeigt
-// der zweite Weckruf, nicht die Uhr.
-process.env.MUSIK_WECK_ABSTAND_MS = '1';
 import {
   titelnameAusUrl,
   validierePlaylist,
@@ -55,7 +50,6 @@ import {
   alsSidTafel,
   fremderOrdner,
 } from '../lib/musik.js'
-import { weckeStream } from '../lib/fritznas.js'
 
 // --- Helfer -----------------------------------------------------------------
 
@@ -1490,64 +1484,67 @@ test('handleManage speichert die Herkunft mit der Playlist', async () => {
 });
 
 test('eine Playlist ohne Herkunft ruehrt der Skill nicht an', async () => {
-  // Kein Netzabruf, keine Aenderung an den Adressen: Wer keine
-  // FRITZ!NAS-Playlist hat, merkt von der Auffrischung nichts.
   const r = await skill(intent('PlayPlaylistIntent', 'Kinderlieder'));
   assert.equal(spielt(r).audioItem.stream.url, KINDER.titel[0].url);
 });
 
-/** Eine FRITZ!NAS-Playlist samt gemerkter, noch gueltiger Sitzungsnummer. */
-function mitSitzung(sid, alterMs = 0) {
-  const playlist = {
-    name: 'Schlaflieder',
-    quelle: { typ: 'fritz', link: FRITZ_LINK },
-    titel: [
-      { url: fritzTitel('aaaaaaaaaaaaaaaa'), name: '01' },
-      { url: fritzTitel('aaaaaaaaaaaaaaaa').replace('%2F01', '%2F02'), name: '02' },
-    ],
-  };
-  return redisMit({
-    [REDIS_KEY]: [playlist],
-    musik_fritz_sid: { link: FRITZ_LINK, sid, zeit: Date.now() - alterMs },
-  });
-}
+/** Eine Playlist, wie der Ordner-Import sie heute anlegt: Adressen dieser App. */
+const TON_PLAYLIST = {
+  name: 'Lottchen',
+  quelle: { typ: 'fritz', link: FRITZ_LINK, ordner: '/Musik/Lottchen' },
+  titel: [
+    { url: 'https://app.example/api/skill?ton=eins.unterschrift', name: '01' },
+    { url: 'https://app.example/api/skill?ton=zwei.unterschrift', name: '02' },
+  ],
+};
 
-test('der Skill setzt die gemerkte Sitzungsnummer in jede Adresse ein', async () => {
-  const redis = mitSitzung('bbbbbbbbbbbbbbbb');
-  const r = await skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis);
-  const url = new URL(spielt(r).audioItem.stream.url);
-  assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb', 'die frische Nummer, nicht die gespeicherte');
-  assert.equal(url.searchParams.get('path'), '/01.mp3', 'der Pfad bleibt');
+test('die Adresse geht unveraendert an den Echo - und die Box wird nicht angefasst', async () => {
+  // **Der Kern der Sache.** Eine Sitzungsnummer der Box gilt nur fuer die
+  // Adresse, die sie geholt hat; der Echo ist nie diese Adresse. Der Skill
+  // setzt deshalb nichts mehr ein, fragt nichts nach und meldet sich nirgends
+  // an - er antwortet mit dem, was gespeichert ist.
+  const vorher = globalThis.fetch;
+  const abrufe = [];
+  globalThis.fetch = async (url) => { abrufe.push(String(url)); throw new Error('haette nicht abrufen duerfen'); };
+  try {
+    const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
+    const r = await skill(intent('PlayPlaylistIntent', 'Lottchen'), {}, null, redis);
+    assert.equal(spielt(r).audioItem.stream.url, TON_PLAYLIST.titel[0].url);
+    assert.deepEqual(abrufe, [], 'kein einziger Abruf bei der FRITZ!Box');
+  } finally {
+    globalThis.fetch = vorher;
+  }
 });
 
-test('auch der naechste Titel bekommt die frische Nummer', async () => {
-  // Der Titelwechsel laeuft ohne Slot, nur mit Token. Ginge die Auffrischung
-  // nur ueber den Slot, waere der zweite Titel der erste, der stumm bleibt.
-  const redis = mitSitzung('bbbbbbbbbbbbbbbb');
+test('auch eine FRITZ!NAS-Playlist haengt den naechsten Titel wieder vorab an', async () => {
+  // Frueher nicht: Eine Adresse mit Sitzungsnummer war verdorben, bis der Echo
+  // sie benutzte, also wurde erst am Titelende bestellt - um den Preis einer
+  // Luecke. Die Adresse dieser App verdirbt nicht, also ist der Titelwechsel
+  // wieder nahtlos.
+  const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
   const r = await skill(
-    { type: 'AudioPlayer.PlaybackFinished', token: 'Schlaflieder|0|0|0' },
-    { token: 'Schlaflieder|0|0|0' },
+    { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Lottchen|0|0|0' },
+    { token: 'Lottchen|0|0|0' },
     null,
     redis,
   );
-  const url = new URL(spielt(r).audioItem.stream.url);
-  assert.equal(url.searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
-  assert.equal(url.searchParams.get('path'), '/02.mp3');
+  const stream = spielt(r).audioItem.stream;
+  assert.equal(spielt(r).playBehavior, 'ENQUEUE');
+  assert.equal(stream.url, TON_PLAYLIST.titel[1].url);
+  assert.equal(stream.expectedPreviousToken, 'Lottchen|0|0|0');
 });
 
-test('bei FRITZ!NAS wird nichts vorab angehaengt', async () => {
-  // **Der Kern des Ganzen.** `PlaybackNearlyFinished` kommt Sekunden nach dem
-  // Titelanfang; der Echo spielt den angehaengten Titel aber erst Minuten
-  // spaeter. Eine Adresse mit Sitzungsnummer ist bis dahin verdorben - also
-  // wird sie hier gar nicht erst ausgegeben.
-  const redis = mitSitzung('bbbbbbbbbbbbbbbb');
+test('am Titelende wird deshalb nichts mehr nachbestellt', async () => {
+  // Die Gegenprobe: Was bei "nearly finished" schon angehaengt ist, darf hier
+  // nicht ein zweites Mal kommen - sonst spielte der Echo den Titel doppelt.
+  const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
   const r = await skill(
-    { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Schlaflieder|0|0|0' },
-    { token: 'Schlaflieder|0|0|0' },
+    { type: 'AudioPlayer.PlaybackFinished', token: 'Lottchen|0|0|0' },
+    { token: 'Lottchen|0|0|0' },
     null,
     redis,
   );
-  assert.equal(r.directives, undefined, 'keine Direktive, der Titel wird am Ende bestellt');
+  assert.equal(r.directives, undefined);
 });
 
 test('eine Playlist ohne Sitzungsnummer bleibt nahtlos', async () => {
@@ -1559,41 +1556,6 @@ test('eine Playlist ohne Sitzungsnummer bleibt nahtlos', async () => {
   );
   assert.equal(spielt(r).playBehavior, 'ENQUEUE');
   assert.equal(spielt(r).audioItem.stream.expectedPreviousToken, 'Kinderlieder|0|0|0');
-});
-
-test('mit einer abgelaufenen Nummer wird nicht mehr losgespielt', async () => {
-  // Neun Minuten alt, also ueber der Frist von fuenf - es wird eine neue
-  // geholt. Der Host endet auf .invalid und ist damit garantiert nicht
-  // aufloesbar (RFC 2606), der Abruf scheitert also ohne Wartezeit.
-  //
-  // **Frueher spielte der Skill hier mit der alten Nummer los**, in der
-  // Annahme, sie sei vielleicht noch gut und ein gescheiterter Titel hole sich
-  // ueber PlaybackFailed eine frische. Im Betrieb kam davon nichts an: Alexa
-  // sagte "Ich spiele das doppelte Lottchen", und dann war es still - jedes
-  // Mal beim ersten Versuch, weil erst der zweite eine frische Nummer im
-  // Zwischenspeicher vorfand. Ein Satz, der erklaert, ist besser als Stille,
-  // die es nicht tut.
-  //
-  // **Das Budget gehoert zur Aussage.** Geprueft wird hier "die Box wurde
-  // gefragt und gab nichts her" - dafuer muss ueberhaupt Zeit zum Fragen
-  // sein. Mit dem knappen Voreinstellungsbudget dieser Datei wuerde der Skill
-  // die Box gar nicht anfassen, und das ist ein anderer Fall mit einer
-  // anderen Antwort (siehe "keine Zeit zu fragen" weiter unten).
-  const link = 'https://nicht-erreichbar.invalid/nas/filelink.lua?id=535f52fbb2016f4f';
-  const redis = redisMit({
-    [REDIS_KEY]: [{
-      name: 'Schlaflieder',
-      quelle: { typ: 'fritz', link },
-      titel: [{ url: fritzTitel('bbbbbbbbbbbbbbbb'), name: '01' }],
-    }],
-    musik_fritz_sid: { link, sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() - 9 * 60_000 },
-  });
-
-  const r = await mitBudget(6500, () => skill(intent('PlayPlaylistIntent', 'Schlaflieder'), {}, null, redis));
-  // Die dynamischen Werte gehen mit (der Satz ist eine Rueckfrage wert) -
-  // eine Wiedergabe nicht.
-  assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive mit toter Nummer');
-  assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
 });
 
 // --- Die Sitzung wird beim Oeffnen geholt ------------------------------------
@@ -1613,24 +1575,6 @@ async function mitBudget(ms, tu) {
   process.env.MUSIK_BUDGET_MS = String(ms);
   try { return await tu(); } finally { process.env.MUSIK_BUDGET_MS = '300'; }
 }
-
-test('Beim Oeffnen holt der Skill die FRITZ!Box-Sitzung schon vor der Frage', async () => {
-  // **Der Kern der Sache.** Der Aufruf hat zwei Schritte, und der ganze Login
-  // lag im zweiten - dem engen. Beim ersten Versuch nach einer Pause reichte
-  // es dort nicht, der Echo bekam eine abgelaufene Nummer und blieb still;
-  // erst der zweite Versuch fand eine frische im Zwischenspeicher. Jetzt
-  // passiert die Anmeldung schon beim Oeffnen, wo Zeit ist.
-  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
-  const { redis, gelesen } = redisMitProtokoll({ [REDIS_KEY]: [a.playlist] });
-
-  const r = await mitBudget(9000, () => skill({ type: 'LaunchRequest' }, {}, null, redis));
-  assert.ok(gelesen.includes('musik_fritz_sid'), 'die Sitzung wird beim Oeffnen geholt');
-  // Und die Frage kommt trotzdem: Der Login scheitert hier am toten Host, und
-  // das darf den ersten Schritt nicht aufhalten - der zweite versucht es noch
-  // einmal, dann mit warmen Verbindungen.
-  assert.match(r.outputSpeech.text, /Welche Playlist soll ich spielen/);
-  assert.equal(r.shouldEndSession, false);
-});
 
 test('Ohne FRITZ!NAS-Playlist wird beim Oeffnen nichts geholt', async () => {
   const { redis, gelesen } = redisMitProtokoll({ [REDIS_KEY]: [KINDER] });
@@ -1657,43 +1601,6 @@ test('Reicht die Zeit beim Oeffnen nicht, wird die Frage nicht aufgehalten', asy
   const r = await skill({ type: 'LaunchRequest' }, {}, null, redis);
   assert.ok(!gelesen.includes('musik_fritz_sid'));
   assert.match(r.outputSpeech.text, /Welche Playlist soll ich spielen/);
-});
-
-test('Check URLs prueft die FRITZ!NAS-Adressen mit der frischen Sitzungsnummer', async () => {
-  // Der Kern des Ganzen: Ohne die Auffrischung pruefte der Knopf die
-  // gespeicherte, laengst abgelaufene Adresse - und meldete eine Playlist als
-  // kaputt, die gerade tadellos spielt. Geprueft wird hier nur, WAS abgerufen
-  // wird; dass der Abruf ohne Netz scheitert, ist fuer diese Frage egal.
-  // Der Host endet auf .invalid (RFC 2606) und ist damit garantiert nicht
-  // aufloesbar: Der Abruf scheitert sofort, statt die Testsuite an einem
-  // echten Netzzugriff haengen zu lassen.
-  const link = 'https://nicht-erreichbar.invalid/nas/filelink.lua?id=535f52fbb2016f4f';
-  const titelUrl = (sid) =>
-    `https://nicht-erreichbar.invalid/nas/cgi-bin/luacgi_notimeout?script=%2Fapi%2Fdata.lua&sid=${sid}&c=music&a=get&path=%2F01.mp3`;
-  const redis = redisMit({
-    [REDIS_KEY]: [{
-      name: 'Schlaflieder',
-      quelle: { typ: 'fritz', link },
-      titel: [{ url: titelUrl('aaaaaaaaaaaaaaaa'), name: '01' }],
-    }],
-    musik_fritz_sid: { link, sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() },
-  });
-
-  const res = antwortFaenger();
-  await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Schlaflieder', ab: '0' } }, res, redis);
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.body.aufgefrischt, true);
-  assert.equal(new URL(res.body.ergebnisse[0].url).searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
-
-  // Und die gespeicherte Playlist bleibt unberuehrt - die Pruefung schreibt nicht.
-  assert.equal(new URL(redis.speicher[REDIS_KEY][0].titel[0].url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
-});
-
-test('Check URLs meldet fuer eine gewoehnliche Playlist keine Auffrischung', async () => {
-  const redis = redisMit({ [REDIS_KEY]: [KINDER] });
-  const res = antwortFaenger();
-  await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Kinderlieder', ab: '0' } }, res, redis);
-  assert.equal(res.body.aufgefrischt, false);
 });
 
 test('eine FRITZ!NAS-Playlist wird in kleineren Haeppchen geprueft', async () => {
@@ -1830,60 +1737,6 @@ async function satzBeimSpielen(redis, name) {
   const r = await skill(intent('PlayPlaylistIntent', name), {}, null, redis);
   return r.outputSpeech?.text ?? '';
 }
-
-test('die gemerkte Sitzung einer ANDEREN Freigabe wird nicht verwendet', async () => {
-  // Der Kern: Gemerkt ist die Sitzung von Playlist A, gespielt wird B. Haette
-  // B sie eingesetzt, kaeme am Echo die Anmeldeseite der Box statt Musik - die
-  // Box hat A's Sitzung beendet, als B's Freigabe geoeffnet wurde.
-  //
-  // Der Host antwortet nicht, das Neuholen scheitert also. Frueher blieb dann
-  // die gespeicherte Adresse stehen und Alexa sagte "Ich spiele …" - ein
-  // Versprechen mit einer Nummer aus der Importzeit, das der Echo nicht halten
-  // konnte. Jetzt wird gar nicht erst gestartet, und das ist die staerkere
-  // Zusicherung: Die fremde Nummer taucht nirgends auf, und niemand wartet
-  // vergeblich auf Ton.
-  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
-  const b = unerreichbar('Udo CD zwei', 'bbbb2222bbbb2222');
-  const redis = redisMit({
-    [REDIS_KEY]: [a.playlist, b.playlist],
-    musik_fritz_sid: { link: a.link, sid: 'fremdesitzung11', zeit: Date.now() },
-  });
-
-  assert.equal(await sidDerDirektive(redis, 'Udo CD zwei'), null, 'es wird nicht gespielt');
-  assert.match(await satzBeimSpielen(redis, 'Udo CD zwei'), /komme gerade nicht an die FRITZ!Box/);
-});
-
-test('die gemerkte Sitzung DERSELBEN Freigabe wird verwendet', async () => {
-  // Die Gegenprobe zum Test darueber: Passt der Link, wird sie eingesetzt,
-  // ohne dass die Box ueberhaupt gefragt wird.
-  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
-  const redis = redisMit({
-    [REDIS_KEY]: [a.playlist],
-    musik_fritz_sid: { link: a.link, sid: 'eigenesitzung11', zeit: Date.now() },
-  });
-
-  assert.equal(await sidDerDirektive(redis, 'Schlaflieder'), 'eigenesitzung11');
-});
-
-test('fuenf Minuten sind die Grenze', async () => {
-  const a = unerreichbar('Schlaflieder', 'aaaa1111aaaa1111');
-  const mit = (alterMinuten) => redisMit({
-    [REDIS_KEY]: [a.playlist],
-    musik_fritz_sid: { link: a.link, sid: 'eigenesitzung11', zeit: Date.now() - alterMinuten * 60_000 },
-  });
-
-  assert.equal(await sidDerDirektive(mit(4), 'Schlaflieder'), 'eigenesitzung11', 'vier Minuten: noch gut');
-  // Sechs Minuten: Es wird nachgefragt und eine neue geholt, beides scheitert
-  // am toten Host - und damit ist die gemerkte aus dem Rennen. Sie mag noch
-  // gut sein oder nicht; darauf zu wetten hiess im Betrieb, dem Hoerenden
-  // Stille zu servieren.
-  //
-  // Mit Budget, denn geprueft wird die Antwort der Box, nicht die Uhr.
-  await mitBudget(6500, async () => {
-    assert.equal(await sidDerDirektive(mit(6), 'Schlaflieder'), null);
-    assert.match(await satzBeimSpielen(mit(6), 'Schlaflieder'), /nicht an die FRITZ!Box/);
-  });
-});
 
 test('beide fruehere Formen des Zwischenspeichers bleiben lesbar', () => {
   // Ein Deploy mitten in einer Wiedergabe soll nicht zur Anmeldung fuehren.
@@ -2091,169 +1944,6 @@ const laufend = (token, offset = 0) => ({
   opts: { token, offset },
 });
 
-test('eine abgelaufene Frist fragt nach, statt sich neu anzumelden', async () => {
-  // Der Titelwechsel nach sechs Minuten: Die Frist ist um, die Sitzung lebt -
-  // weil der Echo sie mit jedem Abruf verlaengert hat. Frueher meldete sich
-  // der Skill hier an und riss damit den laufenden Titel aus der Box.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackFinished', token: 'Udo CD eins|0|0|0' },
-      { token: 'Udo CD eins|0|0|0' },
-      redis,
-    );
-    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'keine Anmeldung, solange die Nummer gilt');
-    assert.deepEqual(
-      box.abrufe,
-      ['/nas/api/data.lua', '/nas/cgi-bin/luacgi_notimeout'],
-      'die Nachfrage, dann der Weckruf an die Datei',
-    );
-    const url = new URL(spielt(r).audioItem.stream.url);
-    assert.equal(url.searchParams.get('sid'), 'aaaaaaaaaaaaaaaa', 'dieselbe Nummer bleibt');
-    assert.equal(url.searchParams.get('path'), '/02.mp3');
-    assert.ok(Date.now() - redis.speicher.musik_fritz_sid[BOX_LINK].zeit < 5000, 'die Frist beginnt von vorn');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('"naechster Titel" fragt nach, statt der Frist zu vertrauen', async () => {
-  // Die Nummer ist zwei Minuten alt, die Frist laeuft also noch - frueher
-  // ging die Adresse damit ungeprueft heraus. Bei einer Adresse, die ihre
-  // Sitzungsnummer in sich traegt, ist die Frist aber eine Aussage ueber die
-  // Uhr und nicht ueber die Box.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 2);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    await skillMitBudget(intent('AMAZON.NextIntent'), { token: 'Udo CD eins|0|0|0' }, redis);
-    assert.ok(box.abrufe.includes('/nas/api/data.lua'), 'nachgefragt');
-    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'aber nicht angemeldet');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('zwei Ordner-Playlists behalten je ihre eigene Nummer', async () => {
-  // **Gemeldet:** mehrere Playlists, jede mit ihrer eigenen Freigabe und
-  // damit ihrer eigenen Sitzungsnummer. Vorher merkte sich der Skill genau
-  // eine: Jeder Wechsel warf die andere weg und meldete sich neu an - und
-  // eine Anmeldung beendet alle Sitzungen der Box, die laufende eingeschlossen.
-  const zweiterLink = `${BOX}/nas/filelink.lua?id=bbbb2222bbbb2222`;
-  const zweiterTitel = (nr, sid) =>
-    `${BOX}/nas/cgi-bin/luacgi_notimeout?script=%2Fapi%2Fdata.lua&sid=${sid}&c=music&a=get&path=%2Fb0${nr}.mp3`;
-  const redis = redisMit({
-    [REDIS_KEY]: [
-      {
-        name: 'Udo CD eins',
-        quelle: { typ: 'fritz', link: BOX_LINK },
-        titel: [{ url: boxTitel(1, 'aaaaaaaaaaaaaaaa'), name: '01' }, { url: boxTitel(2, 'aaaaaaaaaaaaaaaa'), name: '02' }],
-      },
-      {
-        name: 'Hoerspiel zwei',
-        quelle: { typ: 'fritz', link: zweiterLink },
-        titel: [{ url: zweiterTitel(1, 'bbbbbbbbbbbbbbbb'), name: 'b01' }, { url: zweiterTitel(2, 'bbbbbbbbbbbbbbbb'), name: 'b02' }],
-      },
-    ],
-    musik_fritz_sid: {
-      [BOX_LINK]: { sid: 'aaaaaaaaaaaaaaaa', zeit: Date.now() },
-      [zweiterLink]: { sid: 'bbbbbbbbbbbbbbbb', zeit: Date.now() - 6 * 60_000 },
-    },
-  });
-  const box = boxAmDraht('bbbbbbbbbbbbbbbb');
-  try {
-    const r = await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackFinished', token: 'Hoerspiel zwei|0|0|0' },
-      { token: 'Hoerspiel zwei|0|0|0' },
-      redis,
-    );
-    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'nachgefragt statt angemeldet');
-    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'bbbbbbbbbbbbbbbb');
-    // Und die Nummer der anderen Playlist steht noch da, unberuehrt.
-    assert.equal(redis.speicher.musik_fritz_sid[BOX_LINK].sid, 'aaaaaaaaaaaaaaaa');
-    assert.ok(redis.speicher.musik_fritz_sid[BOX_LINK].zeit > 0);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('eine lebende Nummer der falschen Freigabe wird nicht verwendet', async () => {
-  // Die Box antwortet auf `check_nas_rights` mit dem Ordner, den ihre Sitzung
-  // freigibt. Steht dort ein anderer als in der Playlist, lebt die Nummer -
-  // gibt diese Dateien aber nicht heraus. Genau so sah der gemeldete Fehler
-  // aus: "gilt noch" im Log, und der Echo bekommt die Datei trotzdem nicht.
-  const redis = redisMit({
-    [REDIS_KEY]: [{
-      name: 'Udo CD eins',
-      quelle: { typ: 'fritz', link: BOX_LINK, ordner: '/Musik/Udo' },
-      titel: [{ url: boxTitel(1, 'aaaaaaaaaaaaaaaa'), name: '01' }, { url: boxTitel(2, 'aaaaaaaaaaaaaaaa'), name: '02' }],
-    }],
-    musik_fritz_sid: { [BOX_LINK]: { sid: 'aaaaaaaaaaaaaaaa', zeit: Date.now() - 6 * 60_000 } },
-  });
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  box.wurzel = '/Musik/Schlaflieder';
-  try {
-    const r = await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackFinished', token: 'Udo CD eins|0|0|0' },
-      { token: 'Udo CD eins|0|0|0' },
-      redis,
-    );
-    assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'die fremde Nummer loest die Anmeldung aus');
-    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('erst eine wirklich tote Nummer loest die Anmeldung aus', async () => {
-  // Die Gegenprobe: Die Box kennt die gemerkte Nummer nicht mehr (Neustart,
-  // eine fremde Freigabe). Dann ist die Anmeldung richtig - und ihr Preis,
-  // alle Sitzungen zu beenden, kostet hier nichts mehr.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
-  const box = boxAmDraht('totetotetotetote');
-  try {
-    const r = await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackFinished', token: 'Udo CD eins|0|0|0' },
-      { token: 'Udo CD eins|0|0|0' },
-      redis,
-    );
-    assert.deepEqual(
-      box.abrufe,
-      ['/nas/api/data.lua', '/nas/filelink.lua', '/nas/api/data.lua', '/nas/cgi-bin/luacgi_notimeout'],
-      'nachgefragt, abgelehnt, angemeldet, gegengeprueft, dann der Weckruf',
-    );
-    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
-    assert.equal(redis.speicher.musik_fritz_sid[BOX_LINK].sid, 'cccccccccccccccc');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('nach einer Anmeldung bekommt der gescheiterte Titel die neue Nummer mit', async () => {
-  // War die Nummer tot, lag es nicht am Titel, sondern an der Adresse. Der
-  // zweite Versuch traegt deshalb die frisch geholte - sonst waere er
-  // vergebens.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('totetotetotetote');
-  try {
-    const r = await skillMitBudget(
-      {
-        type: 'AudioPlayer.PlaybackFailed',
-        token: 'Udo CD eins|0|0|0',
-        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' },
-      },
-      { token: 'Udo CD eins|0|0|0', offset: 90_000 },
-      redis,
-    );
-    const stream = spielt(r).audioItem.stream;
-    assert.equal(stream.token, 'Udo CD eins|0|0|0|1', 'derselbe Titel, zweiter Versuch');
-    assert.equal(new URL(stream.url).searchParams.get('sid'), 'cccccccccccccccc', 'mit der neuen Nummer');
-    assert.equal(stream.offsetInMilliseconds, einstieg(90_000), 'dort, wo er abbrach - mit Vorlauf');
-  } finally {
-    box.zurueck();
-  }
-});
-
 test('ein Stolperer bei gueltiger Nummer wird wiederholt, ohne die Box anzufassen', async () => {
   // Der gemeldete Fall: Sitzung gerade geprueft, Offset 1, und die Box
   // antwortet trotzdem mit 5xx. Dann ist die Last der wahrscheinlichste Grund,
@@ -2299,75 +1989,6 @@ test('beim zweiten Fehler am selben Titel geht es weiter', async () => {
     // Straehne, damit nicht die ganze Playlist durchlaeuft, wenn gar nichts
     // mehr anlaeuft.
     assert.equal(spielt(r).audioItem.stream.token, 'Udo CD eins|1|0|0|0|1');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('die Nachfrage haelt eine spielende Playlist ueber Stunden am Leben', async () => {
-  // Zehn Titelwechsel, jeder sechs Minuten nach dem vorigen - genau der Lauf,
-  // bei dem "Udo CD eins|10|0|0" scheiterte. Keine einzige Anmeldung, keine
-  // einzige neue Nummer: Die Sitzung traegt bis zum Schluss.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    for (let i = 0; i < 10; i++) {
-      await skillMitBudget(
-        { type: 'AudioPlayer.PlaybackNearlyFinished', token: `Udo CD eins|${i % 2}|${i}|0` },
-        { token: `Udo CD eins|${i % 2}|${i}|0` },
-        redis,
-      );
-      redis.speicher.musik_fritz_sid[BOX_LINK].zeit -= 6 * 60_000;
-    }
-    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'kein einziges Mal angemeldet');
-    assert.equal(box.abrufe.length, 10, 'ein Abruf je Titelwechsel');
-    assert.equal(redis.speicher.musik_fritz_sid[BOX_LINK].sid, 'aaaaaaaaaaaaaaaa');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('Check URLs meldet sich nicht an, nur weil Redis eine Weile braucht', async () => {
-  // **Der Fehler, der das hier ausgeloest hat**, stand so im Vercel-Log:
-  //
-  //   TimeoutOverflowWarning: Infinity does not fit into a 32-bit signed integer.
-  //   Timeout duration was set to 1.
-  //   musik_fritz_sid nicht rechtzeitig: nach Infinity ms
-  //   musik-box FRITZ!NAS-Login ok nach 1622 ms, Infinity ms Budget uebrig
-  //
-  // Ausserhalb des Skills gibt es kein Alexa-Fenster, also reicht "Check URLs"
-  // `rest = () => Infinity` durch. `setTimeout` macht daraus eine
-  // Millisekunde - und die gewinnt gegen jeden echten Netzabruf zu Upstash.
-  // Die gemerkte Sitzungsnummer galt damit als nicht vorhanden, und der Knopf
-  // meldete sich jedes Mal neu an: Genau der Zugriff, der auf der Box alle
-  // Sitzungen beendet. Wer waehrend der Wiedergabe auf "Check URLs" drueckte,
-  // warf damit den laufenden Titel aus der Box.
-  //
-  // Dass es in den Tests nie auffiel, liegt am Redis-Stellvertreter: Seine
-  // `get` ist sofort fertig und gewinnt das Rennen im Microtask. Hier braucht
-  // sie deshalb echte Zeit - so wie Upstash auch.
-  const langsam = redisMit({
-    [REDIS_KEY]: [{
-      name: 'Udo CD eins',
-      quelle: { typ: 'fritz', link: BOX_LINK },
-      titel: [{ url: boxTitel(1, 'aaaaaaaaaaaaaaaa'), name: '01' }],
-    }],
-    musik_fritz_sid: { link: BOX_LINK, sid: 'aaaaaaaaaaaaaaaa', zeit: Date.now() },
-  });
-  const sofort = langsam.get.bind(langsam);
-  langsam.get = async (key) => {
-    await new Promise(fertig => setTimeout(fertig, 20));
-    return sofort(key);
-  };
-
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const res = antwortFaenger();
-    await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Udo CD eins', ab: '0' } }, res, langsam);
-    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'die gemerkte Nummer wurde gefunden, also keine Anmeldung');
-    assert.equal(res.statusCode, 200);
-    assert.equal(res.body.ergebnisse[0].fehler, null, 'und die Pruefung sieht eine Audiodatei');
-    assert.equal(res.body.ergebnisse[0].contentType, 'audio/mpeg');
   } finally {
     box.zurueck();
   }
@@ -2575,76 +2196,6 @@ test('was ohne AudioPlayer trotzdem geht, geht weiter', async () => {
 // Leben, und ein Fehler kostet einen Titel. Vor dem ersten Ton haelt sie
 // niemand, und ein Fehler kostet die ganze Antwort.
 
-test('ein Start fragt nach, auch wenn die Frist noch laeuft', async () => {
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0); // keine Minute alt
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.deepEqual(
-      box.abrufe,
-      ['/nas/api/data.lua', '/nas/cgi-bin/luacgi_notimeout'],
-      'nachgefragt, nicht angemeldet - und die Datei angetippt',
-    );
-    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('eine tote Nummer innerhalb der Frist wird beim Start ersetzt', async () => {
-  // Der gemeldete Fall. Vorher gab der Skill diese Nummer heraus, sagte "Ich
-  // spiele Udo CD eins" und der Echo bekam nichts.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('totetotetotetote');
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.deepEqual(
-      box.abrufe,
-      ['/nas/api/data.lua', '/nas/filelink.lua',
-        '/nas/cgi-bin/luacgi_notimeout', '/nas/cgi-bin/luacgi_notimeout'],
-      'nachgefragt, abgelehnt, angemeldet, Datei zweimal angetippt'
-      + ' - die Gegenprobe der Anmeldung faellt vor einem Start der Eile zum Opfer',
-    );
-    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc');
-    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('mitten in der Wiedergabe bleibt die Frist, was sie war', async () => {
-  // Der Titelwechsel darf nicht teurer werden: Dort haelt der Echo die Sitzung
-  // selbst am Leben, und eine halbe Sekunde je Titel waere reine Verschwendung.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
-      { token: 'Udo CD eins|0|0|0' },
-      redis,
-    );
-    assert.deepEqual(box.abrufe, [], 'kein einziger Abruf');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('schweigt die Box, gilt die Frist weiter', async () => {
-  // Wer nicht antwortet, nimmt auch keine Anmeldung entgegen. Die gemerkte
-  // Nummer ist dann das beste Wort, das es gibt - stumm zu bleiben, obwohl sie
-  // sehr wahrscheinlich gut ist, waere die schlechtere Wahl.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const vorher = globalThis.fetch;
-  globalThis.fetch = async () => { throw new Error('keine Verbindung'); };
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'aaaaaaaaaaaaaaaa');
-    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
-  } finally {
-    globalThis.fetch = vorher;
-  }
-});
-
 // --- Der Weckruf an die Datei ------------------------------------------------
 //
 // **Gemeldet:** Nach einer laengeren Pause bleibt der erste Versuch stumm, der
@@ -2661,160 +2212,6 @@ test('schweigt die Box, gilt die Frist weiter', async () => {
 // also nicht liegen. Was der erste Versuch geaendert hat, ist die Platte der
 // Box: Sein Abruf hat sie aufgeweckt und ist dabei selbst in Alexas Ladefrist
 // gelaufen. Deshalb weckt sie jetzt der Skill, bevor er etwas verspricht.
-
-test('vor dem ersten Ton wird die Datei selbst angetippt', async () => {
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'die Datei wurde abgerufen');
-    // Angetippt wird genau die Adresse, die der Echo gleich bekommt - eine
-    // andere weckt die richtige Platte vielleicht, die richtige Datei nicht.
-    assert.equal(box.geweckt, spielt(r).audioItem.stream.url);
-    // Zweiunddreissig Kilobyte statt des einen Bytes von frueher: Fuer ein
-    // Byte muss die Box die Platte kaum anfassen, und ein Kopf ohne Tondaten
-    // hat siebzehnmal "alles gut" gemeldet, waehrend der Echo scheiterte.
-    assert.equal(box.weckkopf.Range, 'bytes=0-32767', 'der Weckruf holt echte Tondaten');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('ein Kopf ohne Tondaten ist kein Ja', async () => {
-  // **Der teuerste Irrtum dieser Fehlersuche.** Im Log stand siebzehnmal
-  //
-  //   Datei vor dem naechsten Anlauf angetippt: HTTP 206, audio/mpeg nach 597 ms
-  //
-  // und siebzehnmal scheiterte der Echo an genau dieser Adresse. Gemessen war
-  // aber nur der Kopf: Fuer das eine Byte von frueher musste die Box nichts
-  // von der Platte holen. Eine Probe, die "alles gut" meldet, ohne je ein
-  // Stueck Ton gesehen zu haben, schickt die naechste Suche in die Irre.
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'kopfOhneTon');
-  try {
-    const antwort = await weckeStream(boxTitel(1, 'aaaaaaaaaaaaaaaa'), 600);
-    assert.equal(antwort.ok, false, 'ohne Tondaten kein Ja');
-    // Und trotzdem keine Absage: So sieht eine anlaufende Platte aus, und
-    // deswegen gibt es den Weckruf ueberhaupt.
-    assert.equal(antwort.endgueltig, false);
-    assert.match(antwort.kurz, /keine Tondaten/);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('gelesene Tondaten stehen in der Logzeile', async () => {
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const antwort = await weckeStream(boxTitel(1, 'aaaaaaaaaaaaaaaa'), 600);
-    assert.equal(antwort.ok, true);
-    assert.equal(antwort.bytes, 64, 'so viel hat das Doppel herausgegeben');
-    assert.match(antwort.kurz, /Kopf nach \d+ ms/, 'die Zeit bis zum Kopf steht getrennt');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('eine Box, die zur Datei schweigt, haelt die Wiedergabe nicht auf', async () => {
-  // Der Regelfall beim Wecken: Die Platte laeuft an und antwortet nicht in der
-  // Frist. Genau dafuer gibt es den Weckruf - wer hier absagt, sagt immer dann
-  // ab, wenn er gerade geholfen hat.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'keiner');
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
-    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('schickt die Box statt Ton ihre Oberflaeche, wird nichts versprochen', async () => {
-  // Die Nummer gilt fuer data.lua, die Datei kommt trotzdem nicht - dann
-  // bekaeme der Echo gleich dasselbe. Ein Satz ist besser als "Ich spiele …"
-  // und danach Stille.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'oberflaeche');
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
-    assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
-    assert.doesNotMatch(r.outputSpeech.text, /Ich spiele/);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('"weiter" nach langer Pause weckt die Datei ebenso', async () => {
-  // Derselbe kalte Start, nur ohne gesprochenen Namen: Der Echo weiss den
-  // Stream noch, die Platte schlaeft trotzdem.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget(
-      intent('AMAZON.ResumeIntent'),
-      { token: 'Udo CD eins|0|0|0', offset: 120000 },
-      redis,
-    );
-    assert.equal(box.geweckt, spielt(r).audioItem.stream.url);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('der Play-Knopf bekommt keinen Satz, wenn die Box keinen Ton liefert', async () => {
-  // PlaybackController ist kein Gespraech - Sprache ist in der Antwort darauf
-  // nicht erlaubt. Dann bleibt es bei der leeren Antwort, nur ohne das stumme
-  // Versprechen einer Play-Direktive.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'oberflaeche');
-  try {
-    const r = await skillMitBudget(
-      { type: 'PlaybackController.PlayCommandIssued' },
-      { token: 'Udo CD eins|0|0|0' },
-      redis,
-    );
-    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
-    assert.equal(r.outputSpeech, undefined, 'und kein Wort');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('mitten in der Wiedergabe wird nicht geweckt', async () => {
-  // Am Titelwechsel dreht die Platte laengst, und ein zweiter Abruf waere
-  // ausgerechnet dort einer zu viel: Der Echo laedt den naechsten Titel schon
-  // vor, waehrend der laufende noch streamt.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
-      { token: 'Udo CD eins|0|0|0' },
-      redis,
-    );
-    assert.ok(!box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'kein Weckruf');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('ohne Budget fuer den Weckruf wird trotzdem gespielt', async () => {
-  // Die Antwort an Alexa hat Vorrang: Ein Weckruf, der das Fenster sprengt,
-  // kostet die ganze Wiedergabe statt sie zu retten.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  const vorher = process.env.MUSIK_BUDGET_MS;
-  process.env.MUSIK_BUDGET_MS = '1200';
-  try {
-    const r = await skill(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, null, redis);
-    assert.ok(!box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'kein Weckruf');
-    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
-  } finally {
-    process.env.MUSIK_BUDGET_MS = vorher;
-    box.zurueck();
-  }
-});
 
 // --- Das Budget rechnet ab Alexa, nicht ab dem ersten Befehl -----------------
 //
@@ -2851,102 +2248,6 @@ test('alexaVorlaufMs traut zwei Uhren nicht weiter als noetig', () => {
   assert.equal(alexaVorlaufMs({}, jetzt), null);
 });
 
-test('ein langer Vorlauf laesst den Login aus und spielt mit der gemerkten Nummer', async () => {
-  // Der Kaltstart hat fuenfeinhalb Sekunden gefressen. Fuer Nachfrage und
-  // Anmeldung reicht das Budget nicht mehr - die Box wird also **gar nicht
-  // angefasst**, und genau das ist der Punkt: Ueber die gemerkte Nummer liegt
-  // dann keine schlechte Auskunft vor, sondern gar keine. "Ausserhalb der
-  // Frist" heisst bloss *aelter als fuenf Minuten*, und die Box verlaengert
-  // eine Sitzung bei jedem Zugriff.
-  //
-  // Frueher sagte der Skill hier ab. Das war der sichere Weg, solange ein
-  // Fehlschlag das Ende war - inzwischen ist er es nicht mehr: Kommt der Echo
-  // nicht an die Datei, meldet er PlaybackFailed, und dieser Request hat
-  // frische acht Sekunden und eine warme Function. Aus "Versuch es gleich
-  // noch einmal" werden ein, zwei Sekunden.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9); // ausserhalb der Frist
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget({
-      ...intent('PlayPlaylistIntent', 'Udo CD eins'),
-      timestamp: new Date(Date.now() - 5500).toISOString(),
-    }, {}, redis);
-    assert.deepEqual(box.abrufe, [], 'kein Abruf bei der Box - dafuer ist keine Zeit mehr');
-    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
-    assert.equal(
-      new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'),
-      'aaaaaaaaaaaaaaaa',
-      'die gemerkte Nummer, ungeprueft aber unwiderlegt',
-    );
-    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('gefragt und abgelehnt bleibt eine Absage - auch bei knappem Budget', async () => {
-  // Die Gegenprobe, und die Grenze der Regel darueber: Hat die Box zu dieser
-  // Nummer etwas gesagt, zaehlt das. Hier reicht das Budget fuer die
-  // Nachfrage, die Box lehnt ab, und fuer die Anmeldung ist es dann zu spaet.
-  // Mit einer Nummer loszuspielen, von der man weiss, dass sie tot ist, waere
-  // genau das Versprechen ins Leere, das es nicht mehr geben soll.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-  const box = boxAmDraht('totetotetotetote');
-  const vorher = process.env.MUSIK_BUDGET_MS;
-  // Genug zum Fragen (>= 1300), zu wenig zum Anmelden (< 2500).
-  process.env.MUSIK_BUDGET_MS = '2000';
-  try {
-    const r = await skill(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, null, redis);
-    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'gefragt, nicht angemeldet');
-    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
-    assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
-  } finally {
-    process.env.MUSIK_BUDGET_MS = vorher;
-    box.zurueck();
-  }
-});
-
-test('ohne gemerkte Nummer wird auch bei knappem Budget nicht geraten', async () => {
-  // Dann stehen in der Playlist nur die Adressen aus der Importzeit. Die sind
-  // mit Sicherheit abgelaufen - es gibt nichts, worauf sich ein Versuch
-  // stuetzen koennte.
-  const redis = redisMit({
-    [REDIS_KEY]: [{
-      name: 'Udo CD eins',
-      quelle: { typ: 'fritz', link: BOX_LINK },
-      titel: [{ url: boxTitel(1, 'uralt00000000000'), name: '01' }],
-    }],
-  });
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget({
-      ...intent('PlayPlaylistIntent', 'Udo CD eins'),
-      timestamp: new Date(Date.now() - 5500).toISOString(),
-    }, {}, redis);
-    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
-    assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('ein kurzer Vorlauf aendert nichts', async () => {
-  // Die warme Function: Zweihundert Millisekunden Vorlauf sind kein Grund,
-  // irgendetwas auszulassen.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget({
-      ...intent('PlayPlaylistIntent', 'Udo CD eins'),
-      timestamp: new Date(Date.now() - 200).toISOString(),
-    }, {}, redis);
-    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
-    assert.match(r.outputSpeech.text, /Ich spiele Udo CD eins/);
-  } finally {
-    box.zurueck();
-  }
-});
-
 // --- Abstand zwischen Anmeldung und dem Abruf des Echos ----------------------
 //
 // **Das Ergebnis des Ausschlussverfahrens.** Gemessen und bestaetigt:
@@ -2964,113 +2265,6 @@ test('ein kurzer Vorlauf aendert nichts', async () => {
 // des Echos von diesem Moment weg; der zweite Weckruf sagt im Log, ob die Box
 // dann noch liefert.
 
-test('nach einer Anmeldung wird die Datei ein zweites Mal angetippt', async () => {
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // Frist abgelaufen
-  const box = boxAmDraht('totetotetotetote');      // ... und die Nummer tot: Anmeldung
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
-    assert.equal(weckrufe.length, 2, 'zweimal angetippt, mit Abstand dazwischen');
-    assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'es gab wirklich eine Anmeldung');
-    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('ohne Anmeldung bleibt es bei einem Weckruf', async () => {
-  // Der Regelfall, und er darf nicht teurer werden: Wo nicht angemeldet wurde,
-  // gibt es das Problem nicht, und zwei Sekunden Stille vor jedem Titel waeren
-  // ein hoher Preis fuer nichts.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
-    assert.equal(weckrufe.length, 1);
-    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'keine Anmeldung, also kein Abstand');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('sagt die Box beim zweiten Weckruf nein, wird nichts versprochen', async () => {
-  // Genau der Fall, den der zweite Weckruf sichtbar machen soll: Beim ersten
-  // Mal liefert die Box noch Ton, kurz darauf ihre Oberflaeche. Dann bekaeme
-  // der Echo dasselbe - und ein Satz ist besser als "Ich spiele ...".
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-  const box = boxAmDraht('totetotetotetote');
-  box.tonNurEinmal();
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.ok(!r.directives?.some(d => d.type === 'AudioPlayer.Play'), 'keine Play-Direktive');
-    assert.match(r.outputSpeech.text, /nicht an die FRITZ!Box/);
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('der Abstand laesst sich abschalten', async () => {
-  // **Die Zahl steht in einer Umgebungsvariablen, weil sie eine Wette ist**
-  // (siehe WECKRUF_ABSTAND_MS): Braucht die Box laenger, wird sie groesser;
-  // stellt sich der Abstand als nutzlos heraus, wird sie 0 - beides ohne
-  // Deploy. Bei 0 bleibt es beim einen Weckruf, auch nach einer Anmeldung.
-  //
-  // Die Budget-Grenze davor hat dieselbe Form wie die des ersten Weckrufs und
-  // ist ueber "ohne Budget fuer den Weckruf wird trotzdem gespielt" gedeckt;
-  // sie hier noch einmal nachzustellen hiesse, die Antwortzeiten einer
-  // erfundenen Box auf die Millisekunde zu treffen.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-  const box = boxAmDraht('totetotetotetote');
-  const vorher = process.env.MUSIK_WECK_ABSTAND_MS;
-  process.env.MUSIK_WECK_ABSTAND_MS = '0';
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
-    assert.equal(weckrufe.length, 1, 'nur der erste Weckruf');
-    assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'und es gab wirklich eine Anmeldung');
-    assert.ok(spielt(r), 'gespielt wird trotzdem');
-  } finally {
-    process.env.MUSIK_WECK_ABSTAND_MS = vorher;
-    box.zurueck();
-  }
-});
-
-test('der zweite Weckruf faellt nicht der eigenen Pause zum Opfer', async () => {
-  // **Der gemeldete Fehlschlag, und der Grund, warum er lange unsichtbar war.**
-  // Im Betrieb stand:
-  //
-  //   musik-box Datei angetippt: HTTP 206, audio/mpeg nach 644 ms, 2258 ms Budget
-  //   musik-box Weckruf ausgelassen, nur noch 1300 ms Budget
-  //
-  // Die Pause legte 600 ms zurueck, der Abruf danach verlangte 900. Zwei
-  // Konstanten, die dasselbe meinten und verschieden gross waren - der zweite
-  // Weckruf konnte im engen Fall gar nicht stattfinden, also genau dort, wo er
-  // gebraucht wird.
-  //
-  // Der Test darueber hat das nicht gesehen: Die erfundene Box antwortet
-  // sofort, das Budget bleibt gross, und die Pause nimmt sich ihren
-  // Zielabstand statt des Rests. Deshalb hier ein Budget, das so knapp ist wie
-  // das gemeldete - und ein Abstand, der wirklich rechnen muss.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-  const box = boxAmDraht('totetotetotetote');
-  const vorherA = process.env.MUSIK_WECK_ABSTAND_MS;
-  const vorherB = process.env.MUSIK_BUDGET_MS;
-  process.env.MUSIK_WECK_ABSTAND_MS = '1500';
-  process.env.MUSIK_BUDGET_MS = '2600';
-  try {
-    const r = await skill(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, null, redis);
-    assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'es gab eine Anmeldung');
-    const weckrufe = box.abrufe.filter(p => p === '/nas/cgi-bin/luacgi_notimeout');
-    assert.equal(weckrufe.length, 2, 'die Pause laesst dem zweiten Weckruf sein Budget');
-    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
-  } finally {
-    process.env.MUSIK_WECK_ABSTAND_MS = vorherA;
-    process.env.MUSIK_BUDGET_MS = vorherB;
-    box.zurueck();
-  }
-});
-
 // --- Atempause vor dem naechsten Anlauf --------------------------------------
 //
 // **Gemeldet:** `MEDIA_ERROR_INTERNAL_SERVER_ERROR`, `Offset: 1`, Titel 4 von
@@ -3078,80 +2272,6 @@ test('der zweite Weckruf faellt nicht der eigenen Pause zum Opfer', async () => 
 // Musik nicht mehr. Sitzung und Datei waren in Ordnung; was fehlte, war Luft.
 // Der Wiederholversuch lief sofort los und traf damit dieselbe ueberlastete
 // Box, der naechste Titel danach wieder, bis die Runde herum war.
-
-test('vor dem Wiederholversuch wird die Datei angetippt', async () => {
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackFailed', token: 'Udo CD eins|0|0|0',
-        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' } },
-      { token: 'Udo CD eins|0|0|0', offset: 1 },
-      redis,
-    );
-    assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'die Datei wurde angetippt');
-    assert.ok(spielt(r), 'und dann wiederholt');
-    assert.match(spielt(r).audioItem.stream.token, /\|1$/, 'als zweiter Versuch');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('schweigt die Box beim Antippen, wird trotzdem wiederholt', async () => {
-  // Was hier gemessen wird, ist der Zustand von einer Sekunde her. Den Titel
-  // deswegen zu ueberspringen waere schlechter, als ihn zu versuchen - die
-  // Pause allein ist schon der halbe Zweck.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'keiner');
-  try {
-    const r = await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackFailed', token: 'Udo CD eins|0|0|0',
-        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' } },
-      { token: 'Udo CD eins|0|0|0', offset: 1 },
-      redis,
-    );
-    assert.ok(spielt(r), 'eine Play-Direktive ist dabei');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('auch der Sprung zum naechsten Titel bekommt die Pause', async () => {
-  // Nach dem zweiten Fehlschlag geht es weiter - und zwar zu einer Box, die
-  // gerade eben zweimal nicht geliefert hat. Ohne Pause reihte sich hier der
-  // dritte Fehlschlag an, und so weiter bis zum Ende der Runde.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackFailed', token: 'Udo CD eins|0|0|0|1',
-        error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'Device playback error' } },
-      { token: 'Udo CD eins|0|0|0|1', offset: 1 },
-      redis,
-    );
-    assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'auch hier angetippt');
-    assert.equal(new URL(spielt(r).audioItem.stream.url).searchParams.get('path'), '/02.mp3',
-      'und der naechste Titel kommt');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('eine Umleitung der Box gilt als tote Nummer, nicht als Schweigen', async () => {
-  // Der gemeldete HTTP 303. Frueher hiess das "ohne Antwort", und mit laufender
-  // Frist spielte der Skill mit dieser Nummer los - "Ich spiele ...", dann
-  // Stille. Jetzt zaehlt es als Nein und loest die Anmeldung aus.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);   // innerhalb der Frist
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  box.leitetUm();
-  try {
-    await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    assert.ok(box.abrufe.includes('/nas/filelink.lua'),
-      'die Umleitung fuehrt zur Anmeldung statt zum Weiterwursteln');
-  } finally {
-    box.zurueck();
-  }
-});
 
 // --- Die Warteschlange vor einem Start leeren --------------------------------
 //
@@ -3227,128 +2347,6 @@ test('das Leeren laesst sich abschalten', async () => {
 // Der Echo hat es auf der stummen Seite nicht einmal versucht. Was dazwischen
 // anders war, ist nichts als die Zeit.
 
-const mitEilziel = async (wert, tu) => {
-  const vorher = process.env.MUSIK_EILZIEL_MS;
-  process.env.MUSIK_EILZIEL_MS = wert;
-  try { return await tu(); } finally { process.env.MUSIK_EILZIEL_MS = vorher; }
-};
-
-test('bei aufgebrauchtem Eilziel wird weder gefragt noch angemeldet', async () => {
-  // **Gemeldet, in zwei Zeilen desselben Requests:**
-  //
-  //   musik-box Nachfrage ausgelassen, Frist abgelaufen und 1514 ms Eilziel
-  //   musik-box FRITZ!NAS-Login ok (ohne Gegenprobe) nach 1536 ms
-  //   → Alexa wartet seit 2539 ms, und es blieb stumm.
-  //
-  // Die Nachfrage der Eile wegen auszulassen und danach anzumelden, spart den
-  // billigen Weg, um den teuren zu nehmen. Gespielt wird jetzt mit der
-  // gemerkten Nummer - dass ihre Frist um ist, sagt etwas ueber die Uhr und
-  // nichts ueber die Box, und ein Irrtum traegt sich ueber PlaybackFailed.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // ausserhalb der Frist
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    const r = await mitEilziel('1', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
-    assert.deepEqual(box.abrufe, [], 'die Box wird gar nicht angefasst');
-    assert.equal(
-      new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'),
-      'aaaaaaaaaaaaaaaa',
-      'gespielt wird mit der gemerkten Nummer',
-    );
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('reicht das Eilziel fuer die Nachfrage, wird gefragt statt angemeldet', async () => {
-  // Die Schwelle ist die gemessene Dauer der Nachfrage (565 bis 946 ms), nicht
-  // ihre Obergrenze von 2000. Dazwischen lag der gemeldete Fehlschlag: 1514 ms
-  // Eilziel haetten fuer die Nachfrage bequem gereicht.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // ausserhalb der Frist
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    await mitEilziel('1500', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
-    assert.equal(box.abrufe[0], '/nas/api/data.lua', 'zuerst gefragt');
-    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'die Anmeldung bleibt aus');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('eine tote Nummer rechtzeitig schlaegt eine frische zu spaet', async () => {
-  // **Gemeldet, mit tatsaechlich toter Nummer:**
-  //
-  //   musik-box FRITZ!NAS-Sitzung nachgefragt: ist tot nach 899 ms
-  //   musik-box FRITZ!NAS-Login ok (ohne Gegenprobe) nach 895 ms
-  //   musik-box IntentRequest in 1880 ms, Alexa wartet seit 2857 ms
-  //   → kein einziges AudioPlayer-Ereignis.
-  //
-  // Die Nummer in dieser Antwort war frisch und richtig; sie kam nur 350 ms
-  // zu spaet. Im selben Test spielte eine Antwort nach 1737 ms, deren Adresse
-  // der Echo nicht laden konnte - er meldete PlaybackFailed, der Titel wurde
-  // wiederholt, und es lief. Die Anmeldung weicht dem Eilziel deshalb wie
-  // alles andere auch.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // ausserhalb der Frist
-  const box = boxAmDraht('totetotetotetote');      // und die Box kennt sie nicht
-  try {
-    const r = await mitEilziel('1200', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
-    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'gefragt, aber nicht angemeldet');
-    assert.equal(
-      new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'),
-      'aaaaaaaaaaaaaaaa',
-      'gestartet wird mit der alten Nummer – PlaybackFailed holt die neue',
-    );
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('innerhalb der Frist bleibt die Nachfrage - auch in Eile', async () => {
-  // Dort ist sie fast immer erfolgreich und erspart die Anmeldung wirklich.
-  // Eine Anmeldung beendet alle Sitzungen der Box; diesen Preis zahlt die Eile
-  // nicht.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 0);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    await mitEilziel('1', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
-    assert.equal(box.abrufe[0], '/nas/api/data.lua', 'zuerst gefragt');
-    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'und nicht angemeldet');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('ohne Eile bleibt alles beim Alten', async () => {
-  // MUSIK_EILZIEL_MS=0 heisst ausdruecklich "keine Eile" - dann gilt nur noch
-  // das Antwortbudget. Die Gegenprobe zum ersten Test: dieselbe Lage, und die
-  // Nachfrage findet wieder statt.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    await mitEilziel('0', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
-    assert.equal(box.abrufe[0], '/nas/api/data.lua', 'erst gefragt');
-    assert.ok(box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'und der Weckruf laeuft');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('das Eilziel bremst den Titelwechsel nicht aus', async () => {
-  // Mitten in der Wiedergabe gibt es keine Eile-Frage: Dort wartet niemand auf
-  // einen gesprochenen Satz, und der Echo haengt den Titel selbst an.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);   // Frist abgelaufen
-  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-  try {
-    await mitEilziel('1', () => skillMitBudget(
-      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
-      { token: 'Udo CD eins|0|0|0' },
-      redis,
-    ));
-    assert.deepEqual(box.abrufe, ['/nas/api/data.lua'], 'die Nachfrage bleibt, die Anmeldung unterbleibt');
-  } finally {
-    box.zurueck();
-  }
-});
-
 // --- Nur wer eine Adresse herausgibt, frischt die Sitzung auf ----------------
 //
 // **Gemeldet aus einem Log mit genau zwei Zeilen:**
@@ -3361,61 +2359,6 @@ test('das Eilziel bremst den Titelwechsel nicht aus', async () => {
 // Echo gerade streamte. Die Auffrischung lief fuer jede Anfrage, weil
 // `gemeintePlaylist` ohne Slot auf den laufenden Stream zurueckfaellt.
 
-test('ein Intent ohne Wiedergabe laesst die Sitzung in Ruhe', async () => {
-  const laeuft = { token: 'Udo CD eins|0|0|0' };
-  for (const name of ['AMAZON.FallbackIntent', 'AMAZON.HelpIntent', 'ListPlaylistsIntent',
-    'AMAZON.StopIntent', 'AMAZON.PauseIntent', 'AMAZON.LoopOnIntent', 'AMAZON.RepeatIntent']) {
-    const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // Frist abgelaufen: wuerde anmelden
-    const box = boxAmDraht('totetotetotetote');
-    try {
-      await skillMitBudget(intent(name), laeuft, redis);
-      assert.deepEqual(box.abrufe, [], `${name}: die Box wird nicht angefasst`);
-    } finally {
-      box.zurueck();
-    }
-  }
-});
-
-test('die Ereignisse am Titelende ebenso', async () => {
-  // PlaybackStarted und -Stopped schreiben nur den Stand. Eine Anmeldung
-  // dafuer waere ein Titelwechsel, der sich selbst abwuergt.
-  //
-  // **PlaybackFinished steht nicht mehr dabei.** Dort wird seit der
-  // verderblichen Adresse der naechste Titel bestellt, und dafuer braucht es
-  // eine Nummer, die gerade gilt - siehe `adresseVerderblich`.
-  const laeuft = { token: 'Udo CD eins|0|0|0' };
-  for (const typ of ['AudioPlayer.PlaybackStarted', 'AudioPlayer.PlaybackStopped']) {
-    const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-    const box = boxAmDraht('totetotetotetote');
-    try {
-      await skillMitBudget({ type: typ, token: 'Udo CD eins|0|0|0' }, laeuft, redis);
-      assert.deepEqual(box.abrufe, [], `${typ}: die Box wird nicht angefasst`);
-    } finally {
-      box.zurueck();
-    }
-  }
-});
-
-test('wer eine Adresse herausgibt, frischt weiterhin auf', async () => {
-  // Die Gegenprobe - sonst waere die Abkuerzung oben eine Regression.
-  const faelle = [
-    [intent('AMAZON.NextIntent'), { token: 'Udo CD eins|0|0|0' }],
-    [{ type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' }, { token: 'Udo CD eins|0|0|0' }],
-    [{ type: 'PlaybackController.NextCommandIssued' }, { token: 'Udo CD eins|0|0|0' }],
-  ];
-  for (const [request, opts] of faelle) {
-    const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);   // ausserhalb der Frist
-    const box = boxAmDraht('aaaaaaaaaaaaaaaa');
-    try {
-      await skillMitBudget(request, opts, redis);
-      assert.ok(box.abrufe.includes('/nas/api/data.lua'),
-        `${request.type}${request.intent ? ` ${request.intent.name}` : ''}: nachgefragt`);
-    } finally {
-      box.zurueck();
-    }
-  }
-});
-
 // --- Die Anmeldung ohne Gegenprobe ------------------------------------------
 //
 // Zwei Wege zur Box, gemessen 1443 bis 2635 ms zusammen - vor dem ersten Ton
@@ -3423,49 +2366,3 @@ test('wer eine Adresse herausgibt, frischt weiterhin auf', async () => {
 // erste Nummer stammt aus der Antwort, die die Box gerade auf diese Anmeldung
 // gegeben hat. Und ein Irrtum traegt sich selbst, ueber PlaybackFailed.
 
-test('vor einem Start wird die Anmeldung nicht gegengeprueft', async () => {
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-  const box = boxAmDraht('totetotetotetote');
-  try {
-    const r = await skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis);
-    const datalua = box.abrufe.filter(p => p === '/nas/api/data.lua');
-    assert.equal(datalua.length, 1, 'nur die Nachfrage vorher, keine Gegenprobe danach');
-    assert.equal(
-      new URL(spielt(r).audioItem.stream.url).searchParams.get('sid'), 'cccccccccccccccc',
-      'gespielt wird mit der Nummer aus der Anmeldung',
-    );
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('ohne Eile bleibt die Gegenprobe', async () => {
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
-  const box = boxAmDraht('totetotetotetote');
-  try {
-    await mitEilziel('0', () => skillMitBudget(intent('PlayPlaylistIntent', 'Udo CD eins'), {}, redis));
-    const datalua = box.abrufe.filter(p => p === '/nas/api/data.lua');
-    assert.equal(datalua.length, 2, 'Nachfrage und Gegenprobe');
-  } finally {
-    box.zurueck();
-  }
-});
-
-test('mitten in der Wiedergabe bleibt die Gegenprobe ebenso', async () => {
-  // Dorthin reicht fritzAufgefrischt gar kein Eilziel - und eine Anmeldung
-  // mitten im Titel ist ohnehin der seltene Ausnahmefall, der sich die
-  // Gewissheit leisten darf.
-  const redis = boxRedis('aaaaaaaaaaaaaaaa', 6);
-  const box = boxAmDraht('totetotetotetote');
-  try {
-    await skillMitBudget(
-      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Udo CD eins|0|0|0' },
-      { token: 'Udo CD eins|0|0|0' },
-      redis,
-    );
-    const datalua = box.abrufe.filter(p => p === '/nas/api/data.lua');
-    assert.equal(datalua.length, 2, 'Nachfrage und Gegenprobe');
-  } finally {
-    box.zurueck();
-  }
-});
