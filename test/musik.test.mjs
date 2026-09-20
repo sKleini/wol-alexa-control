@@ -1473,6 +1473,43 @@ test('validierePlaylist nimmt nur einen echten Freigabe-Link als Herkunft', () =
   }
 });
 
+test('beim Speichern werden alte Sitzungsadressen umgeschrieben', async () => {
+  // Der Weg, auf dem bestehende Playlists heil werden: Der Pfad steht in der
+  // alten Adresse, der Freigabe-Link in der Herkunft - mehr braucht die neue
+  // nicht. Ohne Basis (etwa in einem Test ohne Anfrage) bleibt alles, wie es
+  // ist; das ist die zweite Haelfte der Zusicherung.
+  const vorher = process.env.ADMIN_PASSWORD;
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  const { playlist } = validierePlaylist({
+    name: 'Schlaflieder',
+    urls: fritzTitel('aaaaaaaaaaaaaaaa'),
+    quelle: { typ: 'fritz', link: FRITZ_LINK },
+  }, null, 'https://app.example');
+
+  const url = new URL(playlist.titel[0].url);
+  assert.equal(url.origin + url.pathname, 'https://app.example/api/skill');
+  assert.ok(url.searchParams.get('ton'), 'mit Token');
+  assert.equal(url.searchParams.get('sid'), null, 'und ohne Sitzungsnummer');
+
+  const ohneBasis = validierePlaylist({
+    name: 'Schlaflieder',
+    urls: fritzTitel('aaaaaaaaaaaaaaaa'),
+    quelle: { typ: 'fritz', link: FRITZ_LINK },
+  }).playlist;
+  assert.match(ohneBasis.titel[0].url, /luacgi_notimeout/, 'ohne Basis bleibt es beim Alten');
+
+  // **Und ohne Schluessel ebenso.** Dann gibt es keine Adresse, die der Echo
+  // abrufen koennte - eine halbe waere schlimmer als die alte.
+  delete process.env.ADMIN_PASSWORD;
+  const ohneSchluessel = validierePlaylist({
+    name: 'Schlaflieder',
+    urls: fritzTitel('aaaaaaaaaaaaaaaa'),
+    quelle: { typ: 'fritz', link: FRITZ_LINK },
+  }, null, 'https://app.example').playlist;
+  assert.match(ohneSchluessel.titel[0].url, /luacgi_notimeout/);
+  if (vorher === undefined) delete process.env.ADMIN_PASSWORD; else process.env.ADMIN_PASSWORD = vorher;
+});
+
 test('handleManage speichert die Herkunft mit der Playlist', async () => {
   const redis = redisMit();
   await handleManage({
