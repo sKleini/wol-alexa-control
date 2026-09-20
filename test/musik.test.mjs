@@ -3625,6 +3625,38 @@ test('bei mehreren Freigaben wird nur nachgefragt, nie angemeldet', async () => 
   }
 });
 
+test('sind alle Sitzungen tot, wird genau eine angemeldet', async () => {
+  // **Gemeldet aus dem ersten Lauf im Betrieb:** "Sitzungen warm gehalten:
+  // 0 von 6". Sechs Ordner-Playlists, keine lebende Sitzung - und die Regel
+  // "bei mehreren nie anmelden" machte daraus einen Zustand, aus dem der
+  // Takt nie wieder herauskam. Ist alles tot, gibt es nichts zu verlieren:
+  // Dann wird die zuletzt benutzte Freigabe angemeldet, und die Nachfrage
+  // haelt sie danach am Leben.
+  const zweiterLink = `${BOX}/nas/filelink.lua?id=bbbb2222bbbb2222`;
+  const redis = redisMit({
+    [REDIS_KEY]: [
+      { name: 'Udo CD eins', quelle: { typ: 'fritz', link: BOX_LINK }, titel: [{ url: boxTitel(1, 'aaaaaaaaaaaaaaaa'), name: '01' }] },
+      { name: 'Hoerspiel zwei', quelle: { typ: 'fritz', link: zweiterLink }, titel: [{ url: boxTitel(1, 'bbbbbbbbbbbbbbbb'), name: 'b01' }] },
+    ],
+    musik_fritz_sid: {
+      [BOX_LINK]: { sid: 'totetotetotetote', zeit: Date.now() - 20 * 60_000 },
+      [zweiterLink]: { sid: 'auchtotauchtot11', zeit: Date.now() - 9 * 60_000 },  // juenger
+    },
+  });
+  const box = boxAmDraht('niemandlebtmehr1');
+  try {
+    const res = await warmAntwort(redis);
+    const anmeldungen = box.abrufe.filter(p => p === '/nas/filelink.lua');
+    assert.equal(anmeldungen.length, 1, 'genau eine Anmeldung, nicht sechs');
+    assert.equal(res.body.warm, 1, 'und danach ist eine Sitzung warm');
+    // Die juengere Freigabe bekommt sie: Sie ist die wahrscheinlichste fuer
+    // den naechsten Start.
+    assert.equal(redis.speicher.musik_fritz_sid[zweiterLink].sid, 'cccccccccccccccc');
+  } finally {
+    box.zurueck();
+  }
+});
+
 test('MUSIK_WARM=0 schaltet den Warm-Lauf ab, ohne den Takt zu stoeren', async () => {
   const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
   const box = boxAmDraht('aaaaaaaaaaaaaaaa');
