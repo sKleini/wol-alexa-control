@@ -434,29 +434,6 @@ musik-box IntentRequest in 2705 ms
 
 Session valid, file fetched in 613 ms, device reports `AudioPlayer` — and then not one AudioPlayer event. No `PlaybackStarted`, no `PlaybackFailed`. A device that tried and failed reports back; this one never saw the directive. So the wake-up call stays (it costs half a second and rules the disk out for good), but the cause is elsewhere: see **the budget starts at Alexa** below.
 
-**And in the end the box said it itself.** Its event log, from the same afternoon:
-
-```
-Anmeldung an der FRITZ!Box-Benutzeroberfläche von IP-Adresse 79.253.153.126
-gescheitert (ungültige Sitzungskennung). Zur Sicherheit werden alle noch
-gültigen Sitzungen zur IP-Adresse 79.253.153.126 beendet. [12 Meldungen …]
-
-… dasselbe für 18.197.26.146 [13 Meldungen …]
-```
-
-**A FRITZ!Box session belongs to the IP address that fetched it.** Two addresses appear there: `18.197.26.146` is AWS Frankfurt, so this skill on Vercel, and `79.253.153.126` is the box's **own external IPv4** — that is how it sees the Echo, which resolves the MyFRITZ! name and comes back in from outside through NAT loopback. Two addresses, two sessions: a number the skill fetches is **invalid** for the Echo, however fresh it is. And every such attempt also terminates whatever sessions that IP still had.
-
-That explains everything this chapter circles around. The skill checks the number and is told *gilt noch*; it fetches the file and gets `HTTP 206` with audio — both from its own IP, for which the session is valid. The Echo, with the very same address, gets an error. Counted across one day of logs:
-
-| error | occurrences | `PlaybackStarted` after it |
-|---|---:|---|
-| `MEDIA_ERROR_SERVICE_UNAVAILABLE` | 4 | **4** |
-| `MEDIA_ERROR_INTERNAL_SERVER_ERROR` | 21 | **0** |
-
-The first is a connection problem and heals on the second attempt — that is what the error path is for, and it works. The second is the rejected session key, and nothing the skill can do touches it: not a fresh number, not a wake-up call, not a retry. **A folder share carries its session in the address, and that session does not belong to the device that has to use it.** What does work is a **file** share, whose link needs no session at all — which is exactly what was reported all along: file shares play, folder shares do not.
-
-The failure path now says so in one line per losing streak, so the next reader of a log does not have to walk this road again.
-
 **And then the counter-check itself turned out to be too weak.** A log from 20 September, sixty-five seconds long: nine tracks, each attempted twice, every one of them `MEDIA_ERROR_INTERNAL_SERVER_ERROR – Device playback error` at `Offset: 0` or `1`. Not one `PlaybackStarted` in the whole run. And between the failures, seventeen times:
 
 ```
@@ -582,6 +559,18 @@ Without a login it played three times out of three. With one, three times out of
 What the box does in those seconds is not visible from outside; that `filelink.lua` without a session terminates every session on the box is AVM's own documentation. The gap after a login and the second probe were built against exactly this and are the first things the haste target drops. What is left is to move the login to where it costs nothing — **and that is the error path**. Start with the number at hand, however stale, and the Echo reports `PlaybackFailed`: a request with a fresh eight seconds, a warm function, no spoken answer and nobody waiting. That is where the skill logs in and retries the same track. It is exactly how the first successful cold start of that day went — 1122 ms, dead number, `PlaybackFailed`, login, `PlaybackStarted`.
 
 `MUSIK_START_LOGIN=1` puts the login back in front of the first note, for a box that tolerates it.
+
+**The detour still costs seconds, and the cheapest session is the one that never dies.** With the error path doing the repair, a cold start takes the long way round: the Echo has to give up on the dead address first, and that took 3.2 s in one measured case and 12.3 s in another — nine and twenty-one seconds from spoken command to sound. The skill's own share of that is under three seconds; the rest is the device timing out. A session that never expires has none of it.
+
+So `POST /api/manage?type=fritz-warm` (admin password, same as everything else there) is back, called from a cron on the VPS. It walks the same steps as the skill — remembered, asked, and on a truly dead number a login — with the asking forced, because without that it would return inside its own five-minute window without touching the box at all, which is the opposite of the point. The box extends a session on every access, and `check_nas_rights` is the cheapest access there is.
+
+**It asks first, and logs in at most once — only when nothing is alive at all.** A login ends every session on the box, so while one is still alive a login would be a trade, not a gain, and the next run would do the same with the next share: A now, B five minutes later and A with it. When everything is dead there is nothing to lose, and the share that gets the login is the most recently used one, because it is the likeliest for the next start.
+
+**More than one warm session is not on offer.** `filelink.lua` is opened without a session, and that is precisely the access AVM says terminates all existing ones. With six folder playlists that means one is warm and the other five fetch their number through the error path when they are played. So the detour is gone for a restart of the *same* playlist — the common case — and remains for the first start of a different one. The first run in production said `0 von 6` and would have stayed there: the earlier rule ("with several shares never log in") made a state the cron could not climb out of.
+
+**And the disk stays asleep.** That was why this endpoint was removed in September — the worry that a cron from outside would keep the NAS disk spinning around the clock. It touches no file: `check_nas_rights` is answered from the box's session store. What wakes the disk is the probe before the first note, and that only runs when somebody is actually listening. Unlike the first version, which did nothing at all beyond a single share, the answer now covers **every** share, one line per share in the log, and never more than the last four digits of a session number — it ends up in a log file, and the number is the key to the share.
+
+`MUSIK_WARM=0` in the Vercel environment switches it off: the endpoint still answers, so the cron outside needs no change, but the box is left alone.
 
 **And before a start the login goes without its counter-check.** Two trips to the box — fetching the scaffold and verifying the number — cost between 1443 and 2635 ms measured, which before the first note is the single largest item there is. The verification is the more dispensable half: `sidKandidaten` puts the explicit `sid=` values first, and those come from the answer the box gave to *this very* login, so it is the likeliest candidate rather than a guess. And a mistake carries itself: if the number is wrong after all, the Echo gets the login page, reports `PlaybackFailed`, and that request has a fresh eight seconds and a warm function — the session is checked under duress and the same track retried. The same path that already caught a `MEDIA_ERROR_SERVICE_UNAVAILABLE` in practice, with `PlaybackStarted` 18 ms after the second attempt.
 
@@ -835,7 +824,6 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence — always on the first attempt, FRITZ!NAS | the login sat in the second step of the call and did not fit there; the Echo was handed an expired number | fixed: the session is fetched when the skill is opened — see **Why the skill never goes silent** |
 | Alexa confirms, then silence — the first attempt after a longer break, FRITZ!NAS, and the second attempt plays the same address with the same session number | the box's disk had spun down; the first fetch waits for it to spin up and the Echo does not sit that out. The skill only ever touched the session, never a file | fixed: the start of the track is fetched before the answer goes out, which wakes the disk. Look for `musik-box Datei angetippt: …` in the log |
-| `MEDIA_ERROR_INTERNAL_SERVER_ERROR` on every track, while the skill's own probe reports `HTTP 206` with audio right before each one | the box binds a session to the IP that fetched it. The skill's number is valid for Vercel and **invalid for the Echo**, which arrives on the box's own external IPv4 via NAT loopback. Its event log says so: *„ungültige Sitzungskennung … alle Sitzungen zur IP-Adresse … beendet"* | nothing in the skill fixes this — a folder share carries its session in the address. Use **file** shares for playlists that have to work; they need no session |
 | Silence on the first attempt with **no** AudioPlayer event at all, and `FRITZ!NAS-Login ok` in that same request — even when the answer was fast | the login, not the clock: three of four starts with a login in the request produced no event, three of three without one played | fixed: before the first note the skill does not log in at all — it starts with the number it has and lets `PlaybackFailed` fetch a fresh one. Look for `Anmeldung vor dem ersten Ton ausgelassen` |
 | Silence on the first attempt, `Nachfrage ausgelassen …` followed by `FRITZ!NAS-Login ok` in the same request, and the second attempt plays with **the same** session number | the haste rule dropped the 650 ms check and then spent 1536 ms on a login for a session that was alive all along — `Alexa wartet seit 2539 ms`, past the boundary | fixed: the threshold is what the check costs, and below it the skill neither asks nor logs in but plays with the remembered number |
 | Silence on the first attempt although the log shows a valid session, a reachable file and `Geraet kann: AudioPlayer` — and **no** AudioPlayer event follows | **not** the cold start: measured at `Alexa wartet seit 3683 ms` of 8000, with Alexa speaking the sentence. What is left after elimination is the box in the seconds after a login | the skill now puts a gap between the login and its answer and probes the file a second time — see **the box, in the seconds after a login** above. Look for `Datei nach <n> ms Abstand noch einmal angetippt` |

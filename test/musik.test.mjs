@@ -46,6 +46,7 @@ import {
   alexaVorlaufMs,
   handleManage,
   fritzSidMerken,
+  handleWarm,
   istAudioUrl,
   audioLinksAusHtml,
   audioNamenImText,
@@ -3565,4 +3566,120 @@ test('mitten in der Wiedergabe bleibt die Gegenprobe ebenso', async () => {
   } finally {
     box.zurueck();
   }
+});
+
+// --- Die Sitzungen warm halten ----------------------------------------------
+//
+// **Warum es das wieder gibt.** Eine FRITZ!NAS-Sitzung stirbt nach etwa zehn
+// Minuten Ruhe, und der erste Start danach geht ueber einen Fehlschlag: Am
+// 20. September brauchte der Echo drei bis zwoelf Sekunden, bis er die tote
+// Adresse aufgab - vom Befehl bis zum Ton neun beziehungsweise einundzwanzig
+// Sekunden. Wer die Sitzung nie ablaufen laesst, hat diesen Umweg nicht.
+
+const warmAntwort = async (redis, methode = 'POST') => {
+  const res = antwortFaenger();
+  await handleWarm({ method: methode, headers: {} }, res, redis);
+  return res;
+};
+
+test('der Warm-Lauf fragt nach und meldet sich bei einer Freigabe notfalls an', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);   // Frist abgelaufen
+  const box = boxAmDraht('totetotetotetote');      // und die Nummer tot
+  try {
+    const res = await warmAntwort(redis);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.warm, 1, 'die eine Freigabe ist warm');
+    assert.ok(box.abrufe.includes('/nas/api/data.lua'), 'nachgefragt');
+    assert.ok(box.abrufe.includes('/nas/filelink.lua'), 'und bei genau einer Freigabe angemeldet');
+    // **Und keine Datei angefasst** - das ist der Punkt, an dem dieser
+    // Endpunkt beim ersten Mal gescheitert ist: die Sorge, er halte die
+    // Platte am NAS wach.
+    assert.ok(!box.abrufe.includes('/nas/cgi-bin/luacgi_notimeout'), 'die Platte bleibt in Ruhe');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('bei mehreren Freigaben wird nur nachgefragt, nie angemeldet', async () => {
+  // Eine Anmeldung beendet alle Sitzungen der Box. Ein Takt, der anmeldet,
+  // brächte bei zwei Ordner-Playlists reihum immer die andere um.
+  const zweiterLink = `${BOX}/nas/filelink.lua?id=bbbb2222bbbb2222`;
+  const redis = redisMit({
+    [REDIS_KEY]: [
+      { name: 'Udo CD eins', quelle: { typ: 'fritz', link: BOX_LINK }, titel: [{ url: boxTitel(1, 'aaaaaaaaaaaaaaaa'), name: '01' }] },
+      { name: 'Hoerspiel zwei', quelle: { typ: 'fritz', link: zweiterLink }, titel: [{ url: boxTitel(1, 'bbbbbbbbbbbbbbbb'), name: 'b01' }] },
+    ],
+    musik_fritz_sid: {
+      [BOX_LINK]: { sid: 'aaaaaaaaaaaaaaaa', zeit: Date.now() - 9 * 60_000 },
+      [zweiterLink]: { sid: 'totetotetotetote', zeit: Date.now() - 9 * 60_000 },
+    },
+  });
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const res = await warmAntwort(redis);
+    assert.ok(!box.abrufe.includes('/nas/filelink.lua'), 'keine Anmeldung');
+    assert.equal(res.body.gesamt, 2);
+    assert.equal(res.body.warm, 1, 'die lebende bleibt warm, die tote bleibt tot');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('sind alle Sitzungen tot, wird genau eine angemeldet', async () => {
+  // **Gemeldet aus dem ersten Lauf im Betrieb:** "Sitzungen warm gehalten:
+  // 0 von 6". Sechs Ordner-Playlists, keine lebende Sitzung - und die Regel
+  // "bei mehreren nie anmelden" machte daraus einen Zustand, aus dem der
+  // Takt nie wieder herauskam. Ist alles tot, gibt es nichts zu verlieren:
+  // Dann wird die zuletzt benutzte Freigabe angemeldet, und die Nachfrage
+  // haelt sie danach am Leben.
+  const zweiterLink = `${BOX}/nas/filelink.lua?id=bbbb2222bbbb2222`;
+  const redis = redisMit({
+    [REDIS_KEY]: [
+      { name: 'Udo CD eins', quelle: { typ: 'fritz', link: BOX_LINK }, titel: [{ url: boxTitel(1, 'aaaaaaaaaaaaaaaa'), name: '01' }] },
+      { name: 'Hoerspiel zwei', quelle: { typ: 'fritz', link: zweiterLink }, titel: [{ url: boxTitel(1, 'bbbbbbbbbbbbbbbb'), name: 'b01' }] },
+    ],
+    musik_fritz_sid: {
+      [BOX_LINK]: { sid: 'totetotetotetote', zeit: Date.now() - 20 * 60_000 },
+      [zweiterLink]: { sid: 'auchtotauchtot11', zeit: Date.now() - 9 * 60_000 },  // juenger
+    },
+  });
+  const box = boxAmDraht('niemandlebtmehr1');
+  try {
+    const res = await warmAntwort(redis);
+    const anmeldungen = box.abrufe.filter(p => p === '/nas/filelink.lua');
+    assert.equal(anmeldungen.length, 1, 'genau eine Anmeldung, nicht sechs');
+    assert.equal(res.body.warm, 1, 'und danach ist eine Sitzung warm');
+    // Die juengere Freigabe bekommt sie: Sie ist die wahrscheinlichste fuer
+    // den naechsten Start.
+    assert.equal(redis.speicher.musik_fritz_sid[zweiterLink].sid, 'cccccccccccccccc');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('MUSIK_WARM=0 schaltet den Warm-Lauf ab, ohne den Takt zu stoeren', async () => {
+  const redis = boxRedis('aaaaaaaaaaaaaaaa', 9);
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  const vorher = process.env.MUSIK_WARM;
+  process.env.MUSIK_WARM = '0';
+  try {
+    const res = await warmAntwort(redis);
+    assert.equal(res.statusCode, 200, 'der Takt draussen bekommt weiter ein Ja');
+    assert.equal(res.body.warm, false);
+    assert.match(res.body.grund, /abgeschaltet/);
+    assert.deepEqual(box.abrufe, [], 'und die Box wird nicht angefasst');
+  } finally {
+    process.env.MUSIK_WARM = vorher;
+    box.zurueck();
+  }
+});
+
+test('ohne FRITZ!NAS-Playlist und ohne POST tut der Warm-Lauf nichts', async () => {
+  const redis = redisMit({ [REDIS_KEY]: [KINDER] });
+  const res = await warmAntwort(redis);
+  assert.equal(res.body.warm, false);
+  assert.match(res.body.grund, /keine FRITZ!NAS-Playlist/);
+
+  const nurLesen = await warmAntwort(redis, 'GET');
+  assert.equal(nurLesen.statusCode, 405, 'ein GET fasst die Box nicht an');
 });
