@@ -374,3 +374,62 @@ test('ein Absturz nennt seinen Grund, statt die Standardseite zu zeigen', async 
   assert.equal(res.statusCode, 500);
   assert.match(Buffer.concat(res.stuecke).toString(), /Sitzung explodiert/);
 });
+
+// --- Und einmal der ganze Weg, mit dem echten fritzSid ---------------------
+//
+// **Warum dieser Test existiert.** Gemeldet aus dem Betrieb:
+// "Ton konnte nicht geliefert werden: budgetText is not defined" - eine
+// Logzeile in `fritzSid` rief eine Hilfsfunktion, die beim Aufraeumen mit dem
+// Weckruf verschwunden war. Alle Tests waren gruen, weil nach dem Aufraeumen
+// kein einziger diesen Weg mehr entlangging: Der Durchleiter bekam seine
+// Sitzungsnummer bisher immer von einer Attrappe. Hier nicht.
+import { fritzSid } from '../lib/musik.js'
+
+test('der ganze Weg: Anmeldung bei der Box, dann Ton', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const gespeichert = {};
+  const redis = {
+    get: async (k) => gespeichert[k] ?? null,
+    set: async (k, v) => { gespeichert[k] = v; },
+    incrby: async () => {}, expire: async () => {},
+  };
+  const ton = Buffer.alloc(1024, 4);
+  const wege = [];
+
+  const echt = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    wege.push(u);
+    // Schritt 1: die Freigabe oeffnen - sie gibt eine Sitzungsnummer heraus.
+    if (u.includes('filelink.lua')) {
+      return new Response('<html><script>var sid = "00112233445566aa";</script></html>',
+        { status: 200, headers: { 'content-type': 'text/html' } });
+    }
+    // Schritt 2: gilt sie, und zu welchem Ordner gehoert sie?
+    if (u.includes('/nas/api/data.lua')) {
+      return new Response(JSON.stringify({ root: '/Musik', rights: { read: true } }),
+        { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    // Schritt 3: die Datei selbst - mit genau dieser Nummer.
+    assert.match(u, /sid=00112233445566aa/, 'die Adresse traegt die frisch geholte Nummer');
+    return new Response(ton, {
+      status: 206,
+      headers: { 'content-type': 'audio/mpeg', 'content-range': 'bytes 0-1023/1024', 'content-length': '1024' },
+    });
+  };
+
+  try {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token,
+      (link, erzwingen) => fritzSid(link, redis, erzwingen).then(e => e.sid));
+    await Promise.all([lauf, fertig(res)]);
+  } finally {
+    globalThis.fetch = echt;
+  }
+
+  assert.equal(res.statusCode, 200, 'die ganze Datei, und nicht danach gefragt');
+  assert.equal(Buffer.concat(res.stuecke).length, 1024, 'der Ton kommt an');
+  assert.ok(wege.some(w => w.includes('filelink.lua')), 'die Box wurde geoeffnet');
+  assert.ok(wege.some(w => w.includes('luacgi_notimeout')), 'und die Datei geholt');
+  assert.ok(gespeichert.musik_fritz_sid, 'die Nummer wurde gemerkt');
+});
