@@ -434,6 +434,29 @@ musik-box IntentRequest in 2705 ms
 
 Session valid, file fetched in 613 ms, device reports `AudioPlayer` — and then not one AudioPlayer event. No `PlaybackStarted`, no `PlaybackFailed`. A device that tried and failed reports back; this one never saw the directive. So the wake-up call stays (it costs half a second and rules the disk out for good), but the cause is elsewhere: see **the budget starts at Alexa** below.
 
+**And in the end the box said it itself.** Its event log, from the same afternoon:
+
+```
+Anmeldung an der FRITZ!Box-Benutzeroberfläche von IP-Adresse 79.253.153.126
+gescheitert (ungültige Sitzungskennung). Zur Sicherheit werden alle noch
+gültigen Sitzungen zur IP-Adresse 79.253.153.126 beendet. [12 Meldungen …]
+
+… dasselbe für 18.197.26.146 [13 Meldungen …]
+```
+
+**A FRITZ!Box session belongs to the IP address that fetched it.** Two addresses appear there: `18.197.26.146` is AWS Frankfurt, so this skill on Vercel, and `79.253.153.126` is the box's **own external IPv4** — that is how it sees the Echo, which resolves the MyFRITZ! name and comes back in from outside through NAT loopback. Two addresses, two sessions: a number the skill fetches is **invalid** for the Echo, however fresh it is. And every such attempt also terminates whatever sessions that IP still had.
+
+That explains everything this chapter circles around. The skill checks the number and is told *gilt noch*; it fetches the file and gets `HTTP 206` with audio — both from its own IP, for which the session is valid. The Echo, with the very same address, gets an error. Counted across one day of logs:
+
+| error | occurrences | `PlaybackStarted` after it |
+|---|---:|---|
+| `MEDIA_ERROR_SERVICE_UNAVAILABLE` | 4 | **4** |
+| `MEDIA_ERROR_INTERNAL_SERVER_ERROR` | 21 | **0** |
+
+The first is a connection problem and heals on the second attempt — that is what the error path is for, and it works. The second is the rejected session key, and nothing the skill can do touches it: not a fresh number, not a wake-up call, not a retry. **A folder share carries its session in the address, and that session does not belong to the device that has to use it.** What does work is a **file** share, whose link needs no session at all — which is exactly what was reported all along: file shares play, folder shares do not.
+
+The failure path now says so in one line per losing streak, so the next reader of a log does not have to walk this road again.
+
 **And then the counter-check itself turned out to be too weak.** A log from 20 September, sixty-five seconds long: nine tracks, each attempted twice, every one of them `MEDIA_ERROR_INTERNAL_SERVER_ERROR – Device playback error` at `Offset: 0` or `1`. Not one `PlaybackStarted` in the whole run. And between the failures, seventeen times:
 
 ```
@@ -812,6 +835,7 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence — always on the first attempt, FRITZ!NAS | the login sat in the second step of the call and did not fit there; the Echo was handed an expired number | fixed: the session is fetched when the skill is opened — see **Why the skill never goes silent** |
 | Alexa confirms, then silence — the first attempt after a longer break, FRITZ!NAS, and the second attempt plays the same address with the same session number | the box's disk had spun down; the first fetch waits for it to spin up and the Echo does not sit that out. The skill only ever touched the session, never a file | fixed: the start of the track is fetched before the answer goes out, which wakes the disk. Look for `musik-box Datei angetippt: …` in the log |
+| `MEDIA_ERROR_INTERNAL_SERVER_ERROR` on every track, while the skill's own probe reports `HTTP 206` with audio right before each one | the box binds a session to the IP that fetched it. The skill's number is valid for Vercel and **invalid for the Echo**, which arrives on the box's own external IPv4 via NAT loopback. Its event log says so: *„ungültige Sitzungskennung … alle Sitzungen zur IP-Adresse … beendet"* | nothing in the skill fixes this — a folder share carries its session in the address. Use **file** shares for playlists that have to work; they need no session |
 | Silence on the first attempt with **no** AudioPlayer event at all, and `FRITZ!NAS-Login ok` in that same request — even when the answer was fast | the login, not the clock: three of four starts with a login in the request produced no event, three of three without one played | fixed: before the first note the skill does not log in at all — it starts with the number it has and lets `PlaybackFailed` fetch a fresh one. Look for `Anmeldung vor dem ersten Ton ausgelassen` |
 | Silence on the first attempt, `Nachfrage ausgelassen …` followed by `FRITZ!NAS-Login ok` in the same request, and the second attempt plays with **the same** session number | the haste rule dropped the 650 ms check and then spent 1536 ms on a login for a session that was alive all along — `Alexa wartet seit 2539 ms`, past the boundary | fixed: the threshold is what the check costs, and below it the skill neither asks nor logs in but plays with the remembered number |
 | Silence on the first attempt although the log shows a valid session, a reachable file and `Geraet kann: AudioPlayer` — and **no** AudioPlayer event follows | **not** the cold start: measured at `Alexa wartet seit 3683 ms` of 8000, with Alexa speaking the sentence. What is left after elimination is the box in the seconds after a login | the skill now puts a gap between the login and its answer and probes the file a second time — see **the box, in the seconds after a login** above. Look for `Datei nach <n> ms Abstand noch einmal angetippt` |
