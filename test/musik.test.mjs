@@ -53,6 +53,7 @@ import {
   sortierePlaylists,
   REDIS_KEY,
 } from '../lib/musik.js'
+import { weckeStream } from '../lib/fritznas.js'
 
 // --- Helfer -----------------------------------------------------------------
 
@@ -217,13 +218,14 @@ test('findePlaylist ist kulant beim gehoerten Wort', () => {
 test('Token hin und zurueck', () => {
   assert.equal(tokenBauen('Kinderlieder', 2, 1), 'Kinderlieder|2|1|0');
   assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711), 'Kinderlieder|2|1|4711');
-  assert.deepEqual(tokenLesen('Kinderlieder|2|1|4711'), { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711, versuch: 0 });
+  assert.deepEqual(tokenLesen('Kinderlieder|2|1|4711'), { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711, versuch: 0, pech: 0 });
   assert.equal(tokenLesen('fremd'), null);
   assert.equal(tokenLesen('a|x|1|0'), null);
   assert.equal(tokenLesen('a|-1|1|0'), null);
   assert.equal(tokenLesen('a|0|0|-1'), null);
   assert.equal(tokenLesen('a|0|0|0|-1'), null);
-  assert.equal(tokenLesen('a|0|0|0|0|0'), null, 'sechs Teile sind nicht von hier');
+  assert.equal(tokenLesen('a|0|0|0|0|-1'), null);
+  assert.equal(tokenLesen('a|0|0|0|0|0|0'), null, 'sieben Teile sind nicht von hier');
   assert.equal(tokenLesen(undefined), null);
 });
 
@@ -235,14 +237,27 @@ test('Der Versuchszaehler steht nur im Token, wenn es einen Versuch gab', () => 
   assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711, 1), 'Kinderlieder|2|1|4711|1');
   assert.deepEqual(
     tokenLesen('Kinderlieder|2|1|4711|1'),
-    { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711, versuch: 1 },
+    { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711, versuch: 1, pech: 0 },
+  );
+});
+
+test('Die Pechstraehne haengt hinten an und laesst heile Token in Ruhe', () => {
+  // Sie zaehlt die Titel, die hintereinander nicht angelaufen sind. Steht
+  // keiner an, sieht der Token aus wie vorher - ein Stream, der beim Deploy
+  // laeuft, bleibt gueltig.
+  assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711, 0, 0), 'Kinderlieder|2|1|4711');
+  assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711, 0, 2), 'Kinderlieder|2|1|4711|0|2');
+  assert.equal(tokenBauen('Kinderlieder', 2, 1, 4711, 1, 2), 'Kinderlieder|2|1|4711|1|2');
+  assert.deepEqual(
+    tokenLesen('Kinderlieder|2|1|4711|0|2'),
+    { name: 'Kinderlieder', position: 2, runde: 1, seed: 4711, versuch: 0, pech: 2 },
   );
 });
 
 test('Ein Token aus der Zeit vor der Mischung bleibt lesbar', () => {
   // Ein Stream, der beim Deploy noch laeuft, traegt drei Teile. Wuerde der
   // ploetzlich als fremd gelten, braeche die Wiedergabe mitten im Titel ab.
-  assert.deepEqual(tokenLesen('Kinderlieder|1|2'), { name: 'Kinderlieder', position: 1, runde: 2, seed: 0, versuch: 0 });
+  assert.deepEqual(tokenLesen('Kinderlieder|1|2'), { name: 'Kinderlieder', position: 1, runde: 2, seed: 0, versuch: 0, pech: 0 });
 });
 
 test('schritt laeuft vorwaerts mit Umbruch und zaehlt die Runde hoch', () => {
@@ -447,10 +462,35 @@ test('PlaybackFailed wiederholt den Titel einmal - und nur einmal', async () => 
   const erst = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
   assert.equal(spielt(erst).audioItem.stream.token, 'Kinderlieder|0|0|0|1');
 
-  // Zweiter Fehler am selben Titel: jetzt wird uebersprungen, und das Budget
-  // des naechsten faengt wieder bei null an.
+  // Zweiter Fehler am selben Titel: jetzt wird uebersprungen. Das Budget des
+  // naechsten faengt wieder bei null an - er traegt aber die 1 der Straehne,
+  // damit nicht die ganze Playlist durchlaeuft, wenn gar nichts mehr anlaeuft.
   const dann = await skill({ type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0|1', error: { type: 'MEDIA_ERROR_UNKNOWN' } });
-  assert.equal(spielt(dann).audioItem.stream.token, 'Kinderlieder|1|0|0');
+  assert.equal(spielt(dann).audioItem.stream.token, 'Kinderlieder|1|0|0|0|1');
+});
+
+test('nach drei Titeln, die nicht anlaufen, ist Schluss', async () => {
+  // **Gemeldet:** neun Titel, jeder zweimal versucht, jeder mit
+  // MEDIA_ERROR_INTERNAL_SERVER_ERROR - fuenfundsechzig Sekunden, in denen
+  // kein Ton kam und die Box siebzehn Abrufe bekam. Wenn drei Titel
+  // nacheinander nicht einmal anfangen, liegt es nicht an den Titeln.
+  const aus = await skill({
+    type: 'AudioPlayer.PlaybackFailed',
+    token: 'Kinderlieder|0|0|0|1|2',
+    error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR' },
+  });
+  assert.deepEqual(aus.directives, [{ type: 'AudioPlayer.Stop' }], 'kein weiterer Titel');
+});
+
+test('ein Titel, der wirklich lief, loescht die Straehne', async () => {
+  // Die Straehne meint "nichts laeuft mehr an". Ein Stueck, das eine halbe
+  // Minute gespielt hat und dann abriss, gehoert nicht dazu - dort ging die
+  // Kette aus Box, Leitung und Echo ja gerade noch.
+  const weiter = await skill(
+    { type: 'AudioPlayer.PlaybackFailed', token: 'Kinderlieder|0|0|0|1|2', error: { type: 'MEDIA_ERROR_UNKNOWN' } },
+    { token: 'Kinderlieder|0|0|0|1|2', offset: 30000 },
+  );
+  assert.equal(spielt(weiter).audioItem.stream.token, 'Kinderlieder|1|0|0|0|1', 'die Zaehlung faengt von vorn an');
 });
 
 test('PlaybackFailed springt nicht ueber das Ende der Runde hinaus', async () => {
@@ -1938,6 +1978,15 @@ function boxAmDraht(gueltig, neue = 'cccccccccccccccc', ton = 'audio') {
       if (ton === 'oberflaeche') {
         return boxAntwort('text/html', '<title>FRITZ!NAS</title>Anmeldung erforderlich');
       }
+      // Der Kopf kommt, die Tondaten nicht - die Box, die eine Datei
+      // ankuendigt und dann nichts liefert. Genau das war siebzehnmal im Log
+      // als "HTTP 206, audio/mpeg" verbucht.
+      if (ton === 'kopfOhneTon') {
+        return new Response(new ReadableStream({ start() { /* es kommt nichts */ } }), {
+          status: 206,
+          headers: { 'Content-Type': 'audio/mpeg', 'Content-Range': 'bytes 0-32767/4096000' },
+        });
+      }
       return new Response(new Uint8Array(64), {
         status: 206,
         headers: {
@@ -2097,7 +2146,10 @@ test('beim zweiten Fehler am selben Titel geht es weiter', async () => {
       redis,
     );
     assert.ok(!box.abrufe.includes('/nas/filelink.lua'));
-    assert.equal(spielt(r).audioItem.stream.token, 'Udo CD eins|1|0|0', 'der naechste Titel, Budget wieder bei null');
+    // Der naechste Titel, Versuchsbudget wieder bei null - mit der 1 der
+    // Straehne, damit nicht die ganze Playlist durchlaeuft, wenn gar nichts
+    // mehr anlaeuft.
+    assert.equal(spielt(r).audioItem.stream.token, 'Udo CD eins|1|0|0|0|1');
   } finally {
     box.zurueck();
   }
@@ -2470,7 +2522,44 @@ test('vor dem ersten Ton wird die Datei selbst angetippt', async () => {
     // Angetippt wird genau die Adresse, die der Echo gleich bekommt - eine
     // andere weckt die richtige Platte vielleicht, die richtige Datei nicht.
     assert.equal(box.geweckt, spielt(r).audioItem.stream.url);
-    assert.equal(box.weckkopf.Range, 'bytes=0-0', 'ein Byte genuegt zum Wecken');
+    // Zweiunddreissig Kilobyte statt des einen Bytes von frueher: Fuer ein
+    // Byte muss die Box die Platte kaum anfassen, und ein Kopf ohne Tondaten
+    // hat siebzehnmal "alles gut" gemeldet, waehrend der Echo scheiterte.
+    assert.equal(box.weckkopf.Range, 'bytes=0-32767', 'der Weckruf holt echte Tondaten');
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('ein Kopf ohne Tondaten ist kein Ja', async () => {
+  // **Der teuerste Irrtum dieser Fehlersuche.** Im Log stand siebzehnmal
+  //
+  //   Datei vor dem naechsten Anlauf angetippt: HTTP 206, audio/mpeg nach 597 ms
+  //
+  // und siebzehnmal scheiterte der Echo an genau dieser Adresse. Gemessen war
+  // aber nur der Kopf: Fuer das eine Byte von frueher musste die Box nichts
+  // von der Platte holen. Eine Probe, die "alles gut" meldet, ohne je ein
+  // Stueck Ton gesehen zu haben, schickt die naechste Suche in die Irre.
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa', 'cccccccccccccccc', 'kopfOhneTon');
+  try {
+    const antwort = await weckeStream(boxTitel(1, 'aaaaaaaaaaaaaaaa'), 600);
+    assert.equal(antwort.ok, false, 'ohne Tondaten kein Ja');
+    // Und trotzdem keine Absage: So sieht eine anlaufende Platte aus, und
+    // deswegen gibt es den Weckruf ueberhaupt.
+    assert.equal(antwort.endgueltig, false);
+    assert.match(antwort.kurz, /keine Tondaten/);
+  } finally {
+    box.zurueck();
+  }
+});
+
+test('gelesene Tondaten stehen in der Logzeile', async () => {
+  const box = boxAmDraht('aaaaaaaaaaaaaaaa');
+  try {
+    const antwort = await weckeStream(boxTitel(1, 'aaaaaaaaaaaaaaaa'), 600);
+    assert.equal(antwort.ok, true);
+    assert.equal(antwort.bytes, 64, 'so viel hat das Doppel herausgegeben');
+    assert.match(antwort.kurz, /Kopf nach \d+ ms/, 'die Zeit bis zum Kopf steht getrennt');
   } finally {
     box.zurueck();
   }
