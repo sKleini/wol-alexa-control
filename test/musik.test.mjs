@@ -2496,3 +2496,60 @@ test('/api/manage?verlauf=1 gibt die Eintraege heraus, neueste zuerst', async ()
   assert.equal(res.body.eintraege.length, 2);
   assert.equal(res.body.eintraege[0].zeit, 2, 'neueste zuerst');
 });
+
+test('der Pruef-Knopf fasst die Box nicht an, waehrend gespielt wird', async () => {
+  // **Gemessen, nicht vermutet:** Acht Leseproben im Sekundentakt haben die
+  // Box verstopft - die neunte bekam ihre 32 KB erst dreieinhalb Minuten
+  // spaeter, und als danach der naechste Titel gebraucht wurde, war sie
+  // immer noch dicht. Der Knopf hat die Wiedergabe beendet, die er pruefen
+  // sollte.
+  const fritzPl = {
+    name: 'Lottchen',
+    quelle: { typ: 'fritz', link: 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fbb2016f4f' },
+    titel: [{ url: 'https://app.vercel.app/api/skill?ton=x', name: '1' }],
+  };
+  const redis = redisMitListe({ [REDIS_KEY]: [fritzPl] });
+  redis.speicher.musik_ton_laeuft = '1758440000000-abcdef';
+
+  const echt = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('die Box haette nicht angefasst werden duerfen'); };
+  try {
+    const res = antwortFaenger();
+    await handleManage(
+      { method: 'GET', query: { type: 'playlists', pruefen: '1', name: 'Lottchen' } }, res, redis,
+    );
+    assert.ok(res.body.gesperrt, 'der Knopf sagt, warum er wartet');
+    assert.deepEqual(res.body.ergebnisse, [], 'und hat nichts geholt');
+  } finally {
+    globalThis.fetch = echt;
+  }
+});
+
+test('ohne laufende Lieferung prueft der Knopf wie bisher', async () => {
+  const fritzPl = {
+    name: 'Lottchen',
+    quelle: { typ: 'fritz', link: 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fbb2016f4f' },
+    titel: [{ url: 'https://203.0.113.10/api/skill?ton=x', name: '1' }],
+  };
+  const redis = redisMitListe({ [REDIS_KEY]: [fritzPl] });
+
+  const echt = globalThis.fetch;
+  let geholt = 0;
+  globalThis.fetch = async () => {
+    geholt += 1;
+    return new Response(Buffer.alloc(32768), {
+      status: 206,
+      headers: { 'content-type': 'audio/mpeg', 'content-range': 'bytes 0-32767/1000000' },
+    });
+  };
+  try {
+    const res = antwortFaenger();
+    await handleManage(
+      { method: 'GET', query: { type: 'playlists', pruefen: '1', name: 'Lottchen' } }, res, redis,
+    );
+    assert.equal(res.body.gesperrt, undefined, 'keine Sperre');
+    assert.equal(geholt, 1, 'und der Titel wurde geprueft');
+  } finally {
+    globalThis.fetch = echt;
+  }
+});
