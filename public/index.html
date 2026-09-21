@@ -89,6 +89,15 @@
         details.hint > summary::before { content: '\25b8'; transition: transform 0.2s; }
         details.hint[open] > summary::before { transform: rotate(90deg); }
         details.hint > .hint-body { margin-top: 10px; }
+        /* Der Tonzaehler ist zugleich sein eigener Auffrisch-Knopf: Die Zahl
+           kommt live aus Redis, und wer sie liest, will genau dann den
+           aktuellen Stand. Die ID-Regel schlaegt das [hidden] des Browsers,
+           deshalb steht das Verstecken hier noch einmal ausdruecklich. */
+        #playlist-ton { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; transition: color 0.2s, background 0.2s; }
+        #playlist-ton[hidden] { display: none; }
+        #playlist-ton:hover, #playlist-ton:focus-visible { color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.07); }
+        #playlist-ton:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+        #playlist-ton > i { flex: none; opacity: 0.7; }
         .form-status { font-size: 0.85rem; margin-top: 10px; min-height: 1.2em; }
         .form-status.error { color: #ff8080; }
         .form-status.ok { color: #7dffb3; }
@@ -260,7 +269,7 @@
             <div class="device-list" id="playlist-list">
                 <!-- Playlists loaded here -->
             </div>
-            <div class="hint" id="playlist-ton" hidden></div>
+            <div class="hint" id="playlist-ton" role="button" tabindex="0" aria-live="polite" title="Click to refresh" hidden></div>
             <details id="playlist-verlauf" hidden style="margin-top: 10px;">
                 <summary class="hint" style="cursor: pointer;">Last fetches &amp; player events</summary>
                 <div style="display: flex; gap: 8px; padding-top: 8px;">
@@ -489,18 +498,59 @@
             el.className = 'form-status ' + kind;
         }
 
+        // Laeuft gerade ein Abruf? Dann bringt ein zweiter Klick nichts ausser
+        // einer zweiten Antwort, die die erste ueberholen koennte.
+        let tonLaeuft = false;
+
+        // Zahl und Symbol in einem Zug. Kein innerHTML: Die Menge kommt zwar
+        // aus der eigenen API, aber im Rest dieser Datei wird jeder fremde
+        // Wert als Text gesetzt (siehe `esc` weiter oben), und ein Sonderfall
+        // waere der Anfang der Ausnahmen.
+        function tonZeile(el, text, symbol) {
+            const wort = document.createElement('span');
+            wort.textContent = text;
+            const icon = document.createElement('i');
+            icon.className = 'fas ' + symbol;
+            icon.setAttribute('aria-hidden', 'true');
+            el.replaceChildren(wort, icon);
+        }
+
         // Wie viel Ton in diesem Monat durch die App gelaufen ist. Die Zahl
         // steht hier, weil sie die einzige offene Frage dieses Weges
         // beantwortet: Der Ton einer FRITZ!NAS-Freigabe laeuft ueber den
         // Vercel-Tarif, und geschaetzt hat das niemandem geholfen.
-        async function zeigeTonZaehler() {
+        // Sie ist zugleich der Knopf, der sie auffrischt (`manuell`): Die Zahl
+        // kommt live aus Redis, wurde aber nur beim Rendern der Playlists
+        // geholt - nach einem Hoerspiel half bisher nur ein Neuladen.
+        async function zeigeTonZaehler(manuell = false) {
             const el = document.getElementById('playlist-ton');
-            const stand = await apiRequest('GET', null, '?type=playlists&ton=1');
-            if (!stand || typeof stand.bytes !== 'number') { el.hidden = true; return; }
+            if (tonLaeuft) return;
+            tonLaeuft = true;
+            // Beim Klick bleibt die alte Zahl stehen und das Symbol dreht
+            // sich: Ein Kasten, der erst leer wird und dann wieder dasselbe
+            // zeigt, sieht aus wie ein Fehler.
+            if (manuell) {
+                el.hidden = false;
+                tonZeile(el, el.dataset.text || 'Refreshing…', 'fa-arrows-rotate fa-spin');
+            }
+            let stand = null;
+            try {
+                stand = await apiRequest('GET', null, '?type=playlists&ton=1');
+            } catch { stand = null; }
+            tonLaeuft = false;
+            if (!stand || typeof stand.bytes !== 'number') {
+                // Ungefragt geladen und nichts da: weg damit. Nach einem Klick
+                // dagegen bleibt der Kasten stehen - wer selbst nachgesehen
+                // hat, braucht eine Antwort und keinen leeren Platz.
+                if (!manuell) { el.hidden = true; return; }
+                tonZeile(el, 'Could not refresh — click to try again.', 'fa-arrows-rotate');
+                return;
+            }
             const monat = new Date().toLocaleDateString('en', { month: 'long', year: 'numeric' });
-            el.textContent = stand.budget
+            el.dataset.text = stand.budget
                 ? `Streamed through this app in ${monat}: ${stand.lesbar} of ${stand.budgetLesbar} (FRITZ!NAS playlists only).`
                 : `Streamed through this app in ${monat}: ${stand.lesbar} (FRITZ!NAS playlists only).`;
+            tonZeile(el, el.dataset.text, 'fa-arrows-rotate');
             el.hidden = false;
         }
 
@@ -817,6 +867,22 @@
         // ist noch nichts passiert. Refresh holt dieselbe Liste noch einmal,
         // ohne die Seite neu zu bauen: Das aufgeklappte Log bleibt offen, und
         // die halb ausgefuellte Playlist im Formular daneben bleibt stehen.
+        // **Der Zaehler ist sein eigener Knopf.** Die Zahl kommt live aus
+        // Redis, aber sie wurde bisher nur beim Rendern der Playlists geholt -
+        // wer wissen wollte, wie viel nach dem Hoerspiel von eben
+        // durchgelaufen ist, musste die Seite neu laden. Ein Klick auf die
+        // Zeile holt jetzt den aktuellen Stand.
+        const tonZaehler = document.getElementById('playlist-ton');
+        tonZaehler.addEventListener('click', () => zeigeTonZaehler(true));
+        // role="button" verspricht Tastaturbedienung, also muss sie auch da
+        // sein: Enter und Leertaste tun dasselbe wie der Klick, und die
+        // Leertaste darf dabei nicht die Seite scrollen.
+        tonZaehler.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            zeigeTonZaehler(true);
+        });
+
         document.getElementById('playlist-verlauf-neu').addEventListener('click', async (e) => {
             const btn = e.currentTarget;
             const vorher = btn.innerHTML;
