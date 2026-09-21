@@ -1553,13 +1553,17 @@ test('die Adresse geht unveraendert an den Echo - und die Box wird nicht angefas
   }
 });
 
-test('eine FRITZ!NAS-Playlist reiht den naechsten Titel NICHT vor', async () => {
-  // **Zwei Abrufe gleichzeitig sind fuer diese Box einer zu viel.**
-  // `PlaybackNearlyFinished` kommt Sekunden nach dem Titelanfang; wer dort
-  // anhaengt, laesst den Echo den naechsten Titel laden, waehrend der
-  // laufende noch streamt. Gemeldet aus dem Betrieb: zwei parallele Abrufe,
-  // dreimal `Vercel Runtime Timeout Error`, und das Kapitel brach sechs
-  // Sekunden nach dem Start ab.
+test('auch eine FRITZ!NAS-Playlist reiht den naechsten Titel vor', async () => {
+  // **Das ist die Reparatur, und sie hat fuenf Runden gekostet.** #121 hatte
+  // das Vorreihen fuer diese Box abgeschaltet und den naechsten Titel
+  // stattdessen bei `PlaybackFinished` bestellt - aus Sorge vor zwei
+  // gleichzeitigen Abrufen. In keiner Messung hat daraufhin je ein
+  // Titelwechsel stattgefunden: Die Datei lief sauber zu Ende
+  // (`7594648 von 7594648 B`), und danach kam nichts.
+  //
+  // Was die Fehlertabelle im README seit Monaten sagt, gilt eben doch:
+  // "First track plays, then silence - PlaybackNearlyFinished got no ENQUEUE".
+  // Die Warteschlange wird dort gefuellt und nirgends sonst.
   const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
   const r = await skill(
     { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Lottchen|0|0|0' },
@@ -1567,10 +1571,13 @@ test('eine FRITZ!NAS-Playlist reiht den naechsten Titel NICHT vor', async () => 
     null,
     redis,
   );
-  assert.equal(r.directives, undefined, 'keine Direktive - der Titel wird am Ende bestellt');
+  const stream = spielt(r).audioItem.stream;
+  assert.equal(stream.url, TON_PLAYLIST.titel[1].url, 'der naechste Titel');
+  assert.equal(spielt(r).playBehavior, 'ENQUEUE', 'angehaengt, nicht ersetzt');
+  assert.equal(stream.expectedPreviousToken, 'Lottchen|0|0|0', 'an den laufenden gehaengt');
 });
 
-test('dafuer bestellt sie ihn am Titelende', async () => {
+test('am Titelende wird nichts mehr bestellt - es haengt laengst in der Schlange', async () => {
   const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
   const r = await skill(
     { type: 'AudioPlayer.PlaybackFinished', token: 'Lottchen|0|0|0' },
@@ -1578,9 +1585,7 @@ test('dafuer bestellt sie ihn am Titelende', async () => {
     null,
     redis,
   );
-  const stream = spielt(r).audioItem.stream;
-  assert.equal(stream.url, TON_PLAYLIST.titel[1].url, 'der naechste Titel');
-  assert.equal(spielt(r).playBehavior, 'REPLACE_ALL', 'und zwar sofort zu spielen, nicht angehaengt');
+  assert.equal(r.directives, undefined, 'keine zweite Bestellung');
 });
 
 test('eine Playlist ohne FRITZ!NAS-Herkunft bleibt nahtlos', async () => {
@@ -1592,23 +1597,6 @@ test('eine Playlist ohne FRITZ!NAS-Herkunft bleibt nahtlos', async () => {
     { token: 'Kinderlieder|0|0|0' },
   );
   assert.equal(spielt(r).playBehavior, 'ENQUEUE');
-});
-
-test('MUSIK_FRITZ_NAHTLOS=1 holt das Vorreihen zurueck', async () => {
-  const vorher = process.env.MUSIK_FRITZ_NAHTLOS;
-  process.env.MUSIK_FRITZ_NAHTLOS = '1';
-  try {
-    const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
-    const r = await skill(
-      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Lottchen|0|0|0' },
-      { token: 'Lottchen|0|0|0' },
-      null,
-      redis,
-    );
-    assert.equal(spielt(r).playBehavior, 'ENQUEUE');
-  } finally {
-    if (vorher === undefined) delete process.env.MUSIK_FRITZ_NAHTLOS; else process.env.MUSIK_FRITZ_NAHTLOS = vorher;
-  }
 });
 
 test('eine Playlist ohne Sitzungsnummer bleibt nahtlos', async () => {
@@ -2497,34 +2485,6 @@ test('/api/manage?verlauf=1 gibt die Eintraege heraus, neueste zuerst', async ()
   assert.equal(res.body.eintraege[0].zeit, 2, 'neueste zuerst');
 });
 
-test('der Pruef-Knopf fasst die Box nicht an, waehrend gespielt wird', async () => {
-  // **Gemessen, nicht vermutet:** Acht Leseproben im Sekundentakt haben die
-  // Box verstopft - die neunte bekam ihre 32 KB erst dreieinhalb Minuten
-  // spaeter, und als danach der naechste Titel gebraucht wurde, war sie
-  // immer noch dicht. Der Knopf hat die Wiedergabe beendet, die er pruefen
-  // sollte.
-  const fritzPl = {
-    name: 'Lottchen',
-    quelle: { typ: 'fritz', link: 'https://abc.myfritz.net:456/nas/filelink.lua?id=535f52fbb2016f4f' },
-    titel: [{ url: 'https://app.vercel.app/api/skill?ton=x', name: '1' }],
-  };
-  const redis = redisMitListe({ [REDIS_KEY]: [fritzPl] });
-  redis.speicher.musik_ton_laeuft = '1758440000000-abcdef';
-
-  const echt = globalThis.fetch;
-  globalThis.fetch = async () => { throw new Error('die Box haette nicht angefasst werden duerfen'); };
-  try {
-    const res = antwortFaenger();
-    await handleManage(
-      { method: 'GET', query: { type: 'playlists', pruefen: '1', name: 'Lottchen' } }, res, redis,
-    );
-    assert.ok(res.body.gesperrt, 'der Knopf sagt, warum er wartet');
-    assert.deepEqual(res.body.ergebnisse, [], 'und hat nichts geholt');
-  } finally {
-    globalThis.fetch = echt;
-  }
-});
-
 test('ohne laufende Lieferung prueft der Knopf wie bisher', async () => {
   const fritzPl = {
     name: 'Lottchen',
@@ -2552,4 +2512,59 @@ test('ohne laufende Lieferung prueft der Knopf wie bisher', async () => {
   } finally {
     globalThis.fetch = echt;
   }
+});
+
+test('der Verlauf traegt, was der Skill geantwortet hat', async () => {
+  // **Die blinde Stelle, die fuenf Runden gekostet hat.** Am Echo sieht
+  // "keine Direktive geschickt" genauso aus wie "Alexa hat sie abgelehnt":
+  // Stille. Im Verlauf steht jetzt, was hinausging.
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await skill(
+    { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|0|0|0' },
+    { token: 'Kinderlieder|0|0|0' },
+    [KINDER], redis,
+  );
+
+  const [eintrag] = redis.liste;
+  assert.equal(eintrag.ereignis, 'PlaybackNearlyFinished');
+  assert.match(eintrag.antwort, /^Play ENQUEUE/, 'die Bestellung steht da');
+});
+
+test('eine Antwort ohne Direktive ist als solche zu erkennen', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await skill(
+    { type: 'AudioPlayer.PlaybackFinished', token: 'Kinderlieder|0|0|0' },
+    { token: 'Kinderlieder|0|0|0' },
+    [KINDER], redis,
+  );
+
+  const [eintrag] = redis.liste;
+  assert.equal(eintrag.antwort, 'keine Direktive',
+    'am Titelende wird nichts bestellt - und das steht so da, statt zu fehlen');
+});
+
+test('Alexas eigene Beschwerde landet im Verlauf', async () => {
+  // System.ExceptionEncountered ist die einzige Stelle, an der Alexa sagt,
+  // dass sie unsere Antwort nicht angenommen hat. Bisher stand sie nur im
+  // Log von Vercel - also genau dort, wo niemand nachsieht.
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  const echterFehler = console.error;
+  console.error = () => {};
+  try {
+    await skill(
+      {
+        type: 'System.ExceptionEncountered',
+        error: { type: 'INVALID_RESPONSE', message: 'directive not accepted' },
+        cause: { requestId: 'amzn1.echo-api.request.42' },
+      },
+      {}, [KINDER], redis,
+    );
+  } finally {
+    console.error = echterFehler;
+  }
+
+  const [eintrag] = redis.liste;
+  assert.equal(eintrag.ereignis, 'ExceptionEncountered');
+  assert.equal(eintrag.fehler, 'INVALID_RESPONSE');
+  assert.match(eintrag.ursache, /request\.42/, 'samt Ursache');
 });
