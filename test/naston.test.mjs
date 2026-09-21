@@ -14,6 +14,7 @@ import {
   tonTokenLesen,
   tonUrl,
   alsTonUrl,
+  frischeAdresse,
   eigeneBasis,
   bereich,
   antwortKopf,
@@ -837,4 +838,124 @@ test('steht der Merkzettel, meldet sich auch der zweite Anlauf nicht an', async 
     { erzwingen: false, ohneAnmeldung: true },
     { erzwingen: true, ohneAnmeldung: true },
   ], 'auch der erzwungene Anlauf darf die Box nicht anmelden, solange geliefert wird');
+});
+
+// --- Eine Adresse, die der Abspieler noch nicht kennt ----------------------
+//
+// **Warum sie sein muss.** Zwei Logs, fuenf Starts, drei davon stumm - und
+// stumm blieben genau die, bei denen der Echo auf eben diesem Stueck pausiert
+// war und dieselbe Adresse noch einmal bekam. Ein anderer Token allein hat
+// nicht gereicht (#137); seither traegt jede Direktive auch eine eigene
+// Adresse. Die Datei dahinter ist dieselbe.
+
+test('frischeAdresse haengt ein n an - aber nur an die eigenen Adressen', () => {
+  const eigen = 'https://meine-app.vercel.app/api/skill?ton=abc.def';
+  assert.equal(frischeAdresse(eigen, 1700), `${eigen}&n=1700`);
+
+  // Zweimal angefasst heisst nicht zweimal angehaengt: Sonst waechst die
+  // Adresse mit jedem Start, bis Alexas 1024 Zeichen nicht mehr reichen.
+  assert.equal(frischeAdresse(`${eigen}&n=1700`, 1800), `${eigen}&n=1800`);
+
+  // Eine fremde MP3 bleibt, wie sie ist - was ein anderer Server mit einem
+  // unbekannten Parameter macht, weiss hier niemand. Erkannt wird die eigene
+  // Adresse an ihrer Form (`/api/skill?ton=`), nicht am Host: Den kennt diese
+  // Funktion nicht, und eine fremde Box mit genau diesem Pfad und genau
+  // diesem Parameter gibt es nicht.
+  assert.equal(frischeAdresse('https://example.org/k/01.mp3', 1700), 'https://example.org/k/01.mp3');
+  assert.equal(frischeAdresse('https://example.org/musik.mp3?ton=x', 1700), 'https://example.org/musik.mp3?ton=x');
+  assert.equal(frischeAdresse('', 1700), '');
+  assert.equal(frischeAdresse(undefined, 1700), undefined);
+});
+
+test('die frische Adresse gibt dieselbe Datei heraus', async () => {
+  // Die Gegenprobe, ohne die der Kniff eine Wette waere: Der Endpunkt liest
+  // nur `ton`, die Unterschrift deckt allein den Token ab - das `n` darf ihm
+  // also nichts ausmachen.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const adresse = new URL(frischeAdresse(`https://app.example/api/skill?ton=${encodeURIComponent(token)}`, 1700));
+  assert.equal(adresse.searchParams.get('n'), '1700', 'das n steht dran');
+
+  const res = attrappeRes();
+  await mitAbruf(() => new Response(Buffer.alloc(512, 7), {
+    status: 206,
+    headers: { 'content-type': 'audio/mpeg', 'content-length': '512', 'content-range': 'bytes 0-511/512' },
+  }), async () => {
+    const lauf = nasTon(
+      { method: 'GET', headers: { range: 'bytes=0-' } }, res, attrappeRedis(),
+      String(adresse.searchParams.get('ton')), async () => 'aabbccddeeff0011',
+    );
+    await Promise.all([lauf, fertig(res)]);
+  });
+  assert.equal(res.statusCode, 206, 'derselbe Ton wie ohne n');
+  assert.equal(Buffer.concat(res.stuecke).length, 512);
+});
+
+test('hoert der Echo auf zu lesen, ohne aufzulegen, wird die Lieferung beendet', async () => {
+  // **Der Zustand aus dem Log.** Ein pausierter Echo schliesst die Verbindung
+  // nicht, er hoert nur auf zu lesen - `close` kommt also nie, und ohne diese
+  // Wache liefe die Lieferung bis zur Uhr der Function weiter, auf genau der
+  // Instanz, die Alexa in acht Sekunden antworten muss.
+  const vorherFrist = process.env.MUSIK_TON_STILLSTAND_MS;
+  process.env.MUSIK_TON_STILLSTAND_MS = '1000';
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const begonnen = Date.now();
+
+  // Die Box gibt ein Stueck heraus und schweigt dann fuer immer - das ist von
+  // hier aus nicht zu unterscheiden von einem Abspieler, der nichts mehr
+  // abnimmt, und beides soll dieselbe Folge haben.
+  const verstummt = new ReadableStream({
+    start(steuerung) { steuerung.enqueue(new Uint8Array(1024).fill(3)); },
+    pull() { return new Promise(() => {}); },
+  });
+
+  try {
+    await mitAbruf(() => new Response(verstummt, {
+      status: 200,
+      headers: { 'content-type': 'audio/mpeg', 'content-length': String(9 * 1024 * 1024) },
+    }), async () => {
+      await nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+    });
+  } finally {
+    if (vorherFrist === undefined) delete process.env.MUSIK_TON_STILLSTAND_MS;
+    else process.env.MUSIK_TON_STILLSTAND_MS = vorherFrist;
+  }
+
+  const gebraucht = Date.now() - begonnen;
+  assert.ok(gebraucht < 5000, `nicht haengen geblieben (${gebraucht} ms)`);
+  assert.ok(gebraucht >= 1000, `und nicht zu frueh abgebrochen (${gebraucht} ms)`);
+  assert.equal(Buffer.concat(res.stuecke).length, 1024, 'was da war, ist hinaus');
+});
+
+test('ohne Frist bleibt die Wache aus', async () => {
+  // Der Notausgang muss einer sein: `MUSIK_TON_STILLSTAND_MS=0` schaltet sie
+  // ab, ohne Deploy - fuer den Fall, dass sie einen Abspieler trifft, der in
+  // sehr langen Schueben liest.
+  const vorherFrist = process.env.MUSIK_TON_STILLSTAND_MS;
+  process.env.MUSIK_TON_STILLSTAND_MS = '0';
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  let offen;
+  const stockt = new ReadableStream({
+    start(steuerung) { steuerung.enqueue(new Uint8Array(64).fill(1)); },
+    pull(steuerung) { return new Promise((a) => { offen = () => { steuerung.close(); a(); }; }); },
+  });
+
+  try {
+    await mitAbruf(() => new Response(stockt, {
+      status: 200,
+      headers: { 'content-type': 'audio/mpeg', 'content-length': '64' },
+    }), async () => {
+      const lauf = nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+      // Laenger als die Vorgabe-Untergrenze warten und dann erst weiterreichen:
+      // Mit Wache waere hier laengst abgebrochen worden.
+      setTimeout(() => offen?.(), 1500);
+      await Promise.all([lauf, fertig(res)]);
+    });
+  } finally {
+    if (vorherFrist === undefined) delete process.env.MUSIK_TON_STILLSTAND_MS;
+    else process.env.MUSIK_TON_STILLSTAND_MS = vorherFrist;
+  }
+
+  assert.equal(Buffer.concat(res.stuecke).length, 64, 'die Lieferung lief bis zum Schluss');
 });
