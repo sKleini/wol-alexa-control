@@ -31,6 +31,8 @@ import {
   titelAn,
   neuerSeed,
   einstieg,
+  einstiegNachGangart,
+  standNichtZurueck,
   groesseAusContentRange,
   lesbareGroesse,
   spieldauerSekunden,
@@ -58,6 +60,10 @@ function redisMit(daten = {}) {
     speicher,
     async get(key) { return speicher[key] ?? null; },
     async set(key, wert) { speicher[key] = wert; },
+    // Der Verlauf interessiert hier nicht, soll aber auch nicht in jedem
+    // zweiten Test eine Warnung ausloesen: Wer ihn pruefen will, nimmt
+    // `redisMitListe` weiter unten.
+    async lpush() {}, async ltrim() {}, async expire() {},
   };
 }
 
@@ -93,12 +99,33 @@ const EINZEL = { name: 'Solo', titel: [{ url: 'https://example.org/solo.mp3', na
 const EINMAL = { name: 'Einmal', wiederholen: false, titel: KINDER.titel };
 const STILL = { name: 'Leise', ansage: false, titel: KINDER.titel };
 
-function anfrage(request, { token, offset = 0, geraet } = {}) {
+/**
+ * Die Anfrage, wie sie wirklich ankommt - mit allem, was gefehlt hat.
+ *
+ * **Die Sitzung stand hier nirgends, und genau das hat einen Fehler
+ * durchgelassen.** Ein LaunchRequest und ein gesprochener Intent im Dialog
+ * tragen ein `session`-Objekt; "Stopp" oder "weiter" waehrend laufender Musik
+ * tragen keines. Wovon die Antwort dann nichts enthalten darf, steht in
+ * `hatSitzung` in lib/musik.js - ohne diese Unterscheidung sahen alle Tests
+ * aus wie ein Dialog, und die Antwort ohne Sitzung wurde nie geprueft.
+ *
+ * `aktivitaet` und `ohneOffset` sind der andere gemeldete Zustand: Das Geraet
+ * traegt den Token seines letzten Stroms noch, die Stelle darin aber nicht
+ * mehr - null, oder gar kein Feld.
+ */
+function anfrage(request, { token, offset = 0, geraet, ohneSitzung = false, aktivitaet = 'PLAYING', ohneOffset = false } = {}) {
   const body = {
     context: { System: { application: { applicationId: 'amzn1.ask.skill.musik' } } },
     request: { timestamp: new Date().toISOString(), ...request },
   };
-  if (token) body.context.AudioPlayer = { token, offsetInMilliseconds: offset, playerActivity: 'PLAYING' };
+  const imDialog = request.type === 'IntentRequest' || request.type === 'LaunchRequest';
+  if (imDialog && !ohneSitzung) {
+    body.session = { new: true, sessionId: 'amzn1.echo-api.session.test', application: { applicationId: 'amzn1.ask.skill.musik' } };
+  }
+  if (token) {
+    body.context.AudioPlayer = { token, playerActivity: aktivitaet };
+    if (!ohneOffset) body.context.AudioPlayer.offsetInMilliseconds = offset;
+  }
   // `geraet` ist die Liste der Schnittstellen, die das Geraet meldet. Ohne sie
   // steht in der Anfrage kein `device` - so wie bei allen anderen Tests hier,
   // und so kommen sie auch weiterhin ans Abspielen.
@@ -764,13 +791,18 @@ test('Ohne Wiederholung stoppt naechster Titel am Ende und bleibt am Anfang steh
 
 // --- Das Mikrofon nach dem Befehl -------------------------------------------
 
-test('Jeder Sprachbefehl schliesst die Sitzung', async () => {
+test('Jeder Sprachbefehl schliesst die Sitzung - wenn es eine gibt', async () => {
   // **Warum das eine eigene Zeile braucht.** Ein fehlendes `shouldEndSession`
   // heisst fuer Alexa nicht "beenden", sondern "lass es, wie es ist" - und
   // nach dem zweistufigen Aufruf ("oeffne meine Plattenkiste" … "spiele
   // Kinderlieder") steht es offen. Die Antworten hier tragen keine Sprache und
   // sahen deshalb harmlos aus; in Wahrheit horchte der Echo nach jedem
   // erledigten Befehl noch einmal.
+  //
+  // **Der Nachsatz im Namen ist die Korrektur.** Hier stand die Regel ohne
+  // ihre Grenze, und der Helfer schickte nie eine Sitzung mit - deshalb sah
+  // niemand, dass dieselben Befehle auch ohne eine ankommen. Was dann gilt,
+  // steht im Block darunter.
   const befehle = [
     'AMAZON.PauseIntent',
     'AMAZON.StopIntent',
@@ -813,6 +845,93 @@ test('Knoepfe und AudioPlayer-Ereignisse tragen kein shouldEndSession', async ()
   for (const request of ereignisse) {
     const r = await skill(request, { token: 'Kinderlieder|1|0|0', offset: 5000 });
     assert.equal(r.shouldEndSession, undefined, request.type);
+  }
+});
+
+// --- Und ohne Sitzung gibt es nichts zu schliessen ---------------------------
+//
+// **Gemeldet:** Auf "Alexa aus", "Alexa Stopp" und "Alexa Pause" antwortete
+// Alexa mit "Der angeforderte Skill hat keine gueltige Antwort uebermittelt".
+// Genau diese drei sagt man, waehrend Musik laeuft - also ohne offenen Dialog,
+// und damit ohne `session` in der Anfrage. Die Antwort trug trotzdem
+// `shouldEndSession` (bei Stopp/Pause/Abbrechen sogar hart verdrahtet), und
+// das macht sie ungueltig: Alexa verwarf sie ganz, der Befehl verpuffte.
+
+test('Ein Stopp ohne Sitzung traegt kein shouldEndSession', async () => {
+  const r = await skill(intent('AMAZON.StopIntent'), { token: 'Kinderlieder|1|0|0', offset: 5000, ohneSitzung: true });
+  assert.deepEqual(r.directives, [{ type: 'AudioPlayer.Stop' }], 'die Direktive bleibt, was sie war');
+  assert.equal('shouldEndSession' in r, false, 'aber das Feld hat dort nichts verloren');
+});
+
+test('Pause und Abbrechen ohne Sitzung genauso', async () => {
+  for (const name of ['AMAZON.PauseIntent', 'AMAZON.CancelIntent']) {
+    const r = await skill(intent(name), { token: 'Kinderlieder|1|0|0', offset: 5000, ohneSitzung: true });
+    assert.deepEqual(r.directives, [{ type: 'AudioPlayer.Stop' }], name);
+    assert.equal('shouldEndSession' in r, false, name);
+  }
+});
+
+test('Auch "weiter" und die Titelsprünge tragen ohne Sitzung keines', async () => {
+  // Dieselbe Luecke, nur faellt sie dort seltener auf: Auch diese Befehle
+  // kommen ohne Dialog an. Die Reparatur sitzt deshalb in `ausSprache` und
+  // nicht in drei Zweigen.
+  for (const name of ['AMAZON.ResumeIntent', 'AMAZON.NextIntent', 'AMAZON.PreviousIntent', 'AMAZON.StartOverIntent']) {
+    const r = await skill(intent(name), { token: 'Kinderlieder|1|0|0', offset: 30000, ohneSitzung: true });
+    assert.equal('shouldEndSession' in r, false, name);
+    assert.ok(r.directives?.length, `${name}: die Direktive geht trotzdem hinaus`);
+  }
+});
+
+test('Ohne Sitzung wird nicht gesprochen', async () => {
+  // Sprache und Reprompt sind dort genauso verboten. Der Satz ginge nicht nur
+  // verloren, er riss die ganze Antwort mit - also geht er ins Log, und die
+  // Antwort bleibt still und gueltig.
+  for (const name of ['AMAZON.RepeatIntent', 'AMAZON.LoopOnIntent', 'AMAZON.ShuffleOnIntent']) {
+    const r = await skill(intent(name), { ohneSitzung: true });
+    assert.equal(r.outputSpeech, undefined, name);
+    assert.equal(r.reprompt, undefined, name);
+    assert.equal('shouldEndSession' in r, false, name);
+  }
+});
+
+test('Ohne Sitzung spielt "spiele ..." trotzdem', async () => {
+  // Der Nebengewinn: Die Ansage faellt weg, die Musik nicht. Vorher waere die
+  // ganze Antwort an ihrem eigenen Ansagesatz gescheitert.
+  const r = await skill(sucheIntent('Kinderlieder'), { ohneSitzung: true });
+  assert.equal(spielt(r).audioItem.stream.token, 'Kinderlieder|0|0|0');
+  assert.equal(r.outputSpeech, undefined, 'die Ansage bleibt stumm');
+  assert.equal('shouldEndSession' in r, false);
+  assert.ok(!r.directives.some(d => String(d.type).startsWith('Dialog.')), 'und die dynamischen Werte bleiben draussen');
+});
+
+test('Mit Sitzung bleibt alles, wie es war', async () => {
+  // Die Gegenprobe, damit die Reparatur nicht die Zusage von oben aushebelt.
+  const stopp = await skill(intent('AMAZON.StopIntent'), { token: 'Kinderlieder|1|0|0', offset: 5000 });
+  assert.equal(stopp.shouldEndSession, true);
+  const ansage = await skill(sucheIntent('Kinderlieder'));
+  assert.match(ansage.outputSpeech.text, /Ich spiele Kinderlieder/);
+});
+
+test('Keine einzige Antwort ohne Sitzung traegt ein verbotenes Feld', async () => {
+  // **Die Probe, die den Fehler von Anfang an gefunden haette.** Sie fragt
+  // nicht einzelne Zweige ab, sondern alle Intents auf einmal: Ohne Sitzung
+  // darf keine Antwort Sprache, Reprompt oder shouldEndSession tragen - und
+  // mit Sitzung muss sie sie schliessen.
+  const alle = [
+    'PlayPlaylistIntent', 'ListPlaylistsIntent', 'AMAZON.PauseIntent', 'AMAZON.StopIntent',
+    'AMAZON.CancelIntent', 'AMAZON.ResumeIntent', 'AMAZON.NextIntent', 'AMAZON.PreviousIntent',
+    'AMAZON.StartOverIntent', 'AMAZON.LoopOnIntent', 'AMAZON.LoopOffIntent', 'AMAZON.RepeatIntent',
+    'AMAZON.ShuffleOnIntent', 'AMAZON.ShuffleOffIntent', 'AMAZON.HelpIntent',
+    'AMAZON.NavigateHomeIntent', 'AMAZON.FallbackIntent',
+  ];
+  for (const name of alle) {
+    const ohne = await skill(intent(name), { token: 'Kinderlieder|1|0|0', offset: 5000, ohneSitzung: true });
+    assert.equal(ohne.outputSpeech, undefined, `${name}: keine Sprache ohne Sitzung`);
+    assert.equal(ohne.reprompt, undefined, `${name}: kein Reprompt ohne Sitzung`);
+    assert.equal('shouldEndSession' in ohne, false, `${name}: kein shouldEndSession ohne Sitzung`);
+
+    const mit = await skill(intent(name), { token: 'Kinderlieder|1|0|0', offset: 5000 });
+    assert.equal(typeof mit.shouldEndSession, 'boolean', `${name}: mit Sitzung wird sie entschieden`);
   }
 });
 
@@ -1019,7 +1138,9 @@ test('Ein Stopp am selben Titel schreibt den genauen Offset weiter', async () =>
 
 test('PlaybackStarted setzt den Stand auch zurueck - der Titel laeuft ja', async () => {
   // Die Gegenprobe zum Endspurt: Ein Titelanfang ist die verlaesslichste
-  // Auskunft, die es gibt, und ueberschreibt deshalb bedingungslos.
+  // Auskunft, die es gibt, und ueberschreibt deshalb auch einen Stand, der
+  // weiter vorn stand. Nur die Stelle *desselben* Titels dreht er nicht mit
+  // einer Null zurueck - siehe `standNichtZurueck`; hier ist es ein anderer.
   const redis = mitStand(ENDLOS, { position: 2, runde: 0, seed: 0, offset: 90000 });
   await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Endlos|0|1|0', offsetInMilliseconds: 0 }, {}, null, redis);
   assert.equal(redis.speicher.musik_stand['endlos'].position, 0);
@@ -1131,6 +1252,230 @@ test('Album: "weiter" ohne laufenden Stream nimmt den Titelanfang', async () => 
   const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
   assert.equal(spielt(r).audioItem.stream.token, 'Album|2|0|0');
   assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
+});
+
+// --- Sekundengenau fortsetzen: die zwei Quellen ------------------------------
+//
+// **Der gemeldete Fehler.** Eine Playlist auf *Hoerbuch* fing nach
+// "Alexa, Stopp" ... "Alexa, weiter" immer am Anfang des zuletzt gespielten
+// Titels an: Die Nummer stimmte, die Sekunde war weg. Im Dashboard stand
+//
+//   15:11:30  ECHO  PlaybackStarted  @0s  [keine Direktive]  8. Das doppelte …
+//
+// und mehr gab der Verlauf nicht her - der Befehl selbst hinterliess keine
+// Zeile. Drei Ursachen mit demselben Bild, alle hier festgenagelt: das Geraet
+// trug den Token ohne die Stelle, `weiter` fragte die Datenbank nicht, und der
+// Titelanfang deckte die gemerkte Sekunde mit einer Null zu.
+
+test('"Weiter" nimmt die gemerkte Sekunde, wenn das Geraet nur noch den Titel weiss', async () => {
+  // Genau der Bericht: derselbe Token, aber keine Stelle mehr darin - nach
+  // einem Neustart, nach dem Radio dazwischen, am naechsten Tag.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, redis);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000);
+});
+
+test('"Weiter" nimmt die gemerkte Sekunde auch ohne jede Offset-Angabe', async () => {
+  // Dasselbe, nur meldet das Geraet das Feld gar nicht. `|| 0` machte daraus
+  // stillschweigend einen Titelanfang.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', ohneOffset: true, aktivitaet: 'FINISHED' }, null, redis);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000);
+});
+
+test('"Weiter" traut dem Geraet, wenn es die groessere Stelle kennt', async () => {
+  // Die Gegenprobe, ohne die aus der Reparatur eine neue Stoerung wird: Eine
+  // alte Marke darf eine echte Pause nicht ueberstimmen.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 20000 });
+  const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 90000 }, null, redis);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 85000);
+});
+
+test('"Weiter" nimmt keine Stelle aus einem fremden Titel', async () => {
+  // Sonst finge Titel zwei bei der Stelle von Titel drei an.
+  const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 600000 });
+  const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0 }, null, redis);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
+});
+
+test('Ein durchgelaufener Stand gibt "weiter" keine Stelle mehr', async () => {
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000, fertig: true });
+  const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0 }, null, redis);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
+});
+
+test('"Weiter" gibt einer gekuerzten Playlist keinen alten Offset mit', async () => {
+  // Die Position faellt auf den Anfang zurueck - dann ist es ein anderer
+  // Titel, und die Stelle des alten hat dort nichts zu suchen.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|9|0|0', offset: 600000 }, null, redis);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|0|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
+});
+
+test('Album: nur das Geraet darf "weiter" sekundengenau machen', async () => {
+  // Die Zusage der Gangart in Testform: Eine Pause ist ueberall
+  // sekundengenau, ein spaeteres Wiederaufnehmen bei Album nicht.
+  const stand = { position: 1, runde: 0, seed: 0, offset: 47000 };
+  const pause = await skill(intent('AMAZON.ResumeIntent'), { token: 'Album|1|0|0', offset: 47000 }, null, mitStand(ALBUM, stand));
+  assert.equal(spielt(pause).audioItem.stream.offsetInMilliseconds, 42000, 'die Pause zaehlt');
+
+  const spaeter = await skill(intent('AMAZON.ResumeIntent'), { token: 'Album|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, mitStand(ALBUM, stand));
+  assert.equal(spielt(spaeter).audioItem.stream.offsetInMilliseconds, 0, 'die gemerkte Stelle nicht');
+});
+
+// --- Der Stand auf Befehl ---------------------------------------------------
+
+test('Stopp merkt die Stelle, auch wenn kein PlaybackStopped kommt', async () => {
+  // Gestoppt wird gesprochen, und diese Anfrage traegt die genaue Sekunde.
+  // Bisher wurde sie weggeworfen und allein vom Ereignis danach erwartet.
+  const redis = mitStand(HOERSPIEL);
+  const r = await skill(intent('AMAZON.StopIntent'), { token: 'Hörspiel|1|0|0', offset: 42000 }, null, redis);
+  assert.deepEqual(r.directives, [{ type: 'AudioPlayer.Stop' }], 'der Stopp bleibt, was er war');
+  assert.equal(r.shouldEndSession, true);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].position, 1);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 42000);
+});
+
+test('Der Pause-Knopf in der App merkt die Stelle genauso', async () => {
+  const redis = mitStand(HOERSPIEL);
+  const r = await skill({ type: 'PlaybackController.PauseCommandIssued' }, { token: 'Hörspiel|1|0|0', offset: 42000 }, null, redis);
+  assert.equal(r.shouldEndSession, undefined, 'am Knopf gibt es keine Sitzung zu schliessen');
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 42000);
+});
+
+test('AMAZON.PauseIntent und AMAZON.CancelIntent merken sie auch', async () => {
+  for (const name of ['AMAZON.PauseIntent', 'AMAZON.CancelIntent']) {
+    const redis = mitStand(HOERSPIEL);
+    await skill(intent(name), { token: 'Hörspiel|1|0|0', offset: 42000 }, null, redis);
+    assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 42000, name);
+  }
+});
+
+test('Ein Stopp ohne den Schalter merkt nichts', async () => {
+  const redis = redisMit({ [REDIS_KEY]: [KINDER] });
+  await skill(intent('AMAZON.StopIntent'), { token: 'Kinderlieder|1|0|0', offset: 42000 }, [KINDER], redis);
+  assert.equal(redis.speicher.musik_stand, undefined);
+});
+
+test('Ein Stopp ohne laufenden Stream schreibt nichts', async () => {
+  const redis = mitStand(HOERSPIEL);
+  await skill(intent('AMAZON.StopIntent'), {}, null, redis);
+  assert.equal(redis.speicher.musik_stand, undefined);
+});
+
+test('Ein Stopp mit altem Token schiebt den Stand nicht zurueck', async () => {
+  // Dieselbe Sperre wie beim nachklappenden PlaybackStopped, nur auf dem
+  // neuen Weg: Der Stand steht schon beim naechsten Titel.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 5000 });
+  await skill(intent('AMAZON.StopIntent'), { token: 'Hörspiel|0|0|0', offset: 42000 }, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].position, 1);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 5000);
+});
+
+test('Der Stand wird gemerkt, auch wenn das Antwortbudget schon aufgebraucht ist', async () => {
+  // **Die stille Ursache.** Der Stand stand unter demselben Budget wie die
+  // Antwort, und `standSchreiben` kehrt bei abgelaufener Frist ohne Schreiben
+  // um. Auf einer kalten Function blieb nach dem Vorlauf der Boden von 1200 ms
+  // - und genau dann ging die Stelle verloren, waehrend der letzte
+  // Titelanfang mit seiner Null stehenblieb. Jetzt wird sie hinter der
+  // Antwort geschrieben, wo kein Budget mehr laeuft.
+  // Gemessen wird mit einer Datenbank, die eine Sekunde fuer die Playlists
+  // braucht: Danach ist vom Budget (der Boden, 1200 ms) fast nichts uebrig,
+  // und die dreihundert Millisekunden fuer den Stand passen nicht mehr hinein.
+  // Das Nachspiel rechnet mit seiner eigenen Frist und schafft es.
+  const staende = {};
+  const langsam = {
+    async get(key) {
+      const wert = key === REDIS_KEY ? [HOERSPIEL] : staende;
+      const dauer = key === REDIS_KEY ? 1000 : 300;
+      return new Promise((fertig) => { setTimeout(() => fertig(wert), dauer); });
+    },
+    async set(key, wert) { if (key === 'musik_stand') Object.assign(staende, wert); },
+    async lpush() {}, async ltrim() {}, async expire() {},
+  };
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 42000 }, {}, null, langsam);
+  assert.equal(staende['hörspiel']?.offset, 42000);
+});
+
+// --- Eine Null ist keine Stelle ---------------------------------------------
+
+test('Ein Titelanfang bei null laesst die gemerkte Stelle desselben Titels stehen', async () => {
+  // Die Ratsche, die aus einem einmaligen Fehlgriff ein "immer von vorn"
+  // gemacht hat: Der misslungene Wiedereinstieg loeschte seinen eigenen Zeugen.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 0 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 600000);
+});
+
+test('Ein Titelanfang mitten im Stueck schreibt seine Stelle', async () => {
+  // Die Sperre gilt der Null, nicht der Monotonie: Ein gelungener
+  // Wiedereinstieg meldet seine Stelle, und die ist die neue Wahrheit -
+  // auch wenn sie um den Vorlauf kleiner ist als die gemerkte.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 595000 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 595000);
+});
+
+test('Ein Stopp schreibt keine Null ueber eine gemerkte Stelle', async () => {
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 42000 });
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 0 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 42000);
+});
+
+test('"Von vorn" laesst sich von der Null-Sperre nicht aufhalten', async () => {
+  // Der Weg, eine Stelle absichtlich loszuwerden: loeschen, und die Runde
+  // zaehlt hoch. Der Titelanfang danach legt eine frische Marke an.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  await skill(intent('AMAZON.StartOverIntent'), { token: 'Hörspiel|1|0|0', offset: 600000 }, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'], undefined, 'geloescht');
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|0|1|0', offsetInMilliseconds: 0 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 0);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].runde, 1);
+});
+
+test('Der Wiederholungsversuch nach einem Fehlschlag laesst den Stand stehen', async () => {
+  // `selberTitel` ignoriert `versuch` und `pech` absichtlich: Der zweite
+  // Versuch ist derselbe Titel, und sein Anfang bei null darf die gemerkte
+  // Stelle nicht zudecken.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|1|0|0|1', offsetInMilliseconds: 0 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 600000);
+});
+
+test('Ein Stopp schreibt nichts, wenn der Stand nicht gelesen werden konnte', async () => {
+  // Der Rueckfall "leeres Objekt" hob die Sperre gegen zurueckspringende
+  // Staende genau dann auf, wenn die Datenbank langsam ist - also genau dann,
+  // wenn zwei Ereignisse sich ueberholen.
+  const staende = { 'hörspiel': { position: 2, runde: 0, seed: 0, offset: 40000 } };
+  const lahm = {
+    async get(key) {
+      if (key === REDIS_KEY) return [HOERSPIEL];
+      return new Promise((fertig) => { setTimeout(() => fertig(staende), 5000); });
+    },
+    async set(key, wert) { if (key === 'musik_stand') Object.assign(staende, wert); },
+    async lpush() {}, async ltrim() {}, async expire() {},
+  };
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 42000 }, {}, null, lahm);
+  assert.deepEqual(staende['hörspiel'], { position: 2, runde: 0, seed: 0, offset: 40000 });
+});
+
+test('einstiegNachGangart kennt die Gangart, einstieg nur den Vorlauf', () => {
+  assert.equal(einstiegNachGangart({ fortsetzen: 'sekunde' }, 47000), 42000);
+  assert.equal(einstiegNachGangart({ fortsetzen: 'titel' }, 47000), 0);
+  assert.equal(einstiegNachGangart({ fortsetzen: 'sekunde' }, 3000), 0, 'unter dem Vorlauf: von vorn');
+});
+
+test('standNichtZurueck sperrt die Null und nur die Null', () => {
+  const token = { position: 1, runde: 0, seed: 0 };
+  const stand = { position: 1, runde: 0, seed: 0, offset: 600000 };
+  assert.equal(standNichtZurueck(stand, token, 0), true);
+  assert.equal(standNichtZurueck(stand, token, 1), false, 'jede echte Stelle gilt');
+  assert.equal(standNichtZurueck({ ...stand, position: 2 }, token, 0), false, 'anderer Titel');
+  assert.equal(standNichtZurueck({ ...stand, offset: 0 }, token, 0), false, 'nichts zu schuetzen');
+  assert.equal(standNichtZurueck(null, token, 0), false);
 });
 
 test('handleManage haelt die Gangart ueber eine Titelaenderung hinweg', async () => {
@@ -2443,6 +2788,64 @@ test('ein Abspieler-Ereignis landet im Verlauf', async () => {
   assert.equal(eintrag.was, 'echo');
   assert.equal(eintrag.ereignis, 'PlaybackStopped', 'das Ereignis, an dem die Kette endet');
   assert.equal(eintrag.offset, 42000, 'und an welcher Stelle');
+});
+
+test('ein "weiter" landet mit seiner Quelle im Verlauf', async () => {
+  // **Die Zeile, die bei der Meldung gefehlt hat.** Der Verlauf hielt nur
+  // Abspieler-Ereignisse fest; welcher Befehl die Wiedergabe angefangen hat,
+  // mit welcher Stelle und aus welcher Quelle, stand nirgends - und genau das
+  // war die Frage.
+  const redis = redisMitListe({ [REDIS_KEY]: [HOERSPIEL], musik_stand: { 'hörspiel': { position: 1, runde: 0, seed: 0, offset: 600000 } } });
+  await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, redis);
+
+  const [eintrag] = redis.liste;
+  assert.equal(eintrag.was, 'wort');
+  assert.equal(eintrag.ereignis, 'ResumeIntent', 'ohne den AMAZON-Vorsatz');
+  assert.equal(eintrag.offset, 595000, 'die Stelle, die hinausging');
+  assert.equal(eintrag.woher, 'stand', 'und woher sie kam');
+  assert.equal(eintrag.gangart, 'sekunde');
+  assert.equal(eintrag.aktivitaet, 'STOPPED', 'protokolliert, nicht verzweigt');
+  assert.match(eintrag.antwort, /Play REPLACE_ALL -> 02/, 'und was hinausging');
+});
+
+test('ein Stopp landet mit der gemerkten Stelle im Verlauf', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [HOERSPIEL] });
+  await skill(intent('AMAZON.StopIntent'), { token: 'Hörspiel|1|0|0', offset: 42000 }, null, redis);
+
+  const [eintrag] = redis.liste;
+  assert.equal(eintrag.was, 'wort');
+  assert.equal(eintrag.ereignis, 'StopIntent');
+  assert.equal(eintrag.offset, 42000);
+  assert.match(eintrag.stand, /42000 ms gemerkt/, 'und dass sie wirklich angekommen ist');
+});
+
+test('der Knopf in der App landet auch im Verlauf', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [HOERSPIEL] });
+  await skill({ type: 'PlaybackController.PauseCommandIssued' }, { token: 'Hörspiel|1|0|0', offset: 42000 }, null, redis);
+  assert.equal(redis.liste[0].ereignis, 'PauseCommandIssued');
+});
+
+test('die Hilfe fuellt den Verlauf nicht', async () => {
+  // Vierzig Eintraege sind ein Zeuge, kein Archiv: Ein paar missverstandene
+  // Saetze schoeben sonst genau die Ereignisse aus dem Fenster, die eine
+  // Stoerung erklaeren.
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await skill(intent('AMAZON.HelpIntent'), {}, [KINDER], redis);
+  await skill(intent('ListPlaylistsIntent'), {}, [KINDER], redis);
+  assert.equal(redis.liste.length, 0);
+});
+
+test('der Verlauf nimmt bei einem Abspieler-Ereignis die Stelle aus dem Ereignis', async () => {
+  // Hier stand der Offset aus dem `context`, und der traegt bei einem
+  // Abspieler-Ereignis gern eine Null - die Zeile untertrieb also genau dort,
+  // wo sie gebraucht wurde.
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await skill(
+    { type: 'AudioPlayer.PlaybackStopped', token: 'Kinderlieder|1|0|0', offsetInMilliseconds: 42000 },
+    { token: 'Kinderlieder|1|0|0', offset: 0 },
+    [KINDER], redis,
+  );
+  assert.equal(redis.liste[0].offset, 42000);
 });
 
 test('ein Fehlschlag traegt seinen Grund in den Verlauf', async () => {
