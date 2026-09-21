@@ -569,6 +569,14 @@
             // Jetzt steht daneben, welche Stelle hinausging, woher sie kam
             // (Geraet oder gemerkter Stand), in welcher Gangart, was das
             // Geraet ueber sich sagte und was der Stand danach sagt.
+            // Der Token, den der Echo bekommt, und der, den er schon traegt
+            // - nebeneinander, weil erst das Paar etwas sagt. Ein "=" davor
+            // heisst: identisch, und genau das war zweimal die Frage.
+            const marken = (e) => {
+                if (!e.token && !e.geraet) return '';
+                const gleich = e.token && e.geraet && e.token === e.geraet;
+                return `  ${e.token || '-'} ${gleich ? '=' : '<-'} ${e.geraet || '-'}`;
+            };
             if (e.was === 'wort') {
                 const quelle = [e.woher, e.gangart].filter(Boolean).join(', ');
                 return `${uhr}  WORT  ${e.ereignis}`
@@ -577,7 +585,8 @@
                     + `${e.aktivitaet ? '  ' + e.aktivitaet : ''}`
                     + `${e.antwort ? '  [' + e.antwort + ']' : ''}`
                     + `${e.stand ? '  Stand: ' + e.stand : ''}`
-                    + `${e.titel ? '  ' + e.titel : ''}`;
+                    + `${e.titel ? '  ' + e.titel : ''}`
+                    + marken(e);
             }
             if (e.was === 'echo') {
                 // Die Antwort des Skills steht daneben: "keine Direktive" beim
@@ -588,7 +597,8 @@
                     + `${e.antwort ? '  [' + e.antwort + ']' : ''}`
                     + `${e.stand ? '  Stand: ' + e.stand : ''}`
                     + `${e.ursache ? '  ' + e.ursache : ''}`
-                    + `${e.titel ? '  ' + e.titel : ''}`;
+                    + `${e.titel ? '  ' + e.titel : ''}`
+                    + marken(e);
             }
             const menge = e.soll ? `${e.bytes} von ${e.soll}` : `${e.bytes}`;
             const kurz = e.soll && e.bytes < e.soll ? '  ABGERISSEN' : '';
