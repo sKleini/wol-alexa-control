@@ -56,6 +56,7 @@
         .btn { width: 100%; padding: 14px; border-radius: 12px; border: none; color: white; font-weight: 600; cursor: pointer; transition: 0.3s; }
         .btn-add { background: linear-gradient(135deg, var(--primary), var(--secondary)); margin-top: 10px; }
         .btn:hover { transform: translateY(-2px); filter: brightness(1.2); }
+        .btn:disabled { opacity: 0.5; cursor: wait; transform: none; filter: none; }
 
         .device-list { margin-top: 30px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 20px; }
         .device-item {
@@ -83,6 +84,11 @@
 
         .hint { font-size: 0.8rem; color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.03); border-left: 3px solid var(--primary); border-radius: 8px; padding: 10px 12px; margin-bottom: 15px; line-height: 1.5; }
         .hint code { font-family: monospace; color: rgba(255,255,255,0.85); }
+        details.hint > summary { cursor: pointer; font-weight: 600; color: rgba(255,255,255,0.8); list-style: none; display: flex; align-items: center; gap: 8px; }
+        details.hint > summary::-webkit-details-marker { display: none; }
+        details.hint > summary::before { content: '\25b8'; transition: transform 0.2s; }
+        details.hint[open] > summary::before { transform: rotate(90deg); }
+        details.hint > .hint-body { margin-top: 10px; }
         .form-status { font-size: 0.85rem; margin-top: 10px; min-height: 1.2em; }
         .form-status.error { color: #ff8080; }
         .form-status.ok { color: #7dffb3; }
@@ -194,12 +200,15 @@
         <div class="glass-card" style="margin-top: 20px;">
             <h1><i class="fas fa-music"></i> Playlists</h1>
 
-            <div class="hint">
-                <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks).<br>
-                Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
-                <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
-                <strong>FRITZ!NAS folder shares take a detour, and they have to:</strong> such a share hands out its files only with a session number, and the box ties that number to the address that fetched it — for the Echo it is worthless, whoever fetched it. The tracks therefore point at this app, which fetches the file itself and passes the bytes through. Nothing is stored; the counter below the list says how much ran through this month.
-            </div>
+            <details class="hint">
+                <summary>How playlists work — URLs, folder import &amp; FRITZ!NAS</summary>
+                <div class="hint-body">
+                    <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks).<br>
+                    Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
+                    <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
+                    <strong>FRITZ!NAS folder shares take a detour, and they have to:</strong> such a share hands out its files only with a session number, and the box ties that number to the address that fetched it — for the Echo it is worthless, whoever fetched it. The tracks therefore point at this app, which fetches the file itself and passes the bytes through. Nothing is stored; the counter below the list says how much ran through this month.
+                </div>
+            </details>
 
             <form id="playlist-form">
                 <div class="input-group">
@@ -254,6 +263,10 @@
             <div class="hint" id="playlist-ton" hidden></div>
             <details id="playlist-verlauf" hidden style="margin-top: 10px;">
                 <summary class="hint" style="cursor: pointer;">Last fetches &amp; player events</summary>
+                <div style="display: flex; gap: 8px; padding-top: 8px;">
+                    <button type="button" class="btn" id="playlist-verlauf-neu" style="background: rgba(255,255,255,0.08); padding: 10px;"><i class="fas fa-arrows-rotate"></i> Refresh</button>
+                    <button type="button" class="btn" id="playlist-verlauf-kopieren" style="background: rgba(255,255,255,0.08); padding: 10px;"><i class="fas fa-copy"></i> Copy log</button>
+                </div>
                 <div id="playlist-verlauf-liste" style="font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow-x: auto; padding: 8px 0;"></div>
             </details>
         </div>
@@ -434,6 +447,35 @@
             return btn;
         }
 
+        /**
+         * Text in die Zwischenablage, auf beiden Wegen.
+         *
+         * Die Zwischenablage-API gibt es nur ueber https und nur mit
+         * Erlaubnis; auf dem Handy genuegt `select()` allein nicht. Also
+         * erst der richtige Weg, dann der alte - und wenn `feld` fehlt,
+         * uebernimmt ein unsichtbares Textfeld dessen Rolle.
+         */
+        async function inZwischenablage(text, feld = null) {
+            const hilfsfeld = feld || document.createElement('textarea');
+            if (!feld) {
+                hilfsfeld.value = text;
+                hilfsfeld.setAttribute('readonly', '');
+                hilfsfeld.style.position = 'fixed';
+                hilfsfeld.style.opacity = '0';
+                document.body.appendChild(hilfsfeld);
+            }
+            hilfsfeld.select();
+            let geklappt = false;
+            try {
+                await navigator.clipboard.writeText(text);
+                geklappt = true;
+            } catch {
+                try { geklappt = document.execCommand('copy'); } catch { geklappt = false; }
+            }
+            if (!feld) hilfsfeld.remove();
+            return geklappt;
+        }
+
         // Die Herkunft der gerade bearbeiteten Playlist. Sie steht in keinem
         // Eingabefeld, weil niemand einen Freigabe-Link von Hand pflegen soll -
         // sie kommt aus dem Import oder aus der gespeicherten Playlist und geht
@@ -486,13 +528,21 @@
                 + `${e.grund ? '  ' + e.grund : ''}  ${e.datei || ''}`;
         }
 
-        async function zeigeVerlauf() {
+        // Beim Laden kommt der Verlauf ungefragt mit, und dann bleibt der
+        // Kasten weg, solange es nichts zu zeigen gibt. Nach einem Klick auf
+        // Refresh bleibt er stehen, auch wenn er leer zurueckkommt: Wer selbst
+        // nachgesehen hat, braucht die Antwort "nichts da" - und nicht einen
+        // Kasten, der ihm unter dem Finger verschwindet.
+        async function zeigeVerlauf(manuell = false) {
             const kasten = document.getElementById('playlist-verlauf');
             const liste = document.getElementById('playlist-verlauf-liste');
             const stand = await apiRequest('GET', null, '?type=playlists&verlauf=1');
             const eintraege = stand && Array.isArray(stand.eintraege) ? stand.eintraege : [];
-            if (!eintraege.length) { kasten.hidden = true; return; }
-            liste.textContent = eintraege.map(verlaufZeile).join('\n');
+            if (!eintraege.length && !manuell) { kasten.hidden = true; return; }
+            liste.textContent = eintraege.length
+                ? eintraege.map(verlaufZeile).join('\n')
+                : 'No entries yet.';
+            document.getElementById('playlist-verlauf-kopieren').disabled = !eintraege.length;
             kasten.hidden = false;
         }
 
@@ -744,6 +794,35 @@
             speichereReihenfolge(namen);
         });
 
+        // Der Verlauf kam bisher nur mit dem Laden der Seite - und genau dann
+        // ist noch nichts passiert. Refresh holt dieselbe Liste noch einmal,
+        // ohne die Seite neu zu bauen: Das aufgeklappte Log bleibt offen, und
+        // die halb ausgefuellte Playlist im Formular daneben bleibt stehen.
+        document.getElementById('playlist-verlauf-neu').addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
+            const vorher = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-arrows-rotate fa-spin"></i> Refreshing';
+            let fehler = false;
+            try { await zeigeVerlauf(true); } catch { fehler = true; }
+            btn.disabled = false;
+            btn.innerHTML = fehler ? '<i class="fas fa-xmark"></i> Refresh failed' : vorher;
+            if (fehler) setTimeout(() => { btn.innerHTML = vorher; }, 2000);
+        });
+
+        // Kopiert wird genau das, was dasteht: Die Zeilen sind zum Weitergeben
+        // gedacht, und ein Block mit waagerechtem Rollbalken laesst sich auf
+        // dem Handy nicht von Hand markieren.
+        document.getElementById('playlist-verlauf-kopieren').addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
+            const text = document.getElementById('playlist-verlauf-liste').textContent;
+            if (!text) return;
+            const vorher = btn.innerHTML;
+            const geklappt = await inZwischenablage(text);
+            btn.innerHTML = geklappt ? '<i class="fas fa-check"></i> Copied' : '<i class="fas fa-xmark"></i> Copy failed';
+            setTimeout(() => { btn.innerHTML = vorher; }, 2000);
+        });
+
         window.deletePlaylist = async (name) => {
             if (confirm('Delete this playlist?')) {
                 await apiRequest('DELETE', { name }, '?type=playlists');
@@ -816,10 +895,7 @@
             kopieren.style.marginTop = '8px';
             kopieren.textContent = 'Copy page source';
             kopieren.addEventListener('click', async () => {
-                // select() allein genuegt auf dem Handy nicht, die
-                // Zwischenablage-API gibt es nur ueber https - also beides.
-                feld.select();
-                try { await navigator.clipboard.writeText(feld.value); } catch { document.execCommand('copy'); }
+                await inZwischenablage(feld.value, feld);
                 kopieren.textContent = 'Copied';
                 setTimeout(() => { kopieren.textContent = 'Copy page source'; }, 2000);
             });
