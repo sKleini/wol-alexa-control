@@ -19,6 +19,9 @@ import {
   findePlaylist,
   tokenBauen,
   tokenLesen,
+  sitzungsSchluss,
+  startHinaus,
+  startGeklappt,
   schritt,
   playDirektive,
   istPrivateAdresse,
@@ -2958,7 +2961,12 @@ function redisMitListe(daten = {}) {
     async ltrim() {},
     async expire() {},
     async lrange() { return liste; },
-    async del() { liste.length = 0; },
+    // Nach Schluessel, nicht pauschal: Die Startwache raeumt ihre eigene
+    // Marke ab, und die darf den Verlauf nicht mitnehmen.
+    async del(k) {
+      if (k === undefined || k === 'musik_ton_verlauf') liste.length = 0;
+      else delete redis.speicher[k];
+    },
   };
 }
 
@@ -3168,4 +3176,152 @@ test('Alexas eigene Beschwerde landet im Verlauf', async () => {
   assert.equal(eintrag.ereignis, 'ExceptionEncountered');
   assert.equal(eintrag.fehler, 'INVALID_RESPONSE');
   assert.match(eintrag.ursache, /request\.42/, 'samt Ursache');
+});
+
+// --- Alexas eigene Fehlerbeschreibung -------------------------------------
+//
+// **Sie lag bisher im Papierkorb.** Ein `SessionEndedRequest` fiel unbesehen
+// in die leere Antwort; `reason` und `error` wurden weggeworfen. Im Log vom
+// 21.9. stand um 21:49:01 genau einer, und wir wussten nichts ueber ihn -
+// dabei ist das die einzige Stelle, an der Alexa von sich aus sagt, warum
+// sie eine Antwort nicht verarbeiten konnte.
+
+test('sitzungsSchluss trennt den Normalfall vom Auffaelligen', () => {
+  assert.deepEqual(sitzungsSchluss({ request: { reason: 'USER_INITIATED' } }),
+    { grund: 'USER_INITIATED', fehler: null, auffaellig: false });
+
+  const kaputt = sitzungsSchluss({
+    request: { reason: 'ERROR', error: { type: 'INVALID_RESPONSE', message: 'directive not accepted' } },
+  });
+  assert.equal(kaputt.grund, 'ERROR');
+  assert.equal(kaputt.fehler, 'INVALID_RESPONSE: directive not accepted');
+  assert.equal(kaputt.auffaellig, true);
+
+  // Ein Fehler neben einem harmlosen Grund bleibt auffaellig - und ein
+  // fehlender Grund ist eine Auskunft ueber die Anfrage, keine Zusage.
+  assert.equal(sitzungsSchluss({ request: { reason: 'USER_INITIATED', error: { type: 'X' } } }).auffaellig, true);
+  assert.equal(sitzungsSchluss({ request: {} }).grund, 'ohne Angabe');
+});
+
+test('Ein Sitzungsschluss mit Fehler landet im Verlauf, der gewoehnliche nicht', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  const echt = console.error;
+  console.error = () => {};
+  try {
+    await skill({ type: 'SessionEndedRequest', reason: 'USER_INITIATED' }, {}, [KINDER], redis);
+    assert.equal(redis.liste.length, 0, 'der Normalfall fuellt den kurzen Verlauf nicht');
+
+    await skill({
+      type: 'SessionEndedRequest', reason: 'ERROR',
+      error: { type: 'DEVICE_COMMUNICATION_ERROR', message: 'no response from device' },
+    }, {}, [KINDER], redis);
+  } finally {
+    console.error = echt;
+  }
+  const [eintrag] = redis.liste;
+  assert.equal(eintrag.ereignis, 'SessionEnded ERROR');
+  assert.equal(eintrag.fehler, 'DEVICE_COMMUNICATION_ERROR: no response from device');
+});
+
+// --- Die Startwache -------------------------------------------------------
+//
+// **Der gemeldete Ablauf, in Zahlen statt in Worten.** Am 21.9. zwischen
+// 21:44 und 21:49 hat der Echo dreimal einen `Play REPLACE_ALL` fallen
+// lassen: Der Skill antwortete in Millisekunden, der Echo holte die Datei
+// und bekam sie ganz - und dann kam nichts. Kein `PlaybackStarted`, kein
+// `PlaybackFailed`, kein `ExceptionEncountered`. Erfahren haben wir es nur,
+// weil jemand daneben stand.
+
+test('startHinaus nimmt nur den Start, nicht den angehaengten Titel', () => {
+  const start = startHinaus({ response: { directives: [
+    { type: 'AudioPlayer.ClearQueue' },
+    { type: 'AudioPlayer.Play', playBehavior: 'REPLACE_ALL', audioItem: { stream: { token: 'A|0|0|0' }, metadata: { title: '01' } } },
+  ] } });
+  assert.deepEqual(start, { token: 'A|0|0|0', titel: '01' });
+
+  // Ein ENQUEUE haengt hinter einen Titel, der noch laeuft - sein
+  // PlaybackStarted kommt erst Minuten spaeter und darf nichts ausloesen.
+  assert.equal(startHinaus({ response: { directives: [
+    { type: 'AudioPlayer.Play', playBehavior: 'ENQUEUE', audioItem: { stream: { token: 'A|1|0|0' } } },
+  ] } }), null);
+  assert.equal(startHinaus({ response: { directives: [{ type: 'AudioPlayer.Stop' }] } }), null);
+  assert.equal(startHinaus({}), null);
+});
+
+test('startGeklappt vergleicht Token und Zeit - beides ist noetig', () => {
+  const offen = { token: 'Udo CD eins|5|7|0', zeit: 2000 };
+  assert.equal(startGeklappt(offen, { token: 'Udo CD eins|5|7|0', zeit: 2500 }), true);
+  assert.equal(startGeklappt(offen, null), false, 'gar nichts gespielt');
+  assert.equal(startGeklappt(offen, { token: 'Udo CD zwei|0|1|0', zeit: 2500 }), false, 'ein anderer Strom');
+
+  // **Der Fall, an dem ein reiner Tokenvergleich scheitert.** Stumm um
+  // 21:45:20, auf denselben Token noch einmal um 21:45:39 - und der spielte.
+  // Ohne die Zeit haette der zweite den ersten entlastet.
+  assert.equal(startGeklappt(offen, { token: 'Udo CD eins|5|7|0', zeit: 1500 }), false,
+    'ein aelteres PlaybackStarted entlastet den Start nicht');
+  assert.equal(startGeklappt(null, null), true, 'ohne Start gibt es nichts zu melden');
+});
+
+test('Ein Start ohne PlaybackStarted meldet sich im Verlauf', async () => {
+  // Der Ablauf aus dem Log: Start, nichts, und beim naechsten Versuch faellt
+  // es auf. Die Frist wird heruntergesetzt, damit der Test keine fuenfzehn
+  // Sekunden wartet.
+  const vorher = process.env.MUSIK_STARTWACHE;
+  process.env.MUSIK_STARTWACHE = '3000';
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  const echt = console.warn;
+  const zeilen = [];
+  console.warn = (...t) => zeilen.push(t.join(' '));
+  try {
+    await skill(sucheIntent('kinderlieder'), {}, [KINDER], redis);
+    // Kein PlaybackStarted. Die Marke altert.
+    const offen = redis.speicher.musik_start_offen;
+    assert.ok(offen?.token, 'der Start ist vermerkt');
+    redis.speicher.musik_start_offen = { ...offen, zeit: offen.zeit - 5000 };
+
+    await skill(sucheIntent('kinderlieder'), {}, [KINDER], redis);
+  } finally {
+    console.warn = echt;
+    if (vorher === undefined) delete process.env.MUSIK_STARTWACHE;
+    else process.env.MUSIK_STARTWACHE = vorher;
+  }
+
+  const stumm = redis.liste.find(e => String(e.ereignis).startsWith('STUMM'));
+  assert.ok(stumm, `es gibt einen Eintrag: ${redis.liste.map(e => e.ereignis).join(' / ')}`);
+  assert.equal(stumm.token, 'Kinderlieder|0|0|0');
+  assert.equal(stumm.titel, '01');
+  assert.ok(zeilen.some(z => z.includes('stummer Start')), `und eine Logzeile: ${zeilen.join(' / ')}`);
+});
+
+test('Ein Start, der spielt, meldet sich nicht', async () => {
+  const vorher = process.env.MUSIK_STARTWACHE;
+  process.env.MUSIK_STARTWACHE = '3000';
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  try {
+    await skill(sucheIntent('kinderlieder'), {}, [KINDER], redis);
+    await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Kinderlieder|0|0|0', offsetInMilliseconds: 0 },
+      { token: 'Kinderlieder|0|0|0' }, [KINDER], redis);
+    // Die Marke altert trotzdem - das Urteil muss sie entlasten.
+    const offen = redis.speicher.musik_start_offen;
+    redis.speicher.musik_start_offen = { ...offen, zeit: offen.zeit - 5000 };
+    await skill(intent('AMAZON.PauseIntent'), { token: 'Kinderlieder|0|0|0', offset: 5000 }, [KINDER], redis);
+  } finally {
+    if (vorher === undefined) delete process.env.MUSIK_STARTWACHE;
+    else process.env.MUSIK_STARTWACHE = vorher;
+  }
+  assert.equal(redis.liste.filter(e => String(e.ereignis).startsWith('STUMM')).length, 0,
+    'kein Fehlalarm fuer einen Start, der gespielt hat');
+});
+
+test('MUSIK_STARTWACHE=0 schaltet die Wache ab', async () => {
+  const vorher = process.env.MUSIK_STARTWACHE;
+  process.env.MUSIK_STARTWACHE = '0';
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  try {
+    await skill(sucheIntent('kinderlieder'), {}, [KINDER], redis);
+    assert.equal(redis.speicher.musik_start_offen, undefined, 'nichts gemerkt, nichts geprueft');
+  } finally {
+    if (vorher === undefined) delete process.env.MUSIK_STARTWACHE;
+    else process.env.MUSIK_STARTWACHE = vorher;
+  }
 });
