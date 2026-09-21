@@ -219,7 +219,10 @@ function attrappeRedis(stand = 0, laeuft = null) {
     // und `stand` ist nur der des Zaehlers.
     get: async (k) => (k === 'musik_ton_laeuft' ? merkzettel.gemerkt : stand),
     set: async (k, v) => { if (k === 'musik_ton_laeuft') merkzettel.gemerkt = v; },
-    del: async (k) => { if (k === 'musik_ton_laeuft') { merkzettel.gemerkt = null; merkzettel.geloescht += 1; } },
+    del: async (k) => {
+      if (k === 'musik_ton_laeuft') { merkzettel.gemerkt = null; merkzettel.geloescht += 1; }
+      if (k === VERLAUF_KEY) { merkzettel.verlauf = []; }
+    },
     incrby: async (_k, wert) => { merkzettel.gezaehlt += wert; },
     expire: async () => {},
     lpush: async (_k, eintrag) => { merkzettel.verlauf.unshift(eintrag); },
@@ -715,7 +718,7 @@ test('legt der Echo auf, ist die Function sofort frei', async () => {
 // geraten, weil die Zahl, die sie nennt, nur im Log von Vercel stand - und
 // wer Musik hoert, liest kein Vercel-Log. Dieselben Zahlen liegen jetzt in
 // Redis und stehen im Dashboard.
-import { verlaufLesen } from '../lib/naston.js'
+import { verlaufLesen, verlaufLoeschen, VERLAUF_KEY } from '../lib/naston.js'
 
 test('jeder Abruf hinterlaesst gelieferte gegen angekuendigte Bytes', async () => {
   const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
@@ -791,6 +794,22 @@ test('ein Redis ohne Listen kostet nie die Wiedergabe', async () => {
 
   assert.equal(Buffer.concat(res.stuecke).length, 1024, 'der Ton kommt trotzdem an');
   assert.deepEqual(await verlaufLesen(kaputt), [], 'und der Verlauf bleibt leer statt zu werfen');
+});
+
+test('verlaufLoeschen leert den Verlauf', async () => {
+  const redis = attrappeRedis();
+  redis.merkzettel.verlauf = [{ zeit: 1, was: 'ton' }, { zeit: 2, was: 'echo' }];
+
+  const ok = await verlaufLoeschen(redis);
+
+  assert.equal(ok, true);
+  assert.deepEqual(await verlaufLesen(redis), []);
+});
+
+test('verlaufLoeschen wirft nie, auch wenn Redis es tut', async () => {
+  const kaputt = { del: async () => { throw new Error('kein Loeschen'); } };
+
+  assert.equal(await verlaufLoeschen(kaputt), false);
 });
 
 test('steht der Merkzettel, meldet sich auch der zweite Anlauf nicht an', async () => {
