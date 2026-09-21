@@ -56,6 +56,7 @@
         .btn { width: 100%; padding: 14px; border-radius: 12px; border: none; color: white; font-weight: 600; cursor: pointer; transition: 0.3s; }
         .btn-add { background: linear-gradient(135deg, var(--primary), var(--secondary)); margin-top: 10px; }
         .btn:hover { transform: translateY(-2px); filter: brightness(1.2); }
+        .btn:disabled { opacity: 0.5; cursor: wait; transform: none; filter: none; }
 
         .device-list { margin-top: 30px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 20px; }
         .device-item {
@@ -262,6 +263,10 @@
             <div class="hint" id="playlist-ton" hidden></div>
             <details id="playlist-verlauf" hidden style="margin-top: 10px;">
                 <summary class="hint" style="cursor: pointer;">Last fetches &amp; player events</summary>
+                <div style="display: flex; gap: 8px; padding-top: 8px;">
+                    <button type="button" class="btn" id="playlist-verlauf-neu" style="background: rgba(255,255,255,0.08); padding: 10px;"><i class="fas fa-arrows-rotate"></i> Refresh</button>
+                    <button type="button" class="btn" id="playlist-verlauf-kopieren" style="background: rgba(255,255,255,0.08); padding: 10px;"><i class="fas fa-copy"></i> Copy log</button>
+                </div>
                 <div id="playlist-verlauf-liste" style="font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow-x: auto; padding: 8px 0;"></div>
             </details>
         </div>
@@ -442,6 +447,35 @@
             return btn;
         }
 
+        /**
+         * Text in die Zwischenablage, auf beiden Wegen.
+         *
+         * Die Zwischenablage-API gibt es nur ueber https und nur mit
+         * Erlaubnis; auf dem Handy genuegt `select()` allein nicht. Also
+         * erst der richtige Weg, dann der alte - und wenn `feld` fehlt,
+         * uebernimmt ein unsichtbares Textfeld dessen Rolle.
+         */
+        async function inZwischenablage(text, feld = null) {
+            const hilfsfeld = feld || document.createElement('textarea');
+            if (!feld) {
+                hilfsfeld.value = text;
+                hilfsfeld.setAttribute('readonly', '');
+                hilfsfeld.style.position = 'fixed';
+                hilfsfeld.style.opacity = '0';
+                document.body.appendChild(hilfsfeld);
+            }
+            hilfsfeld.select();
+            let geklappt = false;
+            try {
+                await navigator.clipboard.writeText(text);
+                geklappt = true;
+            } catch {
+                try { geklappt = document.execCommand('copy'); } catch { geklappt = false; }
+            }
+            if (!feld) hilfsfeld.remove();
+            return geklappt;
+        }
+
         // Die Herkunft der gerade bearbeiteten Playlist. Sie steht in keinem
         // Eingabefeld, weil niemand einen Freigabe-Link von Hand pflegen soll -
         // sie kommt aus dem Import oder aus der gespeicherten Playlist und geht
@@ -494,13 +528,21 @@
                 + `${e.grund ? '  ' + e.grund : ''}  ${e.datei || ''}`;
         }
 
-        async function zeigeVerlauf() {
+        // Beim Laden kommt der Verlauf ungefragt mit, und dann bleibt der
+        // Kasten weg, solange es nichts zu zeigen gibt. Nach einem Klick auf
+        // Refresh bleibt er stehen, auch wenn er leer zurueckkommt: Wer selbst
+        // nachgesehen hat, braucht die Antwort "nichts da" - und nicht einen
+        // Kasten, der ihm unter dem Finger verschwindet.
+        async function zeigeVerlauf(manuell = false) {
             const kasten = document.getElementById('playlist-verlauf');
             const liste = document.getElementById('playlist-verlauf-liste');
             const stand = await apiRequest('GET', null, '?type=playlists&verlauf=1');
             const eintraege = stand && Array.isArray(stand.eintraege) ? stand.eintraege : [];
-            if (!eintraege.length) { kasten.hidden = true; return; }
-            liste.textContent = eintraege.map(verlaufZeile).join('\n');
+            if (!eintraege.length && !manuell) { kasten.hidden = true; return; }
+            liste.textContent = eintraege.length
+                ? eintraege.map(verlaufZeile).join('\n')
+                : 'No entries yet.';
+            document.getElementById('playlist-verlauf-kopieren').disabled = !eintraege.length;
             kasten.hidden = false;
         }
 
@@ -752,6 +794,35 @@
             speichereReihenfolge(namen);
         });
 
+        // Der Verlauf kam bisher nur mit dem Laden der Seite - und genau dann
+        // ist noch nichts passiert. Refresh holt dieselbe Liste noch einmal,
+        // ohne die Seite neu zu bauen: Das aufgeklappte Log bleibt offen, und
+        // die halb ausgefuellte Playlist im Formular daneben bleibt stehen.
+        document.getElementById('playlist-verlauf-neu').addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
+            const vorher = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-arrows-rotate fa-spin"></i> Refreshing';
+            let fehler = false;
+            try { await zeigeVerlauf(true); } catch { fehler = true; }
+            btn.disabled = false;
+            btn.innerHTML = fehler ? '<i class="fas fa-xmark"></i> Refresh failed' : vorher;
+            if (fehler) setTimeout(() => { btn.innerHTML = vorher; }, 2000);
+        });
+
+        // Kopiert wird genau das, was dasteht: Die Zeilen sind zum Weitergeben
+        // gedacht, und ein Block mit waagerechtem Rollbalken laesst sich auf
+        // dem Handy nicht von Hand markieren.
+        document.getElementById('playlist-verlauf-kopieren').addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
+            const text = document.getElementById('playlist-verlauf-liste').textContent;
+            if (!text) return;
+            const vorher = btn.innerHTML;
+            const geklappt = await inZwischenablage(text);
+            btn.innerHTML = geklappt ? '<i class="fas fa-check"></i> Copied' : '<i class="fas fa-xmark"></i> Copy failed';
+            setTimeout(() => { btn.innerHTML = vorher; }, 2000);
+        });
+
         window.deletePlaylist = async (name) => {
             if (confirm('Delete this playlist?')) {
                 await apiRequest('DELETE', { name }, '?type=playlists');
@@ -824,10 +895,7 @@
             kopieren.style.marginTop = '8px';
             kopieren.textContent = 'Copy page source';
             kopieren.addEventListener('click', async () => {
-                // select() allein genuegt auf dem Handy nicht, die
-                // Zwischenablage-API gibt es nur ueber https - also beides.
-                feld.select();
-                try { await navigator.clipboard.writeText(feld.value); } catch { document.execCommand('copy'); }
+                await inZwischenablage(feld.value, feld);
                 kopieren.textContent = 'Copied';
                 setTimeout(() => { kopieren.textContent = 'Copy page source'; }, 2000);
             });
