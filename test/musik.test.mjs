@@ -1380,12 +1380,12 @@ test('Der Stand wird gemerkt, auch wenn das Antwortbudget schon aufgebraucht ist
   // Antwort, und `standSchreiben` kehrt bei abgelaufener Frist ohne Schreiben
   // um. Auf einer kalten Function blieb nach dem Vorlauf der Boden von 1200 ms
   // - und genau dann ging die Stelle verloren, waehrend der letzte
-  // Titelanfang mit seiner Null stehenblieb. Jetzt wird sie hinter der
-  // Antwort geschrieben, wo kein Budget mehr laeuft.
+  // Titelanfang mit seiner Null stehenblieb.
   // Gemessen wird mit einer Datenbank, die eine Sekunde fuer die Playlists
   // braucht: Danach ist vom Budget (der Boden, 1200 ms) fast nichts uebrig,
   // und die dreihundert Millisekunden fuer den Stand passen nicht mehr hinein.
-  // Das Nachspiel rechnet mit seiner eigenen Frist und schafft es.
+  // Ein Abspieler-Ereignis hat nichts zu beantworten und bekommt deshalb
+  // `EREIGNIS_FRIST_MS` statt des Restbudgets - es schafft es.
   const staende = {};
   const langsam = {
     async get(key) {
@@ -1400,6 +1400,75 @@ test('Der Stand wird gemerkt, auch wenn das Antwortbudget schon aufgebraucht ist
   assert.equal(staende['hörspiel']?.offset, 42000);
 });
 
+// --- Der Stand vor der Antwort ----------------------------------------------
+//
+// **Der erste gemeldete Defekt, und der teurere von beiden.** Der Stand wurde
+// im `finally` geschrieben, hinter `res.json()`, mit der Begruendung, dass
+// Alexa dort nicht mehr wartet. Das stimmt fuer Alexa und nicht fuer Vercel:
+// Mit der Antwort endet die Invocation, die Instanz friert ein, und der Rest
+// laeuft erst, wenn sie das naechste Mal drankommt. Im Log:
+//
+//   18:45:34  PlaybackStopped   (Antwort in 17 ms)
+//   18:45:34  AMAZON.PauseIntent (Antwort in 10 ms)
+//   18:50:01  GET /api/skill 400 -- und daran haengen, 4 Min 27 Sek spaeter:
+//               musik_stand nicht rechtzeitig: nach 2000 ms
+//               musik-box Stand: nicht gelesen, nichts geschrieben
+//               musik_stand nicht rechtzeitig: nach 2000 ms
+//               musik-box Stand: 113130 ms gemerkt (stopp)
+//
+// Beide Fristen waren waehrend des Einfrierens abgelaufen, ein dritter
+// Schreibvorgang lief nie - die Instanz tauchte danach nicht wieder auf.
+// Geprueft wird hier deshalb nicht, *dass* geschrieben wird, sondern *wann*.
+
+test('Der Stand steht in der Datenbank, bevor die Antwort hinausgeht', async () => {
+  const faelle = [
+    ['Sprachbefehl', intent('AMAZON.StopIntent'), { token: 'Hörspiel|1|0|0', offset: 600000 }],
+    ['Ereignis', { type: 'AudioPlayer.PlaybackStopped', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 600000 }, {}],
+  ];
+  for (const [was, request, opts] of faelle) {
+    const redis = mitStand(HOERSPIEL);
+    let beiDerAntwort = null;
+    const res = antwortFaenger();
+    const echtes = res.json.bind(res);
+    // Eine Kopie, kein Verweis: Sonst zeigt die Zusicherung am Ende auf das
+    // Objekt, wie es *danach* aussieht, und der Test ginge auch durch, wenn
+    // erst das `finally` geschrieben haette.
+    res.json = (koerper) => {
+      const stand = redis.speicher.musik_stand?.['hörspiel'];
+      beiDerAntwort = stand ? { position: stand.position, offset: stand.offset } : null;
+      return echtes(koerper);
+    };
+    await handleSkill(anfrage(request, opts), res, redis);
+    assert.deepEqual(beiDerAntwort, { position: 1, offset: 600000 }, was);
+  }
+});
+
+test('Ein Durchlauf wird vermerkt, bevor die Antwort hinausgeht', async () => {
+  const redis = mitStand(HOERSPIEL);
+  let beiDerAntwort = null;
+  const res = antwortFaenger();
+  const echtes = res.json.bind(res);
+  res.json = (koerper) => {
+    beiDerAntwort = redis.speicher.musik_stand?.['hörspiel']?.fertig ?? null;
+    return echtes(koerper);
+  };
+  // Letzter Titel einer Playlist ohne Wiederholung: Danach ist sie durch.
+  await handleSkill(anfrage({ type: 'AudioPlayer.PlaybackFinished', token: 'Hörspiel|2|0|0' }), res, redis);
+  assert.equal(beiDerAntwort, true);
+});
+
+test('Ein Schreibvorgang, der nicht ankommt, meldet sich als solcher', async () => {
+  // **Die Zeile, die gelogen hat.** `standSchreiben` kehrte bei abgelaufener
+  // Frist wortlos um, `standMerken` meldete trotzdem "gemerkt" - im
+  // Vercel-Log wie im Verlauf des Dashboards. Wer die verlorene Sekunde
+  // suchte, las also ausgerechnet dort eine Erfolgsmeldung.
+  const redis = redisMitListe({ [REDIS_KEY]: [HOERSPIEL] });
+  redis.set = async () => { throw new Error('offline'); };
+  await skill({ type: 'AudioPlayer.PlaybackStopped', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 42000 }, {}, null, redis);
+  const [eintrag] = redis.liste;
+  assert.match(eintrag.stand, /NICHT gespeichert/);
+});
+
 // --- Eine Null ist keine Stelle ---------------------------------------------
 
 test('Ein Titelanfang bei null laesst die gemerkte Stelle desselben Titels stehen', async () => {
@@ -1408,6 +1477,23 @@ test('Ein Titelanfang bei null laesst die gemerkte Stelle desselben Titels stehe
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
   await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 0 }, {}, null, redis);
   assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 600000);
+});
+
+test('Ein Titelanfang bei einer Sekunde loescht die gemerkte Stelle auch nicht', async () => {
+  // **Der zweite gemeldete Defekt.** In der Datenbank stand `@1093 ms`, und
+  // weil das keine Null war, ging es durch und deckte die echte Stelle zu.
+  // Die Zahl selbst ist ehrlich: Der Verlauf zeigt eine Kette von Wiedergaben,
+  // die nach 8, 11, 21 und 42 Sekunden endeten, bei Titeln von rund einer
+  // Stunde. Wer nach einer Sekunde abbricht, steht eben bei einer Sekunde -
+  // nur ist das kein Ziel, `einstieg()` macht 0 daraus, und es darf die zehnte
+  // Minute nicht loeschen, die vorher dastand.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 1093 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 600000, 'die Stelle steht noch');
+
+  // Und die Probe aufs Exempel: Der naechste Start landet wieder dort.
+  const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000);
 });
 
 test('Ein Titelanfang mitten im Stueck schreibt seine Stelle', async () => {
@@ -1468,14 +1554,38 @@ test('einstiegNachGangart kennt die Gangart, einstieg nur den Vorlauf', () => {
   assert.equal(einstiegNachGangart({ fortsetzen: 'sekunde' }, 3000), 0, 'unter dem Vorlauf: von vorn');
 });
 
-test('standNichtZurueck sperrt die Null und nur die Null', () => {
+test('standNichtZurueck sperrt alles unter dem Vorlauf, nicht nur die Null', () => {
   const token = { position: 1, runde: 0, seed: 0 };
   const stand = { position: 1, runde: 0, seed: 0, offset: 600000 };
   assert.equal(standNichtZurueck(stand, token, 0), true);
-  assert.equal(standNichtZurueck(stand, token, 1), false, 'jede echte Stelle gilt');
+  // **Der gemeldete Fall.** In der Datenbank stand @1093 ms, und weil das
+  // keine Null war, ging es durch und deckte die echte Stelle zu: Eine
+  // Wiedergabe, die nach einer Sekunde endete, hat die zehnte Minute
+  // ueberschrieben. Der Verlauf zeigt eine ganze Kette davon - 8, 11, 21, 42
+  // Sekunden, bei Titeln von rund einer Stunde.
+  assert.equal(standNichtZurueck(stand, token, 1093), true, 'eine Stelle, die keine ist');
+  assert.equal(standNichtZurueck(stand, token, 1), true, 'was einstieg() zu 0 macht, ist keine Stelle');
+  assert.equal(standNichtZurueck(stand, token, 5000), false, 'ab dem Vorlauf ist es eine Stelle');
+  assert.equal(standNichtZurueck(stand, token, 30000), false, 'auch eine kleinere echte Stelle gilt');
   assert.equal(standNichtZurueck({ ...stand, position: 2 }, token, 0), false, 'anderer Titel');
   assert.equal(standNichtZurueck({ ...stand, offset: 0 }, token, 0), false, 'nichts zu schuetzen');
   assert.equal(standNichtZurueck(null, token, 0), false);
+});
+
+test('Ohne Vorlauf bleibt es bei genau der Null', () => {
+  // MUSIK_VORLAUF_MS=0 heisst "auf die Millisekunde". Dort ist jede
+  // Millisekunde eine Stelle, und die Sperre darf nicht zur Attrappe werden.
+  const vorher = process.env.MUSIK_VORLAUF_MS;
+  process.env.MUSIK_VORLAUF_MS = '0';
+  try {
+    const token = { position: 1, runde: 0, seed: 0 };
+    const stand = { position: 1, runde: 0, seed: 0, offset: 600000 };
+    assert.equal(standNichtZurueck(stand, token, 0), true);
+    assert.equal(standNichtZurueck(stand, token, 1), false);
+  } finally {
+    if (vorher === undefined) delete process.env.MUSIK_VORLAUF_MS;
+    else process.env.MUSIK_VORLAUF_MS = vorher;
+  }
 });
 
 test('handleManage haelt die Gangart ueber eine Titelaenderung hinweg', async () => {
