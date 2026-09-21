@@ -588,6 +588,13 @@
                     + `${e.titel ? '  ' + e.titel : ''}`
                     + marken(e);
             }
+            // Ein Start, auf den nie ein PlaybackStarted folgte. Er steht
+            // unter der Uhrzeit des Starts, nicht der Meldung - sonst suchte
+            // man ihn an der falschen Stelle.
+            if (e.ereignis && e.ereignis.startsWith('STUMM')) {
+                return `${uhr}  STUMM ${e.titel ? ' ' + e.titel : ''}`
+                    + `  kein PlaybackStarted${marken(e)}`;
+            }
             if (e.was === 'echo') {
                 // Die Antwort des Skills steht daneben: "keine Direktive" beim
                 // Titelwechsel ist eine andere Diagnose als ein "Play ENQUEUE",
