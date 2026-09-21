@@ -113,7 +113,7 @@ Custom Skill "Meine Plattenkiste" → /api/skill (same endpoint, routed by skill
 | `MUSIK_SKILL_ID` | *(optional, Meine Plattenkiste)* Skill ID of the **Meine Plattenkiste** custom skill (`amzn1.ask.skill....`, see section 9). Both custom skills point at `/api/skill`; this ID is how the endpoint tells them apart |
 | `MUSIK_VORLAUF_MS` | *(optional, Meine Plattenkiste)* How far *Resume* rewinds behind the remembered spot, in milliseconds, in its **Audiobook** setting. Default `5000`; `0` resumes on the exact millisecond. No effect on **Album**, which always restarts the track. Re-read on every request, like `MUSIK_BUDGET_MS` |
 | `MUSIK_TON_KEY` | *(optional, Meine Plattenkiste)* Signing key for the addresses of a **FRITZ!NAS folder share**, which the Echo fetches from this app instead of from the box (see section 9.2). Unset, `BRIDGE_KEY` is used, then `ADMIN_PASSWORD`; with none of the three set the endpoint answers `401` and such playlists stay silent |
-| `MUSIK_TON_MAX_MB` | *(optional, Meine Plattenkiste)* How much of a file is fetched from the box per request, in MB. Default `4`, `0` switches the cap off. It exists because Vercel caps a function's response body at 4.5 MB — the player asks for the rest with the next range |
+| `MUSIK_TON_MAX_MB` | *(optional, Meine Plattenkiste)* Caps how much of a file is fetched from the box per request, in MB. Default `0` — **no cap**, the player's own `Range` is passed through and the answer is streamed. Set it only where a runtime cannot stream: Alexa's player treats a capped piece as the whole track and a title then ends early |
 | `MUSIK_TON_BUDGET_GB` | *(optional, Meine Plattenkiste)* Monthly ceiling for the audio passed through the app, in GB. Default `50` (the Hobby plan allows 100); above it the endpoint answers `503` instead of quietly running on. `0` means no ceiling. The running total is in Redis (`musik_ton_monat:<YYYY-MM>`) and printed in the dashboard |
 
 - Deploy and copy your Vercel URL (e.g., `https://your-app.vercel.app`).
@@ -414,11 +414,9 @@ Consequences, all of them good:
 
 **What it costs, and how you see it.** The audio travels through the app: up your own upstream to Frankfurt (`regions: ["fra1"]`), then down to the Echo. At 64–128 kbit/s that is 30–60 MB per hour; one full run of *Das doppelte Lottchen* is about 200 MB, an hour a night roughly 1.5 GB a month — against the 100 GB of Vercel's Hobby plan. Rather than estimate, the app counts: every response adds the bytes that **actually** flowed (counted on the stream, not taken from `Content-Length`, so an aborted track counts as what it was) to `musik_ton_monat:<YYYY-MM>` in Redis, and the dashboard prints the running total under the playlist list. `MUSIK_TON_BUDGET_GB` (default 50) is the hard stop: above it the endpoint answers `503` instead of quietly running on.
 
-**Long files are handed over in pieces**, and the size of a piece is set by Vercel, not by taste: the body of a function is capped at **4.5 MB**, and only a genuinely *streamed* response goes beyond it — whether a response is streamed is decided by the runtime, not by this code. The proxy therefore never requests more than `MUSIK_TON_MAX_MB` (default **4**) from the box at once and answers `206` with the matching `Content-Range`; the player asks for the rest, exactly as it does after every pause. Four megabytes also sit comfortably inside the function's wall clock — about three seconds at a 10 Mbit/s uplink.
+**The audio goes through uncut.** The `Range` the player asks for is the `Range` the proxy asks the box for, and what comes back is streamed straight on — a track arrives as one piece, however long it is. `maxDuration` for `api/skill.js` is set to 60 s in `vercel.json` (the Hobby plan's maximum; its default of 10 s is tight for a large file over a household uplink).
 
-**A capped piece is delivered in one go, not streamed.** Whether a runtime really streams a response or collects it first is not something this code can see, and the difference decides which limit applies. A piece of four megabytes fits in memory and under every limit, so `res.end(buffer)` sidesteps the question entirely. `MUSIK_TON_MAX_MB=0` switches the cap off and brings the stream back — for a runtime that is known to stream.
-
-> **`maxDuration` is deliberately not set in `vercel.json`.** The plan's own default applies (10 s on Hobby, 300 s with Fluid Compute). With pieces of four megabytes there is nothing to raise it for.
+> **It was once cut into pieces, and that was a mistake worth remembering.** The cap was introduced against `500 FUNCTION_INVOCATION_FAILED`, on the assumption that Vercel's 4.5 MB body limit was to blame. The real cause turned out to be a `ReferenceError` on *every* call, whatever the size — so the assumption was never tested, and the cap bought a new fault: **a track ended after about a minute and the next one started.** Alexa's player takes a `206` of four megabytes as the whole track; it does not ask for the rest. `MUSIK_TON_MAX_MB` still exists for a runtime that cannot stream — with exactly that price.
 
 **If the box says something other than audio** — the login page, a redirect, an error — the proxy fetches a fresh session number once and repeats the request; only then does it give up with `502`. That is the same distinction `weckUrteil` has always made, in the one place that still needs it.
 
@@ -519,9 +517,8 @@ The failure line names the track, not just the position: `Titel: 12. 12 Ich war 
 An hour-long audio play in one file works, but it makes *"Alexa, weiter"* a blunt
 instrument: the resume mark is a position in that one file, and the skill can
 only offer what the Echo reports. For a FRITZ!NAS folder share the app hands the
-file over in pieces anyway (`MUSIK_TON_MAX_MB`), so the length itself is no
-longer a risk — what suffers is the listener who wants to carry on where the
-chapter ended.
+file over in one piece, so the length itself is no risk — what suffers is the
+listener who wants to carry on where the chapter ended.
 
 *Check URLs* therefore reports the size, the bit rate and the playing time of
 every track, and marks with ⏳ whatever runs longer than an hour in a single
@@ -626,8 +623,9 @@ Frankfurt talking to a database in the US is worse than both being in the US.
 | Alexa confirms, then silence — FRITZ!NAS **folder** share, on every device | the stored address carried a session number, and the box ties a session to the IP that fetched it; the skill's number is never valid for the Echo | fixed: the tracks of a folder share now point at this app, which fetches from the box itself and passes the bytes through (see 9.2). Re-save the playlist once so its addresses are rewritten |
 | Silence from a FRITZ!NAS folder playlist, `401` in the Vercel log of `/api/skill` | no signing key: `MUSIK_TON_KEY`, `BRIDGE_KEY` and `ADMIN_PASSWORD` are all unset | set one of them, then import the folder again — the addresses are signed with it |
 | Silence from a FRITZ!NAS folder playlist, `503` in the log | the monthly ceiling `MUSIK_TON_BUDGET_GB` is used up — the dashboard shows the total under the playlist list | raise it, or wait for the next month; `0` removes the ceiling |
-| `500 FUNCTION_INVOCATION_FAILED` when a track address is opened | the answer was larger than the 4.5 MB a function body may carry, unless the runtime really streams it | fixed: pieces of 4 MB (`MUSIK_TON_MAX_MB`), and a crash now answers with its reason in plain text instead of Vercel's page |
-| A track stops mid-way, always at the same point | the function's wall clock ran out while passing the bytes through | lower `MUSIK_TON_MAX_MB` (default 4); with Fluid Compute enabled you may instead raise `maxDuration` in `vercel.json` |
+| `500 FUNCTION_INVOCATION_FAILED` on every track address | a `ReferenceError` in the session path (`budgetText`), left behind when the wake-up call was removed — size had nothing to do with it | fixed, and a crash now answers with its reason in plain text instead of Vercel's page |
+| A track ends after a minute or two and the next one starts | `MUSIK_TON_MAX_MB` is set: the player takes the capped piece for the whole track and does not ask for the rest | unset it (default `0` = no cap) |
+| A track stops mid-way, always at the same point | the function's wall clock ran out while the bytes were still flowing | raise `maxDuration` for `api/skill.js` in `vercel.json` (60 s is the Hobby maximum, 300 s with Fluid Compute) |
 | `502` in the log, `Ton nicht lieferbar` | the box answered with something other than audio twice — its login page, an error, or nothing at all | check the share link still exists in FRITZ!NAS, and that the box is reachable at its MyFRITZ! address |
 | Playing two folder playlists on two Echos at once cuts one of them off | both share the box's sessions, and a login ends every session on the box | one after another works with any number of shares |
 | First track plays, then silence | `PlaybackNearlyFinished` got no `ENQUEUE` | Vercel logs of `/api/skill` |

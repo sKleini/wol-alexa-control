@@ -162,16 +162,16 @@ test('Kappung und Budget kommen aus der Umgebung', () => {
   try {
     delete process.env.MUSIK_TON_MAX_MB;
     delete process.env.MUSIK_TON_BUDGET_GB;
-    assert.equal(kappungBytes(), 4 * 1024 * 1024, 'Vorgabe 4 MB');
+    assert.equal(kappungBytes(), 0, 'Vorgabe: keine Kappung');
     assert.equal(budgetBytes(), 50 * 1024 ** 3, 'Vorgabe 50 GB');
 
-    process.env.MUSIK_TON_MAX_MB = '0';
-    assert.equal(kappungBytes(), 0, '0 schaltet die Kappung ab');
+    process.env.MUSIK_TON_MAX_MB = '8';
+    assert.equal(kappungBytes(), 8 * 1024 * 1024, 'gesetzt wird gekappt');
     process.env.MUSIK_TON_BUDGET_GB = '0';
     assert.equal(budgetBytes(), 0, '0 heisst: kein Budget');
 
     process.env.MUSIK_TON_MAX_MB = 'viel';
-    assert.equal(kappungBytes(), 4 * 1024 * 1024, 'Unsinn faellt auf die Vorgabe zurueck');
+    assert.equal(kappungBytes(), 0, 'Unsinn faellt auf die Vorgabe zurueck');
   } finally {
     if (vorher.max === undefined) delete process.env.MUSIK_TON_MAX_MB; else process.env.MUSIK_TON_MAX_MB = vorher.max;
     if (vorher.budget === undefined) delete process.env.MUSIK_TON_BUDGET_GB; else process.env.MUSIK_TON_BUDGET_GB = vorher.budget;
@@ -266,6 +266,37 @@ test('ohne Kappung wird gestroemt, mit Kappung am Stueck geliefert', async () =>
     assert.equal(redis.merkzettel.gezaehlt, erwartet, `Kappung ${kappung}: gezaehlt`);
   }
   if (vorherMax === undefined) delete process.env.MUSIK_TON_MAX_MB; else process.env.MUSIK_TON_MAX_MB = vorherMax;
+});
+
+test('ohne Kappung geht der Bereich des Abspielers unveraendert an die Box', async () => {
+  // **Der Fehler, gegen den dieser Test steht.** Mit Kappung bekam der Echo
+  // vier Megabyte als 206, spielte sie, meldete den Titel als beendet - und
+  // holte den Rest nicht nach. Von aussen: Der Titel bricht nach gut einer
+  // Minute ab, der naechste beginnt. Also wird nicht mehr gekappt, und was
+  // der Abspieler verlangt, verlangt auch der Durchleiter.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const ganz = Buffer.alloc(9000, 7);
+  const vorher = process.env.MUSIK_TON_MAX_MB;
+  delete process.env.MUSIK_TON_MAX_MB;
+
+  try {
+    for (const [gefragt, erwartet] of [[undefined, 'bytes=0-'], ['bytes=1000-', 'bytes=1000-']]) {
+      const res = attrappeRes();
+      const aufrufe = await mitAbruf(() => new Response(ganz, {
+        status: 206,
+        headers: { 'content-type': 'audio/mpeg', 'content-range': `bytes 0-8999/9000`, 'content-length': '9000' },
+      }), async (gesehen) => {
+        const lauf = nasTon({ method: 'GET', headers: gefragt ? { range: gefragt } : {} },
+          res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+        await Promise.all([lauf, fertig(res)]);
+        return gesehen;
+      });
+      assert.equal(aufrufe[0].optionen.headers.Range, erwartet, `Bereich "${gefragt || 'keiner'}" wird durchgereicht`);
+      assert.equal(Buffer.concat(res.stuecke).length, 9000, 'und alle Bytes kommen an');
+    }
+  } finally {
+    if (vorher === undefined) delete process.env.MUSIK_TON_MAX_MB; else process.env.MUSIK_TON_MAX_MB = vorher;
+  }
 });
 
 test('nasTon reicht die Bytes durch, zaehlt sie und faelscht den Kopf nicht', async () => {
