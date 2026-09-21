@@ -83,6 +83,11 @@
 
         .hint { font-size: 0.8rem; color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.03); border-left: 3px solid var(--primary); border-radius: 8px; padding: 10px 12px; margin-bottom: 15px; line-height: 1.5; }
         .hint code { font-family: monospace; color: rgba(255,255,255,0.85); }
+        details.hint > summary { cursor: pointer; font-weight: 600; color: rgba(255,255,255,0.8); list-style: none; display: flex; align-items: center; gap: 8px; }
+        details.hint > summary::-webkit-details-marker { display: none; }
+        details.hint > summary::before { content: '\25b8'; transition: transform 0.2s; }
+        details.hint[open] > summary::before { transform: rotate(90deg); }
+        details.hint > .hint-body { margin-top: 10px; }
         .form-status { font-size: 0.85rem; margin-top: 10px; min-height: 1.2em; }
         .form-status.error { color: #ff8080; }
         .form-status.ok { color: #7dffb3; }
@@ -194,12 +199,15 @@
         <div class="glass-card" style="margin-top: 20px;">
             <h1><i class="fas fa-music"></i> Playlists</h1>
 
-            <div class="hint">
-                <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks).<br>
-                Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
-                <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
-                <strong>FRITZ!NAS folder shares take a detour, and they have to:</strong> such a share hands out its files only with a session number, and the box ties that number to the address that fetched it — for the Echo it is worthless, whoever fetched it. The tracks therefore point at this app, which fetches the file itself and passes the bytes through. Nothing is stored; the counter below the list says how much ran through this month.
-            </div>
+            <details class="hint">
+                <summary>How playlists work — URLs, folder import &amp; FRITZ!NAS</summary>
+                <div class="hint-body">
+                    <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks).<br>
+                    Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
+                    <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
+                    <strong>FRITZ!NAS folder shares take a detour, and they have to:</strong> such a share hands out its files only with a session number, and the box ties that number to the address that fetched it — for the Echo it is worthless, whoever fetched it. The tracks therefore point at this app, which fetches the file itself and passes the bytes through. Nothing is stored; the counter below the list says how much ran through this month.
+                </div>
+            </details>
 
             <form id="playlist-form">
                 <div class="input-group">
