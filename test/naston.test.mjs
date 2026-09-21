@@ -195,7 +195,7 @@ test('lesbareMenge sagt, was durchgelaufen ist', () => {
 // Die Freigabe zeigt auf eine numerische Adresse: `zielErlaubt` loest sie dann
 // ohne Namensdienst auf, und der Abruf selbst wird ersetzt. Damit laeuft auch
 // dieser Teil ohne Netz.
-import { PassThrough } from 'node:stream'
+import { PassThrough, Writable } from 'node:stream'
 import { nasTon } from '../lib/naston.js'
 
 const BOX = 'https://203.0.113.10:456/nas/filelink.lua?id=535f52fbb2016f4f';
@@ -665,4 +665,117 @@ test('fritzSid meldet sich nicht an, solange eine Lieferung laeuft', async () =>
   assert.equal(tot.ergebnis.sid, '00112233445566aa');
   assert.equal(tot.ergebnis.angemeldet, false);
   assert.ok(!tot.wege.some(w => w.includes('filelink.lua')), 'auch dann kein Login');
+});
+
+// --- Die Attrappe war schneller als die Wirklichkeit ------------------------
+//
+// **Der teuerste Test dieser Datei, weil sein Fehlen teuer war.** Nach #122
+// spielte keine Ordnerfreigabe mehr - und alle 241 Tests waren gruen. Grund:
+// `attrappeRes` ist ein PassThrough mit einem `data`-Horcher. Der liest
+// sofort mit, es gibt nie Gegendruck, und `finish` kommt im selben Tick wie
+// das `end` des Lesestroms. Ob `durchleiten` auf die Antwort wartet oder nur
+// auf den Zufluss, war daran nicht zu unterscheiden.
+//
+// Auf der Leitung zum Echo ist das anders: Dort steht das letzte Stueck noch
+// im Puffer, wenn die Box laengst fertig ist. Wer dann auflaest, gibt die
+// Function frei, waehrend der Echo noch auf Bytes wartet - und bekommt
+// Kopfzeilen mit Content-Length und danach zu wenig.
+
+/**
+ * Ein `res`, das so langsam schreibt wie eine Leitung.
+ *
+ * **Gezaehlt wird beim Abschluss, nicht beim Beginn.** Der erste Anlauf dieses
+ * Tests legte die Stuecke gleich in `_write` ab - und ging deshalb auch ueber
+ * dem kaputten Code durch: Ein `write`, das noch laeuft, hatte sein Stueck
+ * dort laengst hinterlegt. Auf der echten Leitung steht es dann noch im
+ * Puffer. Was zaehlt, ist `writableFinished`: Erst dann ist die Antwort
+ * draussen und die Function darf gehen.
+ */
+function langsamesRes(verzoegerungMs = 5) {
+  const res = new Writable({
+    highWaterMark: 64,
+    write(stueck, _kodierung, weiter) {
+      setTimeout(() => { res.stuecke.push(Buffer.from(stueck)); weiter(); }, verzoegerungMs);
+    },
+  });
+  res.stuecke = [];
+  res.statusCode = null;
+  res.kopf = null;
+  res.status = (code) => { res.statusCode = code; return res; };
+  res.writeHead = (code, kopfzeilen) => { res.statusCode = code; res.kopf = kopfzeilen; return res; };
+  return res;
+}
+
+test('nasTon loest erst auf, wenn alles hinausgeschrieben ist', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = langsamesRes();
+
+  await mitAbruf(() => new Response(Buffer.alloc(1024, 3), {
+    status: 206,
+    headers: { 'content-type': 'audio/mpeg', 'content-length': '1024', 'content-range': 'bytes 0-1023/1024' },
+  }), async () => {
+    // Kein `fertig(res)` daneben: Genau das ist die Frage - wartet nasTon von
+    // sich aus, oder waere die Function hier schon weg?
+    await nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+  });
+
+  assert.ok(res.writableFinished,
+    'wenn nasTon aufloest, ist die Antwort hinaus - nicht nur die Box fertig');
+  assert.equal(Buffer.concat(res.stuecke).length, 1024, 'und zwar ganz');
+});
+
+test('auch ein fortgesetzter Strom wartet, bis die Antwort hinaus ist', async () => {
+  // Zwei Stuecke, eine Antwort: Der Abschluss darf auch hier nicht am Ende
+  // des Zuflusses haengen, sondern am Ende der Antwort.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = langsamesRes();
+
+  await mitAbruf((nummer) => (nummer === 1
+    ? halbeAntwort(512, 1024)
+    : new Response(Buffer.alloc(512, 8), {
+      status: 206,
+      headers: { 'content-type': 'audio/mpeg', 'content-length': '512', 'content-range': 'bytes 512-1023/1024' },
+    })), async () => {
+    await nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+  });
+
+  assert.ok(res.writableFinished, 'auch nach einer Fortsetzung wird auf die Antwort gewartet');
+  assert.equal(Buffer.concat(res.stuecke).length, 1024, 'und beide Stuecke sind drin');
+});
+
+test('legt der Echo auf, ist die Function sofort frei', async () => {
+  // Sonst laedt sie eine Datei zu Ende, die niemand mehr hoert - und haelt
+  // dabei ihre sechzig Sekunden besetzt. Die Box tropft hier absichtlich in
+  // kleinen Stuecken: An einem einzigen grossen gaebe es nichts zu
+  // unterbrechen, und der Test waere nur ein Wettlauf.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = langsamesRes(1);
+  const begonnen = Date.now();
+  let gesendet = 0;
+
+  const tropfen = new ReadableStream({
+    async pull(steuerung) {
+      if (gesendet >= 256) return steuerung.close();
+      gesendet += 1;
+      steuerung.enqueue(new Uint8Array(1024).fill(3));
+      await new Promise(a => setTimeout(a, 2));
+    },
+  });
+
+  await mitAbruf(() => new Response(tropfen, {
+    status: 206,
+    headers: {
+      'content-type': 'audio/mpeg',
+      'content-length': String(256 * 1024),
+      'content-range': `bytes 0-${256 * 1024 - 1}/${1024 * 1024}`,
+    },
+  }), async () => {
+    const lauf = nasTon({ method: 'GET', headers: { range: 'bytes=0-' } }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+    setTimeout(() => res.destroy(), 30);
+    await lauf;
+  });
+
+  const gebraucht = Date.now() - begonnen;
+  assert.ok(gebraucht < 2000, `nicht haengen geblieben (${gebraucht} ms)`);
+  assert.ok(gesendet < 256, `und nicht zu Ende geladen (${gesendet} von 256 Stuecken)`);
 });
