@@ -1481,12 +1481,12 @@ test('Ein Titelanfang bei null laesst die gemerkte Stelle desselben Titels stehe
 
 test('Ein Titelanfang bei einer Sekunde loescht die gemerkte Stelle auch nicht', async () => {
   // **Der zweite gemeldete Defekt.** In der Datenbank stand `@1093 ms`, und
-  // weil das keine Null war, ging es durch. Im selben Log traegt das
-  // PlaybackStarted dieses Echos 1036 ms Vorlauf: Das Geraet meldet seine
-  // *aktuelle* Position, nicht die, an der es eingestiegen ist - eine Null
-  // kommt von ihm nie, und eine Sperre, die nur die Null kennt, greift bei
-  // ihm nie. Danach stand @1093 ms in der Datenbank, `einstieg()` machte
-  // daraus 0, und das Hoerbuch fing wieder vorn an.
+  // weil das keine Null war, ging es durch und deckte die echte Stelle zu.
+  // Die Zahl selbst ist ehrlich: Der Verlauf zeigt eine Kette von Wiedergaben,
+  // die nach 8, 11, 21 und 42 Sekunden endeten, bei Titeln von rund einer
+  // Stunde. Wer nach einer Sekunde abbricht, steht eben bei einer Sekunde -
+  // nur ist das kein Ziel, `einstieg()` macht 0 daraus, und es darf die zehnte
+  // Minute nicht loeschen, die vorher dastand.
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
   await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 1093 }, {}, null, redis);
   assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 600000, 'die Stelle steht noch');
@@ -1559,11 +1559,11 @@ test('standNichtZurueck sperrt alles unter dem Vorlauf, nicht nur die Null', () 
   const stand = { position: 1, runde: 0, seed: 0, offset: 600000 };
   assert.equal(standNichtZurueck(stand, token, 0), true);
   // **Der gemeldete Fall.** In der Datenbank stand @1093 ms, und weil das
-  // keine Null war, ging es durch und deckte die echte Stelle zu. Im selben
-  // Log traegt das PlaybackStarted dieses Echos 1036 ms Vorlauf: Das Geraet
-  // meldet seine aktuelle Position, nicht die, an der es eingestiegen ist -
-  // eine Null kommt von ihm nie.
-  assert.equal(standNichtZurueck(stand, token, 1093), true, 'ein Titelanfang, der keine Null ist');
+  // keine Null war, ging es durch und deckte die echte Stelle zu: Eine
+  // Wiedergabe, die nach einer Sekunde endete, hat die zehnte Minute
+  // ueberschrieben. Der Verlauf zeigt eine ganze Kette davon - 8, 11, 21, 42
+  // Sekunden, bei Titeln von rund einer Stunde.
+  assert.equal(standNichtZurueck(stand, token, 1093), true, 'eine Stelle, die keine ist');
   assert.equal(standNichtZurueck(stand, token, 1), true, 'was einstieg() zu 0 macht, ist keine Stelle');
   assert.equal(standNichtZurueck(stand, token, 5000), false, 'ab dem Vorlauf ist es eine Stelle');
   assert.equal(standNichtZurueck(stand, token, 30000), false, 'auch eine kleinere echte Stelle gilt');
