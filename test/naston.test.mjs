@@ -15,6 +15,8 @@ import {
   tonUrl,
   alsTonUrl,
   frischeAdresse,
+  laufMarke,
+  laufUeberholt,
   eigeneBasis,
   bereich,
   antwortKopf,
@@ -852,9 +854,14 @@ test('frischeAdresse haengt ein n an - aber nur an die eigenen Adressen', () => 
   const eigen = 'https://meine-app.vercel.app/api/skill?ton=abc.def';
   assert.equal(frischeAdresse(eigen, 1700), `${eigen}&n=1700`);
 
+  // `g=1` weist einen Start aus: Nur er ruft eine neue Wiedergabe aus, ein
+  // angehaengter Titel haengt sich an die laufende (siehe `laufMarke`).
+  assert.equal(frischeAdresse(eigen, 1700, true), `${eigen}&n=1700&g=1`);
+
   // Zweimal angefasst heisst nicht zweimal angehaengt: Sonst waechst die
   // Adresse mit jedem Start, bis Alexas 1024 Zeichen nicht mehr reichen.
   assert.equal(frischeAdresse(`${eigen}&n=1700`, 1800), `${eigen}&n=1800`);
+  assert.equal(frischeAdresse(`${eigen}&n=1700&g=1`, 1800), `${eigen}&n=1800`);
 
   // Eine fremde MP3 bleibt, wie sie ist - was ein anderer Server mit einem
   // unbekannten Parameter macht, weiss hier niemand. Erkannt wird die eigene
@@ -958,4 +965,134 @@ test('ohne Frist bleibt die Wache aus', async () => {
   }
 
   assert.equal(Buffer.concat(res.stuecke).length, 64, 'die Lieferung lief bis zum Schluss');
+});
+
+// --- Ueberholte Lieferungen hoeren auf ------------------------------------
+//
+// **Was der Verlauf vom 21. September zeigte.** 180 MB in zweieinhalb
+// Minuten, 17 Abrufe fuer sechs Dateien - dieselbe viermal -, davon 49 MB
+// fuer zwei Titel, die nie zu hoeren waren. Jeder Start laedt den Titel ganz,
+// das `PlaybackNearlyFinished` eine Sekunde spaeter den naechsten dazu, und
+// wer stoppt und neu startet, bestellt beides noch einmal. Die alten
+// Lieferungen liefen trotzdem zu Ende - auf derselben Instanz und derselben
+// Leitung zur Box, die der neue Start gerade braucht.
+
+test('laufMarke: ein Start ruft aus, ein angehaengter Titel liest nur', async () => {
+  const speicher = {};
+  const redis = { async get(k) { return speicher[k] ?? null; }, async set(k, v) { speicher[k] = v; } };
+
+  assert.equal(await laufMarke(redis, '1700', true), '1700', 'der Start ruft seinen Stempel aus');
+  assert.equal(await laufMarke(redis, '1705', false), '1700', 'der naechste Titel gehoert zu ihm');
+
+  // Und das ist der Punkt, an dem ein einfacherer Zaehler falsch waere:
+  // Waehrend Titel A laeuft, holt der Echo Titel B - beide gehoeren zu
+  // derselben Wiedergabe, und keiner darf den anderen abraeumen.
+  assert.equal(await laufUeberholt(redis, '1700'), false);
+
+  assert.equal(await laufMarke(redis, '1800', true), '1800', 'der Neustart ruft neu aus');
+  assert.equal(await laufUeberholt(redis, '1700'), true, 'die alten sind ueberholt');
+  assert.equal(await laufUeberholt(redis, '1800'), false, 'die neue nicht');
+
+  // Ein `Range`-Nachschlag des alten Starts traegt dieselbe Adresse samt
+  // `g=1`. Er darf die Wiedergabe nicht zurueckdrehen - er ist der
+  // ueberholte, und er bekommt die juengere Marke zu sehen.
+  assert.equal(await laufMarke(redis, '1700', true), '1800', 'die Marke geht nie zurueck');
+  assert.equal(await laufUeberholt(redis, '1800'), false, 'die neue laeuft ungestoert weiter');
+});
+
+test('laufMarke bleibt stumm, wenn Redis es ist - und laesst sich abschalten', async () => {
+  const kaputt = { async get() { throw new Error('weg'); }, async set() { throw new Error('weg'); } };
+  assert.equal(await laufMarke(kaputt, '1700', true), null, 'kein Wurf, keine Marke');
+  assert.equal(await laufUeberholt(kaputt, '1700'), false, 'ohne Auskunft wird nicht abgebrochen');
+  assert.equal(await laufUeberholt(kaputt, null), false, 'und ohne eigene Marke erst recht nicht');
+
+  const vorher = process.env.MUSIK_TON_LAUF;
+  process.env.MUSIK_TON_LAUF = '0';
+  try {
+    const speicher = { musik_ton_lauf: '1800' };
+    const redis = { async get(k) { return speicher[k] ?? null; }, async set(k, v) { speicher[k] = v; } };
+    assert.equal(await laufMarke(redis, '1700', true), null, 'abgeschaltet heisst abgeschaltet');
+    assert.equal(await laufUeberholt(redis, '1700'), false);
+  } finally {
+    if (vorher === undefined) delete process.env.MUSIK_TON_LAUF;
+    else process.env.MUSIK_TON_LAUF = vorher;
+  }
+});
+
+test('faengt eine neuere Wiedergabe an, hoert die laufende Lieferung auf', async () => {
+  // Der gemessene Fall: Der Echo wird gestoppt und neu gestartet, waehrend
+  // die alte Datei noch durchlaeuft. Die Box tropft hier absichtlich, sonst
+  // gaebe es nichts zu unterbrechen.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const speicher = { musik_ton_lauf: '1700' };
+  const redis = {
+    ...attrappeRedis(),
+    async get(k) { return k === 'musik_ton_lauf' ? speicher[k] : 0; },
+    async set(k, v) { speicher[k] = v; },
+  };
+
+  let gesendet = 0;
+  const tropfen = new ReadableStream({
+    async pull(steuerung) {
+      if (gesendet >= 4096) return steuerung.close();
+      gesendet += 1;
+      steuerung.enqueue(new Uint8Array(1024).fill(3));
+      await new Promise(a => setTimeout(a, 3));
+    },
+  });
+
+  await mitAbruf(() => new Response(tropfen, {
+    status: 200,
+    headers: { 'content-type': 'audio/mpeg', 'content-length': String(4096 * 1024) },
+  }), async () => {
+    // `g=1` fehlt: Diese Lieferung gehoert zur laufenden Wiedergabe 1700.
+    const lauf = nasTon(
+      { method: 'GET', headers: {}, url: `/api/skill?ton=${encodeURIComponent(token)}&n=1705` },
+      res, redis, token, async () => 'aabbccddeeff0011',
+    );
+    // Und jetzt faengt nebenan eine neue an.
+    setTimeout(() => { speicher.musik_ton_lauf = '1800'; }, 200);
+    await lauf;
+  });
+
+  assert.ok(gesendet < 4096, `nicht zu Ende geladen (${gesendet} von 4096 Stuecken)`);
+});
+
+test('dieselbe Wiedergabe laeuft ungestoert weiter', async () => {
+  // Die Gegenprobe, ohne die aus der Reparatur ein Titelabbruch wird: Ein
+  // angehaengter Titel traegt denselben Stempel wie der laufende, und beide
+  // muessen durchkommen.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const speicher = { musik_ton_lauf: '1700' };
+  const redis = {
+    ...attrappeRedis(),
+    async get(k) { return k === 'musik_ton_lauf' ? speicher[k] : 0; },
+    async set(k, v) { speicher[k] = v; },
+  };
+
+  let gesendet = 0;
+  const tropfen = new ReadableStream({
+    async pull(steuerung) {
+      if (gesendet >= 64) return steuerung.close();
+      gesendet += 1;
+      steuerung.enqueue(new Uint8Array(1024).fill(3));
+      await new Promise(a => setTimeout(a, 3));
+    },
+  });
+
+  await mitAbruf(() => new Response(tropfen, {
+    status: 200,
+    headers: { 'content-type': 'audio/mpeg', 'content-length': String(64 * 1024) },
+  }), async () => {
+    const lauf = nasTon(
+      { method: 'GET', headers: {}, url: `/api/skill?ton=${encodeURIComponent(token)}&n=1705` },
+      res, redis, token, async () => 'aabbccddeeff0011',
+    );
+    await Promise.all([lauf, fertig(res)]);
+  });
+
+  assert.equal(gesendet, 64, 'alles durch');
+  assert.equal(Buffer.concat(res.stuecke).length, 64 * 1024);
 });

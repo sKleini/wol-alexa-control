@@ -365,36 +365,52 @@ test('playDirektive baut Stream und Anzeige', () => {
   assert.equal(r.audioItem.stream.expectedPreviousToken, undefined);
 });
 
-// --- Der Token, den das Geraet schon traegt ---------------------------------
+// --- Neustart nach Pause: was gleich bleibt und was neu wird ---------------
 //
 // **Der gemeldete Fehler.** Eine Playlist aus einer FRITZ!NAS-Ordnerfreigabe
-// starten, kurz darauf stoppen, wieder starten - und es kommt kein Ton. Im
-// Log vom 21. September steht der Ablauf vollstaendig:
-//
-//   20:28:28  spielt Udo CD eins ab 1/13 bei 0 ms  → PlaybackStarted, Musik
-//   20:28:41  AMAZON.PauseIntent, Stand 10432 ms gemerkt
-//   20:28:55  spielt Udo CD eins ab 1/13 bei 0 ms  → GET auf die Tondatei,
-//             und danach nichts: kein PlaybackStarted, kein PlaybackFailed
-//
-// Der einzige Unterschied zum geglueckten Start elf Sekunden davor: Diesmal
-// war der Token Zeichen fuer Zeichen derselbe, den das Geraet vom ersten
-// Start noch trug. Wer kurz nach dem Start stoppt, steht ja noch beim ersten
-// Titel - Stelle, Runde und Mischung fallen dann zusammen.
+// starten, kurz darauf stoppen, wieder starten - und es kommt kein Ton.
+// Behoben hat das die frische Adresse (#138), nicht der Token: #137 hat die
+// Runde hochgezaehlt, und der Log vom 21.9., 20:44-20:47, lief mit dieser
+// Aenderung und blieb zweimal von dreimal still. Gekostet hat sie zwei Dinge,
+// die hier festgenagelt sind - `selberTitel` vergleicht die Runde mit, also
+// verlor der Neustart den gemerkten Stand.
 
-test('Ein Start bekommt nie den Token, den das Geraet schon traegt', () => {
-  const gleich = playDirektive(KINDER, 0, 0, { ungleich: 'Kinderlieder|0|0|0' });
-  assert.equal(gleich.audioItem.stream.token, 'Kinderlieder|0|1|0', 'die Runde zaehlt hoch');
-  assert.equal(gleich.audioItem.stream.url, 'https://example.org/k/01.mp3', 'derselbe Titel');
+test('Ein Neustart behaelt Stelle, Runde und Mischung - nur die Adresse ist neu', async () => {
+  const erst = await skill(sucheIntent('kinderlieder'));
+  assert.equal(spielt(erst).audioItem.stream.token, 'Kinderlieder|0|0|0');
 
-  const anderer = playDirektive(KINDER, 0, 0, { ungleich: 'Kinderlieder|1|0|0' });
-  assert.equal(anderer.audioItem.stream.token, 'Kinderlieder|0|0|0', 'sonst bleibt alles, wie es war');
+  const stopp = await skill(intent('AMAZON.PauseIntent'), { token: 'Kinderlieder|0|0|0', offset: 10432 });
+  assert.deepEqual(stopp.directives, [{ type: 'AudioPlayer.Stop' }]);
 
-  // Ein ENQUEUE weist sich ueber `expectedPreviousToken` aus; dort ist der
-  // Token des Geraets die Zusage und nicht die Kollision.
-  const angehaengt = playDirektive(KINDER, 0, 0, {
-    verhalten: 'ENQUEUE', vorherigerToken: 'Kinderlieder|2|0|0', ungleich: 'Kinderlieder|0|0|0',
-  });
-  assert.equal(angehaengt.audioItem.stream.token, 'Kinderlieder|0|0|0');
+  const wieder = await skill(sucheIntent('kinderlieder'), { token: 'Kinderlieder|0|0|0', offset: 10432, aktivitaet: 'STOPPED' });
+  // Derselbe Token: Die Runde zaehlt hier nicht mehr hoch, sonst faende
+  // `standNichtZurueck` den gemerkten Stand nicht wieder (siehe unten).
+  assert.equal(spielt(wieder).audioItem.stream.token, 'Kinderlieder|0|0|0');
+  assert.equal(spielt(wieder).audioItem.stream.url, 'https://example.org/k/01.mp3', 'derselbe Titel');
+});
+
+test('Ein Titelanfang nach dem Neustart loescht die gemerkte Sekunde nicht', async () => {
+  // **Die Regression aus #137, in Zahlen.** Gemerkt waren 12010 ms; der
+  // Neustart faengt den Titel (Gangart "titel") von vorn an und meldet
+  // `PlaybackStarted` mit 0 ms. Zaehlt die Runde dabei hoch, ist der Stand
+  // fuer `selberTitel` ein anderer Titel - und die Null deckt die Sekunde zu.
+  const redis = mitStand(ALBUM, { position: 1, runde: 0, seed: 0, offset: 12010 });
+  const r = await skill(sucheIntent('album'), { token: 'Album|1|0|0', offset: 12010, aktivitaet: 'STOPPED' }, null, redis);
+  const token = spielt(r).audioItem.stream.token;
+  assert.equal(token, 'Album|1|0|0');
+
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token, offsetInMilliseconds: 0 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['album'].offset, 12010,
+    'die gemerkte Sekunde muss einen Titelanfang ueberleben');
+});
+
+test('"Weiter" findet den gemerkten Stand auch nach einem Neustart', async () => {
+  // Die zweite Folge derselben Wurzel: `weiter` prueft mit `selberTitel`, ob
+  // der Stand zum laufenden Titel gehoert. Eine hochgezaehlte Runde hiess
+  // dort "fremder Titel", und die zehnte Minute blieb liegen.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, redis);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000, 'die gemerkte Sekunde, um den Vorlauf zurueck');
 });
 
 test('Die Startzeile nennt den Token, den das Geraet bekommt und den es traegt', async () => {
@@ -413,23 +429,9 @@ test('Die Startzeile nennt den Token, den das Geraet bekommt und den es traegt',
   }
   const zeile = zeilen.find(z => z.includes('musik-box spielt'));
   assert.ok(zeile, `es gibt eine Zeile: ${zeilen.join(' / ')}`);
-  assert.match(zeile, /Token Kinderlieder\|0\|1\|0/, 'der Token, den der Echo bekommt');
-  assert.match(zeile, /Geraet STOPPED @4373 ms mit Kinderlieder\|0\|0\|0/, 'und der, den es noch traegt');
+  assert.match(zeile, /Token Kinderlieder\|0\|0\|0/, 'der Token, den der Echo bekommt');
+  assert.match(zeile, /Geraet STOPPED @4373 ms mit Kinderlieder\|0\|0\|0 – gleich!/, 'und der, den es noch traegt');
   assert.match(zeile, /mit ClearQueue/, 'und ob ein ClearQueue davor steht');
-});
-
-test('Starten, stoppen, wieder starten - der zweite Start bleibt nicht stumm', async () => {
-  // Der gemeldete Ablauf, Schritt fuer Schritt. Der zweite Start trifft ein
-  // Geraet, das den Token des ersten noch traegt.
-  const erst = await skill(sucheIntent('kinderlieder'));
-  assert.equal(spielt(erst).audioItem.stream.token, 'Kinderlieder|0|0|0');
-
-  const stopp = await skill(intent('AMAZON.PauseIntent'), { token: 'Kinderlieder|0|0|0', offset: 10432 });
-  assert.deepEqual(stopp.directives, [{ type: 'AudioPlayer.Stop' }]);
-
-  const wieder = await skill(sucheIntent('kinderlieder'), { token: 'Kinderlieder|0|0|0', offset: 10432, aktivitaet: 'STOPPED' });
-  assert.equal(spielt(wieder).audioItem.stream.token, 'Kinderlieder|0|1|0');
-  assert.equal(spielt(wieder).audioItem.stream.url, 'https://example.org/k/01.mp3', 'und es ist derselbe Titel');
 });
 
 // --- Grenzen der URL-Pruefung -------------------------------------------------
@@ -529,9 +531,7 @@ test('Pause stoppt, Weiter setzt am Offset fort - um den Vorlauf zurueck', async
   assert.equal(pause.outputSpeech, undefined);
 
   const weiter = await skill(intent('AMAZON.ResumeIntent'), { token: 'Kinderlieder|1|0|0', offset: 30000 });
-  // Derselbe Titel, dieselbe Mischung - nur die Runde zaehlt hoch, damit der
-  // Token nicht der des pausierten Stroms ist. Mit ihm bliebe es still.
-  assert.equal(spielt(weiter).audioItem.stream.token, 'Kinderlieder|1|1|0');
+  assert.equal(spielt(weiter).audioItem.stream.token, 'Kinderlieder|1|0|0');
   assert.equal(spielt(weiter).audioItem.stream.offsetInMilliseconds, 25000);
 });
 
@@ -855,9 +855,7 @@ test('Ohne Wiederholung stoppt naechster Titel am Ende und bleibt am Anfang steh
   assert.deepEqual(ende.directives, [{ type: 'AudioPlayer.Stop' }]);
 
   const anfang = await skill(intent('AMAZON.PreviousIntent'), { token: 'Einmal|0|0|0' }, [EINMAL]);
-  // Stelle 1 von 3 noch einmal - und mit einer hochgezaehlten Runde, weil ein
-  // Token, den das Geraet schon traegt, keinen neuen Strom anwirft.
-  assert.equal(spielt(anfang).audioItem.stream.token, 'Einmal|0|1|0');
+  assert.equal(spielt(anfang).audioItem.stream.token, 'Einmal|0|0|0');
 });
 
 // --- Das Mikrofon nach dem Befehl -------------------------------------------
@@ -1343,7 +1341,7 @@ test('"Weiter" nimmt die gemerkte Sekunde, wenn das Geraet nur noch den Titel we
   // einem Neustart, nach dem Radio dazwischen, am naechsten Tag.
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, redis);
-  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|1|0', 'derselbe Titel, eine Runde weiter');
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
   assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000);
 });
 
@@ -1367,7 +1365,7 @@ test('"Weiter" nimmt keine Stelle aus einem fremden Titel', async () => {
   // Sonst finge Titel zwei bei der Stelle von Titel drei an.
   const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 600000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0 }, null, redis);
-  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|1|0', 'derselbe Titel, eine Runde weiter');
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
   assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
@@ -2067,7 +2065,9 @@ test('die Adresse zeigt unveraendert auf dieselbe Datei - und die Box wird nicht
     const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
     const r = await skill(intent('PlayPlaylistIntent', 'Lottchen'), {}, null, redis);
     const url = spielt(r).audioItem.stream.url;
-    assert.match(url, /^https:\/\/app\.example\/api\/skill\?ton=eins\.unterschrift&n=\d+$/, url);
+    // `g=1` weist es als Start aus, nicht als angehaengten Titel - siehe
+    // `laufMarke` in lib/naston.js.
+    assert.match(url, /^https:\/\/app\.example\/api\/skill\?ton=eins\.unterschrift&n=\d+&g=1$/, url);
     assert.deepEqual(abrufe, [], 'kein einziger Abruf bei der FRITZ!Box');
   } finally {
     globalThis.fetch = vorher;
