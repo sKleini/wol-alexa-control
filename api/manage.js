@@ -22,6 +22,19 @@ async function tooManyFailures(req) {
 }
 
 export default async function handler(req, res) {
+  // **Welche Fassung hier antwortet.** Das Dashboard ist eine einzige
+  // HTML-Datei, die tagelang in einem Tab offen bleibt, und seine
+  // Refresh-Knoepfe holen Daten, nie die Seite. Nach einem Deploy zeigt eine
+  // alte Seite dann neue Daten falsch an - im gemeldeten Fall stundenlang
+  // "TON undefined" statt der Zeilen, auf die es ankam. Mit dieser Kopfzeile
+  // merkt die Seite selbst, dass sie alt ist. Steht keine Kennung bereit
+  // (lokal, ohne Vercel), heisst 'dev' ausdruecklich "keine Auskunft" und
+  // loest drueben nie eine Warnung aus.
+  res.setHeader(
+    'x-app-version',
+    process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_DEPLOYMENT_ID || 'dev',
+  );
+
   const adminPassword = process.env.ADMIN_PASSWORD;
   const providedPassword = req.headers['x-admin-password'];
 

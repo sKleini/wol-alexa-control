@@ -118,6 +118,18 @@
     </div>
 
     <main id="dashboard" style="display: none; width: 100%; max-width: 500px;">
+        <!-- **Refresh holt die Daten, nie die Seite.** Genau daran ist eine
+             Fehlersuche einen Abend lang haengengeblieben: Der Tab lief seit
+             vor einem Deploy, seine verlaufZeile kannte den WORT-Zweig noch
+             nicht, und der Verlauf zeigte stundenlang "TON undefined" statt
+             der Zeilen, auf die es ankam. Der Server nennt in jeder Antwort
+             seine Fassung; weicht sie von der ab, die beim ersten Abruf galt,
+             steht das jetzt hier statt in niemandes Kopf. -->
+        <div class="hint" id="veraltet" hidden style="border-left-color: #ff8080;">
+            <strong>Dashboard veraltet.</strong> Diese Seite ist älter als der Server —
+            was sie anzeigt, kann unvollständig sein.
+            <button type="button" class="btn" id="veraltet-neu" style="background: rgba(255,255,255,0.08); margin-top: 8px; padding: 10px;"><i class="fas fa-rotate"></i> Seite neu laden</button>
+        </div>
         <div class="glass-card">
             <h1><i class="fas fa-microchip"></i> WOL Center</h1>
 
@@ -287,6 +299,18 @@
             if (chunks) e.target.value = chunks.join(':').toLowerCase();
         });
 
+        // Die Fassung, die beim ersten Abruf galt. `null` heisst "noch keine
+        // gesehen"; `dev` (lokal, ohne Vercel) heisst "keine Auskunft" und
+        // loest nie eine Warnung aus.
+        let appVersion = null;
+
+        function versionPruefen(version) {
+            if (!version || version === 'dev') return;
+            if (appVersion === null) { appVersion = version; return; }
+            if (version === appVersion) return;
+            document.getElementById('veraltet').hidden = false;
+        }
+
         async function apiRequest(method, body = null, qs = '') {
             const password = localStorage.getItem('admin_password');
             const options = {
@@ -295,6 +319,7 @@
             };
             if (body) options.body = JSON.stringify(body);
             const res = await fetch('/api/manage' + qs, options);
+            versionPruefen(res.headers.get('x-app-version'));
             if (res.status === 401) { logout(); return null; }
             return res.json();
         }
@@ -511,8 +536,18 @@
         // Anmeldung an der Box dazwischenkam, und was der Echo daraus gemacht
         // hat.
         function verlaufZeile(e) {
-            const uhr = new Date(e.zeit).toLocaleTimeString();
+            // Eine unbrauchbare Zeit ist kein Grund fuer ein "Invalid Date" -
+            // der Rest der Zeile sagt immer noch, was passiert ist.
+            const uhr = Number.isFinite(e.zeit) ? new Date(e.zeit).toLocaleTimeString() : '--:--:--';
             const sek = (ms) => '@' + Math.round(ms / 1000) + 's';
+            // Woher die Stelle kam und in welcher Gangart. **Dieselbe Klammer
+            // fuer Befehl und Ereignis**, seit der Stand vor der Antwort
+            // geschrieben wird: Der Gang steht jetzt auch in den
+            // Abspieler-Eintraegen, er wurde nur nie gezeigt.
+            const quelle = (x) => {
+                const teile = [x.woher, x.gangart].filter(Boolean).join(', ');
+                return teile ? ' (' + teile + ')' : '';
+            };
             // **Die Zeile, die bei der letzten Meldung gefehlt hat.** Ein
             // "weiter", das am Titelanfang landet, sah im Verlauf genauso aus
             // wie eines, das richtig sass - der Befehl selbst stand nirgends.
@@ -520,10 +555,9 @@
             // (Geraet oder gemerkter Stand), in welcher Gangart, was das
             // Geraet ueber sich sagte und was der Stand danach sagt.
             if (e.was === 'wort') {
-                const quelle = [e.woher, e.gangart].filter(Boolean).join(', ');
                 return `${uhr}  WORT  ${e.ereignis}`
                     + `${e.offset != null ? '  ' + sek(e.offset) : ''}`
-                    + `${quelle ? ' (' + quelle + ')' : ''}`
+                    + quelle(e)
                     + `${e.aktivitaet ? '  ' + e.aktivitaet : ''}`
                     + `${e.antwort ? '  [' + e.antwort + ']' : ''}`
                     + `${e.stand ? '  Stand: ' + e.stand : ''}`
@@ -535,16 +569,36 @@
                 // dem Alexa hinterher widerspricht.
                 return `${uhr}  ECHO  ${e.ereignis}${e.fehler ? ' ' + e.fehler : ''}`
                     + `${e.offset != null ? '  ' + sek(e.offset) : ''}`
+                    + quelle(e)
+                    + `${e.aktivitaet ? '  ' + e.aktivitaet : ''}`
                     + `${e.antwort ? '  [' + e.antwort + ']' : ''}`
                     + `${e.stand ? '  Stand: ' + e.stand : ''}`
                     + `${e.ursache ? '  ' + e.ursache : ''}`
                     + `${e.titel ? '  ' + e.titel : ''}`;
             }
-            const menge = e.soll ? `${e.bytes} von ${e.soll}` : `${e.bytes}`;
-            const kurz = e.soll && e.bytes < e.soll ? '  ABGERISSEN' : '';
-            return `${uhr}  TON   ${e.status}  ${menge} B in ${e.dauer} ms`
-                + `${e.angemeldet ? '  ANMELDUNG' : ''}${kurz}`
-                + `${e.grund ? '  ' + e.grund : ''}  ${e.datei || ''}`;
+            // **Der Bereich gehoert dazu.** Er steht in jedem Ton-Eintrag und
+            // wurde nie gezeigt - dabei ist er genau die Auskunft, die ein
+            // sekundengenaues Fortsetzen von einem Start am Titelanfang
+            // unterscheidet: `bytes=0-` holt die Datei, `bytes=4187-` ist der
+            // Sprung ueber den ID3-Kopf, und alles darueber ist ein echter
+            // Sprung in die Mitte.
+            if (e.was === 'ton') {
+                const menge = e.soll ? `${e.bytes} von ${e.soll}` : `${e.bytes}`;
+                const kurz = e.soll && e.bytes < e.soll ? '  ABGERISSEN' : '';
+                return `${uhr}  TON   ${e.status}  ${menge} B in ${e.dauer} ms`
+                    + `${e.bereich ? '  ' + e.bereich : ''}`
+                    + `${e.angemeldet ? '  ANMELDUNG' : ''}${kurz}`
+                    + `${e.grund ? '  ' + e.grund : ''}  ${e.datei || ''}`;
+            }
+            // **Hier war der Ton-Zweig, und das war die Falle.** Was diese
+            // Seite nicht kennt, wurde stillschweigend als missglueckter
+            // Tonabruf gezeichnet - "TON undefined undefined B in undefined
+            // ms", eine Zeile ueber einen Abruf, den es nie gab. In
+            // Wirklichkeit waren es die WORT-Zeilen einer Fassung, die diese
+            // Seite noch nicht kannte. Ein unbekannter Eintrag zeigt jetzt,
+            // dass er unbekannt ist, und daneben sich selbst.
+            const roh = JSON.stringify(e);
+            return `${uhr}  ????  ${roh.length > 200 ? roh.slice(0, 200) + '…' : roh}`;
         }
 
         // Beim Laden kommt der Verlauf ungefragt mit, und dann bleibt der
@@ -811,6 +865,12 @@
                 // localeCompare mit 'de': Sonst stuenden Umlaute hinter dem Z.
                 .sort((a, b) => a.localeCompare(b, 'de', { sensitivity: 'base', numeric: true }));
             speichereReihenfolge(namen);
+        });
+
+        // Kein Inline-onclick, wie ueberall hier: Die CSP erlaubt es, die
+        // Gewohnheit nicht.
+        document.getElementById('veraltet-neu').addEventListener('click', () => {
+            window.location.reload();
         });
 
         // Der Verlauf kam bisher nur mit dem Laden der Seite - und genau dann

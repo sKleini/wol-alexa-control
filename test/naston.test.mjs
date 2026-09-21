@@ -796,6 +796,19 @@ test('ein Redis ohne Listen kostet nie die Wiedergabe', async () => {
   assert.deepEqual(await verlaufLesen(kaputt), [], 'und der Verlauf bleibt leer statt zu werfen');
 });
 
+test('verlaufLesen gibt nur Eintraege zurueck, keine blanken Werte', async () => {
+  // **Die Zeile, die es nie gab.** `JSON.parse("123")` ergibt `123`, und eine
+  // Zahl ist wahr genug fuer `filter(Boolean)`. Im Dashboard wurde daraus eine
+  // Zeile, in der jedes Feld `undefined` war - und die sah aus wie ein
+  // missglueckter Tonabruf, war aber gar kein Eintrag. Eine Liste zaehlt
+  // genauso wenig: `typeof [] === 'object'`.
+  const redis = attrappeRedis();
+  const echt = { zeit: 1, was: 'ton', status: 200 };
+  redis.merkzettel.verlauf = [echt, 123, '"nur ein Text"', '{kaputt', ['a', 'b'], null, JSON.stringify({ zeit: 2, was: 'wort' })];
+
+  assert.deepEqual(await verlaufLesen(redis), [echt, { zeit: 2, was: 'wort' }]);
+});
+
 test('verlaufLoeschen leert den Verlauf', async () => {
   const redis = attrappeRedis();
   redis.merkzettel.verlauf = [{ zeit: 1, was: 'ton' }, { zeit: 2, was: 'echo' }];
