@@ -266,6 +266,7 @@
                 <div style="display: flex; gap: 8px; padding-top: 8px;">
                     <button type="button" class="btn" id="playlist-verlauf-neu" style="background: rgba(255,255,255,0.08); padding: 10px;"><i class="fas fa-arrows-rotate"></i> Refresh</button>
                     <button type="button" class="btn" id="playlist-verlauf-kopieren" style="background: rgba(255,255,255,0.08); padding: 10px;"><i class="fas fa-copy"></i> Copy log</button>
+                    <button type="button" class="btn" id="playlist-verlauf-leeren" style="background: rgba(255,255,255,0.08); padding: 10px;"><i class="fas fa-trash"></i> Clear log</button>
                 </div>
                 <div id="playlist-verlauf-liste" style="font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow-x: auto; padding: 8px 0;"></div>
             </details>
@@ -821,6 +822,32 @@
             const geklappt = await inZwischenablage(text);
             btn.innerHTML = geklappt ? '<i class="fas fa-check"></i> Copied' : '<i class="fas fa-xmark"></i> Copy failed';
             setTimeout(() => { btn.innerHTML = vorher; }, 2000);
+        });
+
+        // Geloescht wird der ganze Verlauf auf einmal, nicht zeilenweise - und
+        // das laesst sich nicht rueckgaengig machen. Die Sicherheitsfrage ist
+        // dasselbe Muster wie beim Loeschen einer Playlist (deletePlaylist
+        // weiter unten).
+        document.getElementById('playlist-verlauf-leeren').addEventListener('click', async (e) => {
+            if (!confirm('Delete the whole log? This cannot be undone.')) return;
+            const btn = e.currentTarget;
+            const vorher = btn.innerHTML;
+            btn.disabled = true;
+            let fehler = false;
+            try {
+                const stand = await apiRequest('DELETE', null, '?type=playlists&verlauf=1');
+                if (!stand || !stand.success) fehler = true;
+            } catch { fehler = true; }
+            btn.disabled = false;
+            if (fehler) {
+                btn.innerHTML = '<i class="fas fa-xmark"></i> Clear failed';
+                setTimeout(() => { btn.innerHTML = vorher; }, 2000);
+                return;
+            }
+            // manuell=true: der Kasten bleibt offen und zeigt "No entries
+            // yet." statt zu verschwinden - wer selbst geleert hat, soll das
+            // auch sehen.
+            await zeigeVerlauf(true);
         });
 
         window.deletePlaylist = async (name) => {

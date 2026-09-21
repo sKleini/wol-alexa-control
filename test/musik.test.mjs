@@ -2426,6 +2426,7 @@ function redisMitListe(daten = {}) {
     async ltrim() {},
     async expire() {},
     async lrange() { return liste; },
+    async del() { liste.length = 0; },
   };
 }
 
@@ -2470,6 +2471,29 @@ test('/api/manage?verlauf=1 gibt die Eintraege heraus, neueste zuerst', async ()
   await handleManage({ method: 'GET', query: { type: 'playlists', verlauf: '1' } }, res, redis);
   assert.equal(res.body.eintraege.length, 2);
   assert.equal(res.body.eintraege[0].zeit, 2, 'neueste zuerst');
+});
+
+test('DELETE .../manage?verlauf=1 leert den Verlauf, laesst die Playlists in Ruhe', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await redis.lpush('musik_ton_verlauf', { zeit: 1, was: 'ton', bytes: 10, soll: 20 });
+
+  const res = antwortFaenger();
+  await handleManage({ method: 'DELETE', query: { type: 'playlists', verlauf: '1' } }, res, redis);
+
+  assert.deepEqual(res.body, { success: true });
+  assert.deepEqual(redis.liste, [], 'der Verlauf ist leer');
+  assert.deepEqual(redis.speicher[REDIS_KEY], [KINDER], 'die Playlists blieben unberuehrt');
+});
+
+test('ein DELETE mit Playlist-Namen loescht weiterhin nur die Playlist, nicht den Verlauf', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await redis.lpush('musik_ton_verlauf', { zeit: 1, was: 'ton', bytes: 10, soll: 20 });
+
+  const res = antwortFaenger();
+  await handleManage({ method: 'DELETE', query: {}, body: { name: 'Kinderlieder' } }, res, redis);
+
+  assert.deepEqual(redis.speicher[REDIS_KEY], [], 'die Playlist ist weg');
+  assert.equal(redis.liste.length, 1, 'der Verlauf steht unveraendert da');
 });
 
 test('ohne laufende Lieferung prueft der Knopf wie bisher', async () => {
