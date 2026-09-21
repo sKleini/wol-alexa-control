@@ -511,13 +511,31 @@
         // hat.
         function verlaufZeile(e) {
             const uhr = new Date(e.zeit).toLocaleTimeString();
+            const sek = (ms) => '@' + Math.round(ms / 1000) + 's';
+            // **Die Zeile, die bei der letzten Meldung gefehlt hat.** Ein
+            // "weiter", das am Titelanfang landet, sah im Verlauf genauso aus
+            // wie eines, das richtig sass - der Befehl selbst stand nirgends.
+            // Jetzt steht daneben, welche Stelle hinausging, woher sie kam
+            // (Geraet oder gemerkter Stand), in welcher Gangart, was das
+            // Geraet ueber sich sagte und was der Stand danach sagt.
+            if (e.was === 'wort') {
+                const quelle = [e.woher, e.gangart].filter(Boolean).join(', ');
+                return `${uhr}  WORT  ${e.ereignis}`
+                    + `${e.offset != null ? '  ' + sek(e.offset) : ''}`
+                    + `${quelle ? ' (' + quelle + ')' : ''}`
+                    + `${e.aktivitaet ? '  ' + e.aktivitaet : ''}`
+                    + `${e.antwort ? '  [' + e.antwort + ']' : ''}`
+                    + `${e.stand ? '  Stand: ' + e.stand : ''}`
+                    + `${e.titel ? '  ' + e.titel : ''}`;
+            }
             if (e.was === 'echo') {
                 // Die Antwort des Skills steht daneben: "keine Direktive" beim
                 // Titelwechsel ist eine andere Diagnose als ein "Play ENQUEUE",
                 // dem Alexa hinterher widerspricht.
                 return `${uhr}  ECHO  ${e.ereignis}${e.fehler ? ' ' + e.fehler : ''}`
-                    + `${e.offset != null ? '  @' + Math.round(e.offset / 1000) + 's' : ''}`
+                    + `${e.offset != null ? '  ' + sek(e.offset) : ''}`
                     + `${e.antwort ? '  [' + e.antwort + ']' : ''}`
+                    + `${e.stand ? '  Stand: ' + e.stand : ''}`
                     + `${e.ursache ? '  ' + e.ursache : ''}`
                     + `${e.titel ? '  ' + e.titel : ''}`;
             }
