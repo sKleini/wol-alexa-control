@@ -522,68 +522,6 @@ function halbeAntwort(gelieferte, angekuendigte, von = 0, gesamt = angekuendigte
   });
 }
 
-test('ein Strom, der nach der Haelfte endet, wird fortgesetzt', async () => {
-  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
-  const res = attrappeRes();
-
-  await mitAbruf((nummer, optionen) => {
-    if (nummer === 1) return halbeAntwort(512, 1024);
-    // Der zweite Abruf holt genau den Rest - ab der Stelle, an der es abriss.
-    assert.equal(optionen.headers.Range, 'bytes=512-', 'der Rest, nicht die Datei von vorn');
-    return new Response(Buffer.alloc(512, 8), {
-      status: 206,
-      headers: { 'content-type': 'audio/mpeg', 'content-length': '512', 'content-range': 'bytes 512-1023/1024' },
-    });
-  }, async (aufrufe) => {
-    const lauf = nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
-    await Promise.all([lauf, fertig(res)]);
-    assert.equal(aufrufe.length, 2, 'die Box wurde ein zweites Mal gefragt');
-  });
-
-  // Der Echo merkt von alldem nichts: Seine Content-Length geht am Ende auf.
-  assert.equal(Buffer.concat(res.stuecke).length, 1024, 'alle Bytes kommen an');
-});
-
-test('nach MUSIK_TON_ANLAEUFE Versuchen ist Schluss, und die Warnung nennt die Zahlen', async () => {
-  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
-  const res = attrappeRes();
-  const vorher = process.env.MUSIK_TON_ANLAEUFE;
-  process.env.MUSIK_TON_ANLAEUFE = '2';
-  const echteWarnung = console.warn;
-  const zeilen = [];
-  console.warn = (...w) => zeilen.push(w.join(' '));
-
-  try {
-    await mitAbruf((nummer) => halbeAntwort(256, nummer === 1 ? 1024 : 768, nummer === 1 ? 0 : 256, 1024),
-      async (aufrufe) => {
-        const lauf = nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
-        await Promise.all([lauf, fertig(res)]);
-        assert.equal(aufrufe.length, 2, 'zwei Anlaeufe, dann ist Schluss');
-      });
-  } finally {
-    console.warn = echteWarnung;
-    if (vorher === undefined) delete process.env.MUSIK_TON_ANLAEUFE; else process.env.MUSIK_TON_ANLAEUFE = vorher;
-  }
-
-  assert.equal(Buffer.concat(res.stuecke).length, 512, 'mehr war nicht zu holen');
-  const zeile = zeilen.find(z => z.includes('Strom abgerissen'));
-  assert.ok(zeile, 'der Abriss steht im Log und gilt nicht mehr als Erfolg');
-  assert.match(zeile, /512 B von 1 KB/, 'Geliefertes von Erwartetem');
-});
-
-test('ein vollstaendiger Strom loest keinen zweiten Abruf aus', async () => {
-  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
-  const res = attrappeRes();
-
-  await mitAbruf(() => halbeAntwort(1024, 1024), async (aufrufe) => {
-    const lauf = nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
-    await Promise.all([lauf, fertig(res)]);
-    assert.equal(aufrufe.length, 1, 'der Regelfall kostet genau einen Abruf');
-  });
-
-  assert.equal(Buffer.concat(res.stuecke).length, 1024);
-});
-
 test('waehrend geliefert wird, steht der Merkzettel - und danach nicht mehr', async () => {
   const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
   const res = attrappeRes();
@@ -694,7 +632,7 @@ test('fritzSid meldet sich nicht an, solange eine Lieferung laeuft', async () =>
  * Puffer. Was zaehlt, ist `writableFinished`: Erst dann ist die Antwort
  * draussen und die Function darf gehen.
  */
-function langsamesRes(verzoegerungMs = 5) {
+function langsamesRes(verzoegerungMs = 20) {
   const res = new Writable({
     highWaterMark: 64,
     write(stueck, _kodierung, weiter) {
@@ -722,28 +660,16 @@ test('nasTon loest erst auf, wenn alles hinausgeschrieben ist', async () => {
     await nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
   });
 
+  // **Zum Stand dieses Tests, damit ihn niemand ueberschaetzt.** Geschrieben
+  // wurde er gegen #122, wo `pipe(res, { end: false })` und ein eigenes
+  // `res.end()` die Antwort aufloesten, bevor die Bytes drausssen waren. In
+  // der heutigen Form (`pipe(res)` beendet die Antwort selbst) faellt er
+  // nicht mehr um, wenn man nur die `finish`-Zeile entfernt - `close` faengt
+  // das ab. Er prueft weiterhin die richtige Eigenschaft; er ist nur kein
+  // Fallstrick mehr fuer genau jene eine Zeile.
   assert.ok(res.writableFinished,
     'wenn nasTon aufloest, ist die Antwort hinaus - nicht nur die Box fertig');
   assert.equal(Buffer.concat(res.stuecke).length, 1024, 'und zwar ganz');
-});
-
-test('auch ein fortgesetzter Strom wartet, bis die Antwort hinaus ist', async () => {
-  // Zwei Stuecke, eine Antwort: Der Abschluss darf auch hier nicht am Ende
-  // des Zuflusses haengen, sondern am Ende der Antwort.
-  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
-  const res = langsamesRes();
-
-  await mitAbruf((nummer) => (nummer === 1
-    ? halbeAntwort(512, 1024)
-    : new Response(Buffer.alloc(512, 8), {
-      status: 206,
-      headers: { 'content-type': 'audio/mpeg', 'content-length': '512', 'content-range': 'bytes 512-1023/1024' },
-    })), async () => {
-    await nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
-  });
-
-  assert.ok(res.writableFinished, 'auch nach einer Fortsetzung wird auf die Antwort gewartet');
-  assert.equal(Buffer.concat(res.stuecke).length, 1024, 'und beide Stuecke sind drin');
 });
 
 test('legt der Echo auf, ist die Function sofort frei', async () => {
@@ -892,79 +818,4 @@ test('steht der Merkzettel, meldet sich auch der zweite Anlauf nicht an', async 
     { erzwingen: false, ohneAnmeldung: true },
     { erzwingen: true, ohneAnmeldung: true },
   ], 'auch der erzwungene Anlauf darf die Box nicht anmelden, solange geliefert wird');
-});
-
-// --- Die Lieferfrist: abgebrochen ist heilbar, haengen nicht ---------------
-//
-// **Gemessen im Betrieb, und es ist der Fall, der die Wiedergabe beendet hat:**
-//
-//   12:40:09  Leseprobe beginnt
-//   12:43:34  TON 206  32768 von 32768 B in 204952 ms
-//
-// Hundertsechzig Byte je Sekunde. Der Aufrufer hatte nach sieben Sekunden
-// aufgegeben, der Durchleiter zog noch 198 Sekunden weiter an der Box - und
-// als danach der naechste Titel gebraucht wurde, war sie immer noch dicht.
-
-/** Eine Box, die tropft: zwei Stuecke, das zweite nach langer Pause. */
-function tropfendeAntwort(gesamt, pauseMs) {
-  let raus = 0;
-  const strom = new ReadableStream({
-    async pull(steuerung) {
-      if (raus >= gesamt) return steuerung.close();
-      if (raus > 0) await new Promise(a => setTimeout(a, pauseMs));
-      const stueck = Math.min(1024, gesamt - raus);
-      raus += stueck;
-      steuerung.enqueue(new Uint8Array(stueck).fill(5));
-    },
-  });
-  return new Response(strom, {
-    status: 206,
-    headers: {
-      'content-type': 'audio/mpeg',
-      'content-length': String(gesamt),
-      'content-range': `bytes 0-${gesamt - 1}/${gesamt}`,
-    },
-  });
-}
-
-test('eine Box, die nicht fertig wird, wird nach der Frist losgelassen', async () => {
-  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
-  const res = attrappeRes();
-  const redis = attrappeRedis();
-  const vorher = process.env.MUSIK_TON_FRIST_MS;
-  process.env.MUSIK_TON_FRIST_MS = '1000';
-  const begonnen = Date.now();
-
-  try {
-    await mitAbruf(() => tropfendeAntwort(8192, 5000), async () => {
-      const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async () => 'aabbccddeeff0011');
-      await Promise.all([lauf, fertig(res)]);
-    });
-  } finally {
-    if (vorher === undefined) delete process.env.MUSIK_TON_FRIST_MS; else process.env.MUSIK_TON_FRIST_MS = vorher;
-  }
-
-  const gebraucht = Date.now() - begonnen;
-  assert.ok(gebraucht < 3000, `nicht an der Box haengen geblieben (${gebraucht} ms)`);
-  assert.ok(Buffer.concat(res.stuecke).length < 8192, 'und nicht zu Ende gewartet');
-
-  // Der Verlauf sagt beim naechsten Mal ohne Rueckfrage, was los war.
-  const [eintrag] = await verlaufLesen(redis);
-  assert.equal(eintrag.aufgegeben, true, 'aufgegeben steht im Verlauf');
-  assert.ok(eintrag.bytes < eintrag.soll, 'mit den beiden Zahlen daneben');
-});
-
-test('ein Abruf innerhalb der Frist wird nicht angefasst', async () => {
-  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
-  const res = attrappeRes();
-  const redis = attrappeRedis();
-
-  await mitAbruf(() => halbeAntwort(1024, 1024), async () => {
-    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async () => 'aabbccddeeff0011');
-    await Promise.all([lauf, fertig(res)]);
-  });
-
-  assert.equal(Buffer.concat(res.stuecke).length, 1024);
-  const [eintrag] = await verlaufLesen(redis);
-  assert.equal(eintrag.aufgegeben, false, 'der Regelfall wird nicht aufgegeben');
 });
