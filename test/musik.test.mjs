@@ -365,6 +365,52 @@ test('playDirektive baut Stream und Anzeige', () => {
   assert.equal(r.audioItem.stream.expectedPreviousToken, undefined);
 });
 
+// --- Der Token, den das Geraet schon traegt ---------------------------------
+//
+// **Der gemeldete Fehler.** Eine Playlist aus einer FRITZ!NAS-Ordnerfreigabe
+// starten, kurz darauf stoppen, wieder starten - und es kommt kein Ton. Im
+// Log vom 21. September steht der Ablauf vollstaendig:
+//
+//   20:28:28  spielt Udo CD eins ab 1/13 bei 0 ms  → PlaybackStarted, Musik
+//   20:28:41  AMAZON.PauseIntent, Stand 10432 ms gemerkt
+//   20:28:55  spielt Udo CD eins ab 1/13 bei 0 ms  → GET auf die Tondatei,
+//             und danach nichts: kein PlaybackStarted, kein PlaybackFailed
+//
+// Der einzige Unterschied zum geglueckten Start elf Sekunden davor: Diesmal
+// war der Token Zeichen fuer Zeichen derselbe, den das Geraet vom ersten
+// Start noch trug. Wer kurz nach dem Start stoppt, steht ja noch beim ersten
+// Titel - Stelle, Runde und Mischung fallen dann zusammen.
+
+test('Ein Start bekommt nie den Token, den das Geraet schon traegt', () => {
+  const gleich = playDirektive(KINDER, 0, 0, { ungleich: 'Kinderlieder|0|0|0' });
+  assert.equal(gleich.audioItem.stream.token, 'Kinderlieder|0|1|0', 'die Runde zaehlt hoch');
+  assert.equal(gleich.audioItem.stream.url, 'https://example.org/k/01.mp3', 'derselbe Titel');
+
+  const anderer = playDirektive(KINDER, 0, 0, { ungleich: 'Kinderlieder|1|0|0' });
+  assert.equal(anderer.audioItem.stream.token, 'Kinderlieder|0|0|0', 'sonst bleibt alles, wie es war');
+
+  // Ein ENQUEUE weist sich ueber `expectedPreviousToken` aus; dort ist der
+  // Token des Geraets die Zusage und nicht die Kollision.
+  const angehaengt = playDirektive(KINDER, 0, 0, {
+    verhalten: 'ENQUEUE', vorherigerToken: 'Kinderlieder|2|0|0', ungleich: 'Kinderlieder|0|0|0',
+  });
+  assert.equal(angehaengt.audioItem.stream.token, 'Kinderlieder|0|0|0');
+});
+
+test('Starten, stoppen, wieder starten - der zweite Start bleibt nicht stumm', async () => {
+  // Der gemeldete Ablauf, Schritt fuer Schritt. Der zweite Start trifft ein
+  // Geraet, das den Token des ersten noch traegt.
+  const erst = await skill(sucheIntent('kinderlieder'));
+  assert.equal(spielt(erst).audioItem.stream.token, 'Kinderlieder|0|0|0');
+
+  const stopp = await skill(intent('AMAZON.PauseIntent'), { token: 'Kinderlieder|0|0|0', offset: 10432 });
+  assert.deepEqual(stopp.directives, [{ type: 'AudioPlayer.Stop' }]);
+
+  const wieder = await skill(sucheIntent('kinderlieder'), { token: 'Kinderlieder|0|0|0', offset: 10432, aktivitaet: 'STOPPED' });
+  assert.equal(spielt(wieder).audioItem.stream.token, 'Kinderlieder|0|1|0');
+  assert.equal(spielt(wieder).audioItem.stream.url, 'https://example.org/k/01.mp3', 'und es ist derselbe Titel');
+});
+
 // --- Grenzen der URL-Pruefung -------------------------------------------------
 
 test('istPrivateAdresse kennt die privaten Bereiche', () => {
@@ -462,7 +508,9 @@ test('Pause stoppt, Weiter setzt am Offset fort - um den Vorlauf zurueck', async
   assert.equal(pause.outputSpeech, undefined);
 
   const weiter = await skill(intent('AMAZON.ResumeIntent'), { token: 'Kinderlieder|1|0|0', offset: 30000 });
-  assert.equal(spielt(weiter).audioItem.stream.token, 'Kinderlieder|1|0|0');
+  // Derselbe Titel, dieselbe Mischung - nur die Runde zaehlt hoch, damit der
+  // Token nicht der des pausierten Stroms ist. Mit ihm bliebe es still.
+  assert.equal(spielt(weiter).audioItem.stream.token, 'Kinderlieder|1|1|0');
   assert.equal(spielt(weiter).audioItem.stream.offsetInMilliseconds, 25000);
 });
 
@@ -786,7 +834,9 @@ test('Ohne Wiederholung stoppt naechster Titel am Ende und bleibt am Anfang steh
   assert.deepEqual(ende.directives, [{ type: 'AudioPlayer.Stop' }]);
 
   const anfang = await skill(intent('AMAZON.PreviousIntent'), { token: 'Einmal|0|0|0' }, [EINMAL]);
-  assert.equal(spielt(anfang).audioItem.stream.token, 'Einmal|0|0|0');
+  // Stelle 1 von 3 noch einmal - und mit einer hochgezaehlten Runde, weil ein
+  // Token, den das Geraet schon traegt, keinen neuen Strom anwirft.
+  assert.equal(spielt(anfang).audioItem.stream.token, 'Einmal|0|1|0');
 });
 
 // --- Das Mikrofon nach dem Befehl -------------------------------------------
@@ -1272,7 +1322,7 @@ test('"Weiter" nimmt die gemerkte Sekunde, wenn das Geraet nur noch den Titel we
   // einem Neustart, nach dem Radio dazwischen, am naechsten Tag.
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, redis);
-  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|1|0', 'derselbe Titel, eine Runde weiter');
   assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000);
 });
 
@@ -1296,7 +1346,7 @@ test('"Weiter" nimmt keine Stelle aus einem fremden Titel', async () => {
   // Sonst finge Titel zwei bei der Stelle von Titel drei an.
   const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 600000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0 }, null, redis);
-  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|1|0', 'derselbe Titel, eine Runde weiter');
   assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
