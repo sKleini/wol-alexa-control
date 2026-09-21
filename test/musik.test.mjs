@@ -36,7 +36,6 @@ import {
   spieldauerSekunden,
   lesbareDauer,
   laengerAlsSitzung,
-  adresseKurz,
   handleSkill,
   alexaVorlaufMs,
   handleManage,
@@ -562,16 +561,6 @@ test('spieldauerSekunden rechnet mit der angenommenen Bitrate', () => {
   assert.equal(spieldauerSekunden((128 * 1000 * 60) / 8), 60, 'eine Minute bei 128 kbit/s');
   assert.equal(spieldauerSekunden((320 * 1000 * 60) / 8, 320), 60);
   assert.equal(spieldauerSekunden(null), null);
-});
-
-test('adresseKurz verraet die Sitzungsnummer nicht', () => {
-  const url = 'https://box.myfritz.net:456/nas/cgi-bin/luacgi_notimeout?sid=abcdef1234567890&c=music';
-  const kurz = adresseKurz(url);
-  assert.match(kurz, /box\.myfritz\.net:456/, 'Host und Port stehen drin');
-  assert.match(kurz, /sid…7890/, 'nur die letzten vier Stellen');
-  assert.doesNotMatch(kurz, /abcdef123456/, 'der Rest der Nummer nicht');
-  assert.equal(adresseKurz('kaputt'), '(keine gueltige Adresse)');
-  assert.match(adresseKurz('https://h.de/a.mp3'), /ohne sid/);
 });
 
 // --- Der Skill schweigt nie ---------------------------------------------------------
@@ -2051,8 +2040,7 @@ test('die Fehlerzeile nennt den Titel, nicht nur die Stelle in der Mischung', as
   // "Token: Udo|23|0|251337043" - und damit war nicht zu sagen, welche Datei
   // es getroffen hat: Mit Mischung ist Stelle 23 nicht Titel 24, und die
   // Reihenfolge steht nirgends, sie wird aus dem Seed gerechnet. Ohne den
-  // Namen laesst sich die Zeile im Dashboard nicht nachschlagen, ohne die
-  // Adresse nicht sehen, welche Sitzungsnummer der Abruf getragen hat.
+  // Namen laesst sich die Zeile im Dashboard nicht nachschlagen.
   //
   // Bei drei Titeln und diesem Seed steht an Stelle 0 der Titel mit der
   // Nummer 1 - also "02", der zweite der Liste.
@@ -2075,7 +2063,6 @@ test('die Fehlerzeile nennt den Titel, nicht nur die Stelle in der Mischung', as
   const zeile = gesagt.find(z => z.startsWith('Alexa konnte nicht abspielen:'));
   assert.ok(zeile, 'der Fehler wird ueberhaupt protokolliert');
   assert.match(zeile, /Titel: 2\. 02 /, 'Nummer in der Liste und Name');
-  assert.match(zeile, /example\.org\/k\/02\.mp3 ohne sid/, 'und die Adresse');
   assert.match(zeile, /Offset: 1\b/, 'der Offset trennt "nie angelaufen" von "mittendrin abgerissen"');
 });
 

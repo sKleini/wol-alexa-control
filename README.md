@@ -516,7 +516,7 @@ The retry resumes where the track broke off, minus the usual pre-roll: at the st
 
 **The budget lives in the token** (`playlist|position|round|seed|attempt`), for the same reason everything else does: it belongs to this one stream, Alexa sends it back with every event, and it disappears with the track. A retried stream carries a `1`, a failure on a `1` is allowed to skip, and the next track starts at `0` again. A zero is left out of the token entirely, so a stream where nothing went wrong looks exactly as it did before — which keeps every stream that is running during a deployment valid.
 
-The failure line names the track, not just the position: `Titel: 12. 12 Ich war noch niemals in New York – …luacgi_notimeout sid…fe7f`. With shuffle on, position 23 is not track 24, and without the number there is nothing to look up in the dashboard; the address shows which session number the failed fetch actually carried. Both cost several rounds of a debugging session before they were added.
+The failure line names the track, not just the position: `Titel: 12. 12 Ich war noch niemals in New York`. With shuffle on, position 23 is not track 24, and without the number there is nothing to look up in the dashboard. That cost several rounds of a debugging session before it was added. The address used to stand there too, shortened to the last four digits of the FRITZ!Box session number; since playlists point at the app's own `/api/skill?ton=…` it is the same string for every track and says nothing, so it is gone.
 
 ##### One long file is not one long track
 
