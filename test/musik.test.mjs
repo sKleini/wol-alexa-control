@@ -397,6 +397,27 @@ test('Ein Start bekommt nie den Token, den das Geraet schon traegt', () => {
   assert.equal(angehaengt.audioItem.stream.token, 'Kinderlieder|0|0|0');
 });
 
+test('Die Startzeile nennt den Token, den das Geraet bekommt und den es traegt', async () => {
+  // **Warum diese Zeile eine eigene Pruefung bekommt.** Zweimal hintereinander
+  // war aus dem Log nicht zu entscheiden, woran ein stummer Start lag: Was
+  // dort stand, war Playlist, Stelle, Offset und Gangart - der ausgelieferte
+  // Token, der noch getragene und `playerActivity` fehlten. Beide Male musste
+  // aus dem Verhalten geschlossen werden, und einmal war der Schluss falsch.
+  const zeilen = [];
+  const echtes = console.log;
+  console.log = (...teile) => zeilen.push(teile.join(' '));
+  try {
+    await skill(sucheIntent('kinderlieder'), { token: 'Kinderlieder|0|0|0', offset: 4373, aktivitaet: 'STOPPED' });
+  } finally {
+    console.log = echtes;
+  }
+  const zeile = zeilen.find(z => z.includes('musik-box spielt'));
+  assert.ok(zeile, `es gibt eine Zeile: ${zeilen.join(' / ')}`);
+  assert.match(zeile, /Token Kinderlieder\|0\|1\|0/, 'der Token, den der Echo bekommt');
+  assert.match(zeile, /Geraet STOPPED @4373 ms mit Kinderlieder\|0\|0\|0/, 'und der, den es noch traegt');
+  assert.match(zeile, /mit ClearQueue/, 'und ob ein ClearQueue davor steht');
+});
+
 test('Starten, stoppen, wieder starten - der zweite Start bleibt nicht stumm', async () => {
   // Der gemeldete Ablauf, Schritt fuer Schritt. Der zweite Start trifft ein
   // Geraet, das den Token des ersten noch traegt.
@@ -2029,18 +2050,24 @@ const TON_PLAYLIST = {
   ],
 };
 
-test('die Adresse geht unveraendert an den Echo - und die Box wird nicht angefasst', async () => {
+test('die Adresse zeigt unveraendert auf dieselbe Datei - und die Box wird nicht angefasst', async () => {
   // **Der Kern der Sache.** Eine Sitzungsnummer der Box gilt nur fuer die
   // Adresse, die sie geholt hat; der Echo ist nie diese Adresse. Der Skill
   // setzt deshalb nichts mehr ein, fragt nichts nach und meldet sich nirgends
   // an - er antwortet mit dem, was gespeichert ist.
+  //
+  // **Bis auf das `n` am Ende**, und das ist der Unterschied zwischen "die
+  // Adresse wird umgeschrieben" und "die Adresse ist neu": Der Token bleibt
+  // Zeichen fuer Zeichen stehen, die Signatur gilt weiter, und der Endpunkt
+  // liest ohnehin nur `ton`. Warum es ihn braucht, steht bei `frischeAdresse`.
   const vorher = globalThis.fetch;
   const abrufe = [];
   globalThis.fetch = async (url) => { abrufe.push(String(url)); throw new Error('haette nicht abrufen duerfen'); };
   try {
     const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
     const r = await skill(intent('PlayPlaylistIntent', 'Lottchen'), {}, null, redis);
-    assert.equal(spielt(r).audioItem.stream.url, TON_PLAYLIST.titel[0].url);
+    const url = spielt(r).audioItem.stream.url;
+    assert.match(url, /^https:\/\/app\.example\/api\/skill\?ton=eins\.unterschrift&n=\d+$/, url);
     assert.deepEqual(abrufe, [], 'kein einziger Abruf bei der FRITZ!Box');
   } finally {
     globalThis.fetch = vorher;
@@ -2066,7 +2093,7 @@ test('auch eine FRITZ!NAS-Playlist reiht den naechsten Titel vor', async () => {
     redis,
   );
   const stream = spielt(r).audioItem.stream;
-  assert.equal(stream.url, TON_PLAYLIST.titel[1].url, 'der naechste Titel');
+  assert.match(stream.url, /\?ton=zwei\.unterschrift&n=\d+$/, 'der naechste Titel');
   assert.equal(spielt(r).playBehavior, 'ENQUEUE', 'angehaengt, nicht ersetzt');
   assert.equal(stream.expectedPreviousToken, 'Lottchen|0|0|0', 'an den laufenden gehaengt');
 });
