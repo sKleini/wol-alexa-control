@@ -893,3 +893,78 @@ test('steht der Merkzettel, meldet sich auch der zweite Anlauf nicht an', async 
     { erzwingen: true, ohneAnmeldung: true },
   ], 'auch der erzwungene Anlauf darf die Box nicht anmelden, solange geliefert wird');
 });
+
+// --- Die Lieferfrist: abgebrochen ist heilbar, haengen nicht ---------------
+//
+// **Gemessen im Betrieb, und es ist der Fall, der die Wiedergabe beendet hat:**
+//
+//   12:40:09  Leseprobe beginnt
+//   12:43:34  TON 206  32768 von 32768 B in 204952 ms
+//
+// Hundertsechzig Byte je Sekunde. Der Aufrufer hatte nach sieben Sekunden
+// aufgegeben, der Durchleiter zog noch 198 Sekunden weiter an der Box - und
+// als danach der naechste Titel gebraucht wurde, war sie immer noch dicht.
+
+/** Eine Box, die tropft: zwei Stuecke, das zweite nach langer Pause. */
+function tropfendeAntwort(gesamt, pauseMs) {
+  let raus = 0;
+  const strom = new ReadableStream({
+    async pull(steuerung) {
+      if (raus >= gesamt) return steuerung.close();
+      if (raus > 0) await new Promise(a => setTimeout(a, pauseMs));
+      const stueck = Math.min(1024, gesamt - raus);
+      raus += stueck;
+      steuerung.enqueue(new Uint8Array(stueck).fill(5));
+    },
+  });
+  return new Response(strom, {
+    status: 206,
+    headers: {
+      'content-type': 'audio/mpeg',
+      'content-length': String(gesamt),
+      'content-range': `bytes 0-${gesamt - 1}/${gesamt}`,
+    },
+  });
+}
+
+test('eine Box, die nicht fertig wird, wird nach der Frist losgelassen', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const redis = attrappeRedis();
+  const vorher = process.env.MUSIK_TON_FRIST_MS;
+  process.env.MUSIK_TON_FRIST_MS = '1000';
+  const begonnen = Date.now();
+
+  try {
+    await mitAbruf(() => tropfendeAntwort(8192, 5000), async () => {
+      const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async () => 'aabbccddeeff0011');
+      await Promise.all([lauf, fertig(res)]);
+    });
+  } finally {
+    if (vorher === undefined) delete process.env.MUSIK_TON_FRIST_MS; else process.env.MUSIK_TON_FRIST_MS = vorher;
+  }
+
+  const gebraucht = Date.now() - begonnen;
+  assert.ok(gebraucht < 3000, `nicht an der Box haengen geblieben (${gebraucht} ms)`);
+  assert.ok(Buffer.concat(res.stuecke).length < 8192, 'und nicht zu Ende gewartet');
+
+  // Der Verlauf sagt beim naechsten Mal ohne Rueckfrage, was los war.
+  const [eintrag] = await verlaufLesen(redis);
+  assert.equal(eintrag.aufgegeben, true, 'aufgegeben steht im Verlauf');
+  assert.ok(eintrag.bytes < eintrag.soll, 'mit den beiden Zahlen daneben');
+});
+
+test('ein Abruf innerhalb der Frist wird nicht angefasst', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const redis = attrappeRedis();
+
+  await mitAbruf(() => halbeAntwort(1024, 1024), async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async () => 'aabbccddeeff0011');
+    await Promise.all([lauf, fertig(res)]);
+  });
+
+  assert.equal(Buffer.concat(res.stuecke).length, 1024);
+  const [eintrag] = await verlaufLesen(redis);
+  assert.equal(eintrag.aufgegeben, false, 'der Regelfall wird nicht aufgegeben');
+});

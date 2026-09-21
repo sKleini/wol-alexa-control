@@ -475,7 +475,7 @@
                     + `${e.titel ? '  ' + e.titel : ''}`;
             }
             const menge = e.soll ? `${e.bytes} von ${e.soll}` : `${e.bytes}`;
-            const kurz = e.soll && e.bytes < e.soll ? '  ABGERISSEN' : '';
+            const kurz = e.aufgegeben ? '  AUFGEGEBEN' : (e.soll && e.bytes < e.soll ? '  ABGERISSEN' : '');
             return `${uhr}  TON   ${e.status}  ${menge} B in ${e.dauer} ms`
                 + `${e.angemeldet ? '  ANMELDUNG' : ''}${kurz}`
                 + `${e.grund ? '  ' + e.grund : ''}  ${e.datei || ''}`;
@@ -662,6 +662,10 @@
                     const qs = `?type=playlists&pruefen=1&name=${encodeURIComponent(name)}&ab=${ab}`;
                     const r = await apiRequest('GET', null, qs);
                     if (!r || r.error) { lines.push(`❌ ${esc(r?.error || 'check failed')}`); break; }
+                    // Die Box beantwortet immer nur einen Abruf. Waehrend
+                    // gespielt wird, wuerde das Pruefen die Playlist zum
+                    // Stehen bringen - gemessen, nicht vermutet.
+                    if (r.gesperrt) { lines.push(`⏸️ ${esc(r.gesperrt)}`); break; }
                     for (const e of r.ergebnisse) {
                         // Vier Stufen statt zwei. Die Sanduhr heisst: Die Datei
                         // laedt einwandfrei, dauert aber ueber eine Stunde - in
