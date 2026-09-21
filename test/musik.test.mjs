@@ -2430,3 +2430,69 @@ test('das Leeren laesst sich abschalten', async () => {
 // erste Nummer stammt aus der Antwort, die die Box gerade auf diese Anmeldung
 // gegeben hat. Und ein Irrtum traegt sich selbst, ueber PlaybackFailed.
 
+
+// --- Der Verlauf: was der Echo meldet, neben dem, was geliefert wurde ------
+//
+// **Drei Runden lang wurde die Ursache des Abbruchs geraten**, weil die
+// entscheidende Zeile nur im Log von Vercel stand. Der Durchleiter schreibt
+// seine Zahlen jetzt in den Verlauf (siehe test/naston.test.mjs); hier ist
+// die andere Haelfte: Ein `PlaybackStopped` unmittelbar hinter einem
+// unvollstaendigen Ton ist ein abgerissener Strom - eines ohne solchen
+// Eintrag kam vom Echo selbst.
+
+/** Ein Redis, das auch Listen kann - der Verlauf liegt in einer. */
+function redisMitListe(daten = {}) {
+  const redis = redisMit(daten);
+  const liste = [];
+  return {
+    ...redis,
+    liste,
+    async lpush(_k, eintrag) { liste.unshift(eintrag); },
+    async ltrim() {},
+    async expire() {},
+    async lrange() { return liste; },
+  };
+}
+
+test('ein Abspieler-Ereignis landet im Verlauf', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await skill(
+    { type: 'AudioPlayer.PlaybackStopped', token: 'Kinderlieder|1|0|0' },
+    { token: 'Kinderlieder|1|0|0', offset: 42000 },
+    [KINDER], redis,
+  );
+
+  const [eintrag] = redis.liste;
+  assert.ok(eintrag, 'es gibt einen Eintrag');
+  assert.equal(eintrag.was, 'echo');
+  assert.equal(eintrag.ereignis, 'PlaybackStopped', 'das Ereignis, an dem die Kette endet');
+  assert.equal(eintrag.offset, 42000, 'und an welcher Stelle');
+});
+
+test('ein Fehlschlag traegt seinen Grund in den Verlauf', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await skill(
+    {
+      type: 'AudioPlayer.PlaybackFailed',
+      token: 'Kinderlieder|0|0|0',
+      error: { type: 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', message: 'nope' },
+    },
+    { token: 'Kinderlieder|0|0|0' },
+    [KINDER], redis,
+  );
+
+  const [eintrag] = redis.liste;
+  assert.equal(eintrag.ereignis, 'PlaybackFailed');
+  assert.equal(eintrag.fehler, 'MEDIA_ERROR_INTERNAL_SERVER_ERROR', 'der Grund, den Alexa nennt');
+});
+
+test('/api/manage?verlauf=1 gibt die Eintraege heraus, neueste zuerst', async () => {
+  const redis = redisMitListe({ [REDIS_KEY]: [KINDER] });
+  await redis.lpush('musik_ton_verlauf', { zeit: 1, was: 'ton', bytes: 10, soll: 20 });
+  await redis.lpush('musik_ton_verlauf', { zeit: 2, was: 'echo', ereignis: 'PlaybackStopped' });
+
+  const res = antwortFaenger();
+  await handleManage({ method: 'GET', query: { type: 'playlists', verlauf: '1' } }, res, redis);
+  assert.equal(res.body.eintraege.length, 2);
+  assert.equal(res.body.eintraege[0].zeit, 2, 'neueste zuerst');
+});

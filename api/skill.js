@@ -49,7 +49,11 @@ export default async function handler(req, res) {
   const ton = queryOf(req).ton;
   if (ton && (req.method === 'GET' || req.method === 'HEAD')) {
     return nasTon(req, res, redis, String(ton), (link, erzwingen, ohneAnmeldung) => (
-      fritzSid(link, redis, erzwingen, () => Infinity, null, ohneAnmeldung).then(e => e.sid)
+      // Nicht nur die Nummer, sondern auch ob eine Anmeldung noetig war: Nur
+      // damit steht im Verlauf, ob ein abgerissener Strom der Box anzulasten
+      // ist oder der eigenen Anmeldung.
+      fritzSid(link, redis, erzwingen, () => Infinity, null, ohneAnmeldung)
+        .then(e => ({ sid: e.sid, angemeldet: e.angemeldet }))
     ));
   }
 
