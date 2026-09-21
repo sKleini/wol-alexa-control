@@ -1553,11 +1553,13 @@ test('die Adresse geht unveraendert an den Echo - und die Box wird nicht angefas
   }
 });
 
-test('auch eine FRITZ!NAS-Playlist haengt den naechsten Titel wieder vorab an', async () => {
-  // Frueher nicht: Eine Adresse mit Sitzungsnummer war verdorben, bis der Echo
-  // sie benutzte, also wurde erst am Titelende bestellt - um den Preis einer
-  // Luecke. Die Adresse dieser App verdirbt nicht, also ist der Titelwechsel
-  // wieder nahtlos.
+test('eine FRITZ!NAS-Playlist reiht den naechsten Titel NICHT vor', async () => {
+  // **Zwei Abrufe gleichzeitig sind fuer diese Box einer zu viel.**
+  // `PlaybackNearlyFinished` kommt Sekunden nach dem Titelanfang; wer dort
+  // anhaengt, laesst den Echo den naechsten Titel laden, waehrend der
+  // laufende noch streamt. Gemeldet aus dem Betrieb: zwei parallele Abrufe,
+  // dreimal `Vercel Runtime Timeout Error`, und das Kapitel brach sechs
+  // Sekunden nach dem Start ab.
   const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
   const r = await skill(
     { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Lottchen|0|0|0' },
@@ -1565,15 +1567,10 @@ test('auch eine FRITZ!NAS-Playlist haengt den naechsten Titel wieder vorab an', 
     null,
     redis,
   );
-  const stream = spielt(r).audioItem.stream;
-  assert.equal(spielt(r).playBehavior, 'ENQUEUE');
-  assert.equal(stream.url, TON_PLAYLIST.titel[1].url);
-  assert.equal(stream.expectedPreviousToken, 'Lottchen|0|0|0');
+  assert.equal(r.directives, undefined, 'keine Direktive - der Titel wird am Ende bestellt');
 });
 
-test('am Titelende wird deshalb nichts mehr nachbestellt', async () => {
-  // Die Gegenprobe: Was bei "nearly finished" schon angehaengt ist, darf hier
-  // nicht ein zweites Mal kommen - sonst spielte der Echo den Titel doppelt.
+test('dafuer bestellt sie ihn am Titelende', async () => {
   const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
   const r = await skill(
     { type: 'AudioPlayer.PlaybackFinished', token: 'Lottchen|0|0|0' },
@@ -1581,7 +1578,37 @@ test('am Titelende wird deshalb nichts mehr nachbestellt', async () => {
     null,
     redis,
   );
-  assert.equal(r.directives, undefined);
+  const stream = spielt(r).audioItem.stream;
+  assert.equal(stream.url, TON_PLAYLIST.titel[1].url, 'der naechste Titel');
+  assert.equal(spielt(r).playBehavior, 'REPLACE_ALL', 'und zwar sofort zu spielen, nicht angehaengt');
+});
+
+test('eine Playlist ohne FRITZ!NAS-Herkunft bleibt nahtlos', async () => {
+  // Die Gegenprobe: Wo die Quelle zwei Abrufe vertraegt, wird weiter
+  // vorgereiht - eine Luecke zwischen den Titeln ohne Not waere ein
+  // Rueckschritt.
+  const r = await skill(
+    { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Kinderlieder|0|0|0' },
+    { token: 'Kinderlieder|0|0|0' },
+  );
+  assert.equal(spielt(r).playBehavior, 'ENQUEUE');
+});
+
+test('MUSIK_FRITZ_NAHTLOS=1 holt das Vorreihen zurueck', async () => {
+  const vorher = process.env.MUSIK_FRITZ_NAHTLOS;
+  process.env.MUSIK_FRITZ_NAHTLOS = '1';
+  try {
+    const redis = redisMit({ [REDIS_KEY]: [TON_PLAYLIST] });
+    const r = await skill(
+      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Lottchen|0|0|0' },
+      { token: 'Lottchen|0|0|0' },
+      null,
+      redis,
+    );
+    assert.equal(spielt(r).playBehavior, 'ENQUEUE');
+  } finally {
+    if (vorher === undefined) delete process.env.MUSIK_FRITZ_NAHTLOS; else process.env.MUSIK_FRITZ_NAHTLOS = vorher;
+  }
 });
 
 test('eine Playlist ohne Sitzungsnummer bleibt nahtlos', async () => {

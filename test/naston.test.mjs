@@ -234,6 +234,36 @@ async function mitAbruf(antwortGeber, arbeit) {
   try { return await arbeit(aufrufe); } finally { globalThis.fetch = echt; }
 }
 
+test('die Logzeile nennt Bereich, Status, Menge und Dauer', async () => {
+  // Der gemeldete Hoerbuch-Abbruch liess sich nur rekonstruieren, weil Vercel
+  // selbst Dauer und Status je Anfrage mitschreibt - die eigene Zeile nannte
+  // Datei und Menge und sonst nichts. Jetzt steht alles beisammen.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const zeilen = [];
+  const echtesLog = console.log;
+  console.log = (...teile) => zeilen.push(teile.join(' '));
+
+  try {
+    await mitAbruf(() => new Response(Buffer.alloc(2048, 1), {
+      status: 206,
+      headers: { 'content-type': 'audio/mpeg', 'content-range': 'bytes 1000-3047/9000', 'content-length': '2048' },
+    }), async () => {
+      const lauf = nasTon({ method: 'GET', headers: { range: 'bytes=1000-' } }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+      await Promise.all([lauf, fertig(res)]);
+    });
+  } finally {
+    console.log = echtesLog;
+  }
+
+  const zeile = zeilen.find(z => z.includes('musik-box Ton'));
+  assert.ok(zeile, 'es gibt eine Zeile');
+  assert.match(zeile, /bytes=1000-/, 'der verlangte Bereich');
+  assert.match(zeile, /→ 206/, 'der Status, den der Echo bekommt');
+  assert.match(zeile, /2 KB/, 'die Menge, die wirklich floss');
+  assert.match(zeile, /in \d+ ms/, 'und wie lange es dauerte');
+});
+
 test('nasTon weist ein Token ohne gueltige Unterschrift ab, ohne die Box zu fragen', async () => {
   const res = attrappeRes();
   await mitAbruf(() => { throw new Error('haette nicht abrufen duerfen'); }, async () => {
