@@ -48,8 +48,8 @@ export default async function handler(req, res) {
   // Echo schickt keines mit.
   const ton = queryOf(req).ton;
   if (ton && (req.method === 'GET' || req.method === 'HEAD')) {
-    return nasTon(req, res, redis, String(ton), (link, erzwingen) => (
-      fritzSid(link, redis, erzwingen).then(e => e.sid)
+    return nasTon(req, res, redis, String(ton), (link, erzwingen, ohneAnmeldung) => (
+      fritzSid(link, redis, erzwingen, () => Infinity, null, ohneAnmeldung).then(e => e.sid)
     ));
   }
 

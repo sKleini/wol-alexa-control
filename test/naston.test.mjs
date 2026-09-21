@@ -211,11 +211,15 @@ function attrappeRes() {
   return res;
 }
 
-function attrappeRedis(stand = 0) {
-  const merkzettel = { gezaehlt: 0 };
+function attrappeRedis(stand = 0, laeuft = null) {
+  const merkzettel = { gezaehlt: 0, gemerkt: laeuft, geloescht: 0 };
   return {
     merkzettel,
-    get: async () => stand,
+    // Der Zaehler und der Merkzettel liegen unter verschiedenen Schluesseln -
+    // und `stand` ist nur der des Zaehlers.
+    get: async (k) => (k === 'musik_ton_laeuft' ? merkzettel.gemerkt : stand),
+    set: async (k, v) => { if (k === 'musik_ton_laeuft') merkzettel.gemerkt = v; },
+    del: async (k) => { if (k === 'musik_ton_laeuft') { merkzettel.gemerkt = null; merkzettel.geloescht += 1; } },
     incrby: async (_k, wert) => { merkzettel.gezaehlt += wert; },
     expire: async () => {},
   };
@@ -453,6 +457,7 @@ test('der ganze Weg: Anmeldung bei der Box, dann Ton', async () => {
   const redis = {
     get: async (k) => gespeichert[k] ?? null,
     set: async (k, v) => { gespeichert[k] = v; },
+    del: async (k) => { delete gespeichert[k]; },
     incrby: async () => {}, expire: async () => {},
   };
   const ton = Buffer.alloc(1024, 4);
@@ -493,4 +498,171 @@ test('der ganze Weg: Anmeldung bei der Box, dann Ton', async () => {
   assert.ok(wege.some(w => w.includes('filelink.lua')), 'die Box wurde geoeffnet');
   assert.ok(wege.some(w => w.includes('luacgi_notimeout')), 'und die Datei geholt');
   assert.ok(gespeichert.musik_fritz_sid, 'die Nummer wurde gemerkt');
+});
+
+// --- Der abgerissene Strom -------------------------------------------------
+//
+// **Gemeldet war: die Wiedergabe stoppt mitten im Kapitel.** Kein
+// Titelwechsel, kein Ende der Playlist - der Strom riss ab, der Echo spielte
+// seinen Puffer zu Ende und schwieg. Bisher hat das niemand gemerkt: Der
+// Durchleiter schrieb, was er bekommen hatte, und meldete es als Erfolg.
+
+/** Eine Antwort der Box, die weniger Bytes liefert, als sie ankuendigt. */
+function halbeAntwort(gelieferte, angekuendigte, von = 0, gesamt = angekuendigte) {
+  return new Response(Buffer.alloc(gelieferte, 7), {
+    status: 206,
+    headers: {
+      'content-type': 'audio/mpeg',
+      'content-length': String(angekuendigte),
+      'content-range': `bytes ${von}-${von + angekuendigte - 1}/${gesamt}`,
+    },
+  });
+}
+
+test('ein Strom, der nach der Haelfte endet, wird fortgesetzt', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+
+  await mitAbruf((nummer, optionen) => {
+    if (nummer === 1) return halbeAntwort(512, 1024);
+    // Der zweite Abruf holt genau den Rest - ab der Stelle, an der es abriss.
+    assert.equal(optionen.headers.Range, 'bytes=512-', 'der Rest, nicht die Datei von vorn');
+    return new Response(Buffer.alloc(512, 8), {
+      status: 206,
+      headers: { 'content-type': 'audio/mpeg', 'content-length': '512', 'content-range': 'bytes 512-1023/1024' },
+    });
+  }, async (aufrufe) => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+    await Promise.all([lauf, fertig(res)]);
+    assert.equal(aufrufe.length, 2, 'die Box wurde ein zweites Mal gefragt');
+  });
+
+  // Der Echo merkt von alldem nichts: Seine Content-Length geht am Ende auf.
+  assert.equal(Buffer.concat(res.stuecke).length, 1024, 'alle Bytes kommen an');
+});
+
+test('nach MUSIK_TON_ANLAEUFE Versuchen ist Schluss, und die Warnung nennt die Zahlen', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const vorher = process.env.MUSIK_TON_ANLAEUFE;
+  process.env.MUSIK_TON_ANLAEUFE = '2';
+  const echteWarnung = console.warn;
+  const zeilen = [];
+  console.warn = (...w) => zeilen.push(w.join(' '));
+
+  try {
+    await mitAbruf((nummer) => halbeAntwort(256, nummer === 1 ? 1024 : 768, nummer === 1 ? 0 : 256, 1024),
+      async (aufrufe) => {
+        const lauf = nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+        await Promise.all([lauf, fertig(res)]);
+        assert.equal(aufrufe.length, 2, 'zwei Anlaeufe, dann ist Schluss');
+      });
+  } finally {
+    console.warn = echteWarnung;
+    if (vorher === undefined) delete process.env.MUSIK_TON_ANLAEUFE; else process.env.MUSIK_TON_ANLAEUFE = vorher;
+  }
+
+  assert.equal(Buffer.concat(res.stuecke).length, 512, 'mehr war nicht zu holen');
+  const zeile = zeilen.find(z => z.includes('Strom abgerissen'));
+  assert.ok(zeile, 'der Abriss steht im Log und gilt nicht mehr als Erfolg');
+  assert.match(zeile, /512 B von 1 KB/, 'Geliefertes von Erwartetem');
+});
+
+test('ein vollstaendiger Strom loest keinen zweiten Abruf aus', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+
+  await mitAbruf(() => halbeAntwort(1024, 1024), async (aufrufe) => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'aabbccddeeff0011');
+    await Promise.all([lauf, fertig(res)]);
+    assert.equal(aufrufe.length, 1, 'der Regelfall kostet genau einen Abruf');
+  });
+
+  assert.equal(Buffer.concat(res.stuecke).length, 1024);
+});
+
+test('waehrend geliefert wird, steht der Merkzettel - und danach nicht mehr', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const redis = attrappeRedis();
+  let standWaehrenddessen = null;
+
+  await mitAbruf(() => {
+    standWaehrenddessen = redis.merkzettel.gemerkt;
+    return halbeAntwort(1024, 1024);
+  }, async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async () => 'aabbccddeeff0011');
+    await Promise.all([lauf, fertig(res)]);
+  });
+
+  // Beim Abruf selbst stand er noch nicht - gesetzt wird er erst, wenn Bytes
+  // fliessen, und abgeraeumt, sobald die letzten durch sind.
+  assert.equal(standWaehrenddessen, null);
+  assert.equal(redis.merkzettel.gemerkt, null, 'danach ist der Merkzettel weg');
+  assert.equal(redis.merkzettel.geloescht, 1, 'und zwar durch den, der ihn gesetzt hat');
+});
+
+test('steht der Merkzettel, wird die Sitzungsnummer ohne Anmeldung geholt', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const redis = attrappeRedis(0, '1758440000000-abcdef');
+  const schalter = [];
+
+  await mitAbruf(() => halbeAntwort(1024, 1024), async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async (_link, erzwingen, ohneAnmeldung) => {
+      schalter.push({ erzwingen, ohneAnmeldung });
+      return 'aabbccddeeff0011';
+    });
+    await Promise.all([lauf, fertig(res)]);
+  });
+
+  assert.deepEqual(schalter, [{ erzwingen: false, ohneAnmeldung: true }],
+    'der erste Anlauf darf sich nicht anmelden, solange nebenan geliefert wird');
+});
+
+// --- Und die andere Seite desselben Schalters: fritzSid --------------------
+
+/** Die Tafel, die sich lib/musik.js merkt - mit einer Nummer ausser Frist. */
+function tafelMit(sid, alterMinuten) {
+  return { [BOX]: { sid, zeit: Date.now() - alterMinuten * 60_000 } };
+}
+
+async function sidOhneAnmeldung(datalua) {
+  const gespeichert = { musik_fritz_sid: tafelMit('00112233445566aa', 30) };
+  const redis = {
+    get: async (k) => gespeichert[k] ?? null,
+    set: async (k, v) => { gespeichert[k] = v; },
+    del: async (k) => { delete gespeichert[k]; },
+  };
+  const wege = [];
+  const echt = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    wege.push(String(url));
+    if (String(url).includes('/nas/api/data.lua')) return datalua();
+    throw new Error(`haette nicht abrufen duerfen: ${url}`);
+  };
+  try {
+    return { ergebnis: await fritzSid(BOX, redis, false, () => Infinity, null, true), wege };
+  } finally {
+    globalThis.fetch = echt;
+  }
+}
+
+test('fritzSid meldet sich nicht an, solange eine Lieferung laeuft', async () => {
+  // Abgelaufenes Fenster, und die Box sagt nichts Brauchbares: Frueher hiess
+  // das Anmeldung - und die beendet alle Sitzungen der Box, den gerade
+  // spielenden Titel eingeschlossen.
+  const ohneAntwort = await sidOhneAnmeldung(() => new Response('', { status: 503 }));
+  assert.equal(ohneAntwort.ergebnis.sid, '00112233445566aa', 'es bleibt bei der gemerkten Nummer');
+  assert.equal(ohneAntwort.ergebnis.angemeldet, false);
+  assert.ok(!ohneAntwort.wege.some(w => w.includes('filelink.lua')), 'kein Login');
+
+  // Und auch eine ausdruecklich abgelehnte Nummer fuehrt nicht zur Anmeldung:
+  // Der zweite Anlauf des Durchleiters setzt den Schalter nicht mehr, der
+  // darf sie dann holen.
+  const tot = await sidOhneAnmeldung(() => new Response('<html>Anmeldung</html>',
+    { status: 403, headers: { 'content-type': 'text/html' } }));
+  assert.equal(tot.ergebnis.sid, '00112233445566aa');
+  assert.equal(tot.ergebnis.angemeldet, false);
+  assert.ok(!tot.wege.some(w => w.includes('filelink.lua')), 'auch dann kein Login');
 });
