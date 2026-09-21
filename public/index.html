@@ -252,6 +252,10 @@
                 <!-- Playlists loaded here -->
             </div>
             <div class="hint" id="playlist-ton" hidden></div>
+            <details id="playlist-verlauf" hidden style="margin-top: 10px;">
+                <summary class="hint" style="cursor: pointer;">Last fetches &amp; player events</summary>
+                <div id="playlist-verlauf-liste" style="font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow-x: auto; padding: 8px 0;"></div>
+            </details>
         </div>
     </main>
 
@@ -457,6 +461,36 @@
             el.hidden = false;
         }
 
+        // **Die letzten Abrufe, im Klartext.** Bricht die Wiedergabe einer
+        // FRITZ!NAS-Ordnerfreigabe ab, steht der Grund sonst nur im Log von
+        // Vercel - und wer Musik hoert, sieht das nicht. Hier stehen dieselben
+        // Zahlen: geliefert von angekuendigt, wie lange es dauerte, ob eine
+        // Anmeldung an der Box dazwischenkam, und was der Echo daraus gemacht
+        // hat.
+        function verlaufZeile(e) {
+            const uhr = new Date(e.zeit).toLocaleTimeString();
+            if (e.was === 'echo') {
+                return `${uhr}  ECHO  ${e.ereignis}${e.fehler ? ' ' + e.fehler : ''}`
+                    + `${e.offset != null ? '  @' + Math.round(e.offset / 1000) + 's' : ''}`
+                    + `${e.titel ? '  ' + e.titel : ''}`;
+            }
+            const menge = e.soll ? `${e.bytes} von ${e.soll}` : `${e.bytes}`;
+            const kurz = e.soll && e.bytes < e.soll ? '  ABGERISSEN' : '';
+            return `${uhr}  TON   ${e.status}  ${menge} B in ${e.dauer} ms`
+                + `${e.angemeldet ? '  ANMELDUNG' : ''}${kurz}`
+                + `${e.grund ? '  ' + e.grund : ''}  ${e.datei || ''}`;
+        }
+
+        async function zeigeVerlauf() {
+            const kasten = document.getElementById('playlist-verlauf');
+            const liste = document.getElementById('playlist-verlauf-liste');
+            const stand = await apiRequest('GET', null, '?type=playlists&verlauf=1');
+            const eintraege = stand && Array.isArray(stand.eintraege) ? stand.eintraege : [];
+            if (!eintraege.length) { kasten.hidden = true; return; }
+            liste.textContent = eintraege.map(verlaufZeile).join('\n');
+            kasten.hidden = false;
+        }
+
         async function renderPlaylists() {
             const playlists = await apiRequest('GET', null, '?type=playlists');
             if (!playlists) return;
@@ -468,6 +502,7 @@
 
             zuletztGerendert = playlists;
             zeigeTonZaehler();
+            zeigeVerlauf();
             playlists.forEach((pl, nummer) => {
                 const titel = Array.isArray(pl.titel) ? pl.titel : [];
                 const item = document.createElement('div');

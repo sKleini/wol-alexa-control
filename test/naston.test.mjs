@@ -212,7 +212,7 @@ function attrappeRes() {
 }
 
 function attrappeRedis(stand = 0, laeuft = null) {
-  const merkzettel = { gezaehlt: 0, gemerkt: laeuft, geloescht: 0 };
+  const merkzettel = { gezaehlt: 0, gemerkt: laeuft, geloescht: 0, verlauf: [] };
   return {
     merkzettel,
     // Der Zaehler und der Merkzettel liegen unter verschiedenen Schluesseln -
@@ -222,6 +222,9 @@ function attrappeRedis(stand = 0, laeuft = null) {
     del: async (k) => { if (k === 'musik_ton_laeuft') { merkzettel.gemerkt = null; merkzettel.geloescht += 1; } },
     incrby: async (_k, wert) => { merkzettel.gezaehlt += wert; },
     expire: async () => {},
+    lpush: async (_k, eintrag) => { merkzettel.verlauf.unshift(eintrag); },
+    ltrim: async () => {},
+    lrange: async () => merkzettel.verlauf,
   };
 }
 
@@ -778,4 +781,115 @@ test('legt der Echo auf, ist die Function sofort frei', async () => {
   const gebraucht = Date.now() - begonnen;
   assert.ok(gebraucht < 2000, `nicht haengen geblieben (${gebraucht} ms)`);
   assert.ok(gesendet < 256, `und nicht zu Ende geladen (${gesendet} von 256 Stuecken)`);
+});
+
+// --- Der Verlauf: damit die naechste Stoerung sich selbst erklaert ---------
+//
+// **Warum er sein muss.** Drei Runden lang wurde die Ursache des Abbruchs
+// geraten, weil die Zahl, die sie nennt, nur im Log von Vercel stand - und
+// wer Musik hoert, liest kein Vercel-Log. Dieselben Zahlen liegen jetzt in
+// Redis und stehen im Dashboard.
+import { verlaufLesen } from '../lib/naston.js'
+
+test('jeder Abruf hinterlaesst gelieferte gegen angekuendigte Bytes', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const redis = attrappeRedis();
+
+  await mitAbruf(() => halbeAntwort(1024, 1024), async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async () => 'aabbccddeeff0011');
+    await Promise.all([lauf, fertig(res)]);
+  });
+
+  const [eintrag] = await verlaufLesen(redis);
+  assert.equal(eintrag.was, 'ton');
+  assert.equal(eintrag.bytes, 1024, 'was wirklich floss');
+  assert.equal(eintrag.soll, 1024, 'und was angekuendigt war');
+  assert.equal(eintrag.angemeldet, false, 'ohne Anmeldung an der Box');
+  assert.equal(eintrag.status, 200);
+  assert.ok(eintrag.datei.includes('Buehne'), 'und welche Datei es war');
+  assert.ok(typeof eintrag.zeit === 'number' && typeof eintrag.dauer === 'number');
+});
+
+test('ein abgerissener Strom ist im Verlauf als solcher zu erkennen', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const redis = attrappeRedis();
+  const vorher = process.env.MUSIK_TON_ANLAEUFE;
+  process.env.MUSIK_TON_ANLAEUFE = '1';
+
+  try {
+    await mitAbruf(() => halbeAntwort(256, 1024), async () => {
+      const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async () => 'aabbccddeeff0011');
+      await Promise.all([lauf, fertig(res)]);
+    });
+  } finally {
+    if (vorher === undefined) delete process.env.MUSIK_TON_ANLAEUFE; else process.env.MUSIK_TON_ANLAEUFE = vorher;
+  }
+
+  const [eintrag] = await verlaufLesen(redis);
+  assert.equal(eintrag.bytes, 256);
+  assert.equal(eintrag.soll, 1024, 'die Luecke steht als Zahlenpaar da');
+});
+
+test('eine Anmeldung an der Box steht neben dem Abruf', async () => {
+  // Der entscheidende Unterschied: Hat die Box abgerissen, oder haben wir ihr
+  // selbst die Sitzung unter dem Kapitel weggezogen?
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const redis = attrappeRedis();
+
+  await mitAbruf(() => halbeAntwort(1024, 1024), async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token,
+      async () => ({ sid: 'aabbccddeeff0011', angemeldet: true }));
+    await Promise.all([lauf, fertig(res)]);
+  });
+
+  const [eintrag] = await verlaufLesen(redis);
+  assert.equal(eintrag.angemeldet, true);
+});
+
+test('ein Redis ohne Listen kostet nie die Wiedergabe', async () => {
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const kaputt = {
+    get: async () => 0, set: async () => {}, del: async () => {},
+    incrby: async () => {}, expire: async () => {},
+    lpush: async () => { throw new Error('keine Liste'); },
+  };
+
+  await mitAbruf(() => halbeAntwort(1024, 1024), async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, kaputt, token, async () => 'aabbccddeeff0011');
+    await Promise.all([lauf, fertig(res)]);
+  });
+
+  assert.equal(Buffer.concat(res.stuecke).length, 1024, 'der Ton kommt trotzdem an');
+  assert.deepEqual(await verlaufLesen(kaputt), [], 'und der Verlauf bleibt leer statt zu werfen');
+});
+
+test('steht der Merkzettel, meldet sich auch der zweite Anlauf nicht an', async () => {
+  // **#122 hat diesen Schalter nur halb gesetzt.** `laeuft && !erzwingen`
+  // hiess: Genau der Anlauf, der nach der Ablehnung der Box kommt, meldete
+  // sich an - und eine Anmeldung beendet alle Sitzungen der Box, den gerade
+  // spielenden Titel eingeschlossen. Der halbe Schutz war keiner.
+  const token = tonToken(BOX, PFAD, process.env.ADMIN_PASSWORD = 'test-schluessel');
+  const res = attrappeRes();
+  const redis = attrappeRedis(0, '1758440000000-abcdef');
+  const schalter = [];
+
+  await mitAbruf((nummer) => (nummer === 1
+    // Erster Anlauf: die Box schickt ihre Anmeldeseite statt Tondaten.
+    ? new Response('<html>Anmeldung</html>', { status: 200, headers: { 'content-type': 'text/html' } })
+    : halbeAntwort(1024, 1024)), async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async (_l, erzwingen, ohneAnmeldung) => {
+      schalter.push({ erzwingen, ohneAnmeldung });
+      return 'aabbccddeeff0011';
+    });
+    await Promise.all([lauf, fertig(res)]);
+  });
+
+  assert.deepEqual(schalter, [
+    { erzwingen: false, ohneAnmeldung: true },
+    { erzwingen: true, ohneAnmeldung: true },
+  ], 'auch der erzwungene Anlauf darf die Box nicht anmelden, solange geliefert wird');
 });
