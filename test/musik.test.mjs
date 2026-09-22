@@ -413,7 +413,7 @@ test('"Weiter" findet den gemerkten Stand auch nach einem Neustart', async () =>
   // dort "fremder Titel", und die zehnte Minute blieb liegen.
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, redis);
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000, 'die gemerkte Sekunde, um den Vorlauf zurueck');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 590000, 'die gemerkte Sekunde, um den Vorlauf zurueck');
 });
 
 test('Die Startzeile nennt den Token, den das Geraet bekommt und den es traegt', async () => {
@@ -535,7 +535,7 @@ test('Pause stoppt, Weiter setzt am Offset fort - um den Vorlauf zurueck', async
 
   const weiter = await skill(intent('AMAZON.ResumeIntent'), { token: 'Kinderlieder|1|0|0', offset: 30000 });
   assert.equal(spielt(weiter).audioItem.stream.token, 'Kinderlieder|1|0|0');
-  assert.equal(spielt(weiter).audioItem.stream.offsetInMilliseconds, 25000);
+  assert.equal(spielt(weiter).audioItem.stream.offsetInMilliseconds, 20000);
 });
 
 test('Weiter ohne laufenden Stream fragt nach der Playlist', async () => {
@@ -1055,7 +1055,7 @@ test('Der naechste Start setzt an der gemerkten Stelle fort, mit Offset und Ansa
   const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
   assert.equal(r.outputSpeech.text, 'Ich spiele Hörspiel weiter.');
   assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|2|0|0');
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 60000, 'fuenf Sekunden Vorlauf');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 55000, 'zehn Sekunden Vorlauf');
 });
 
 test('Am Anfang stehengeblieben heisst nicht "weiter"', async () => {
@@ -1127,20 +1127,20 @@ test('Ein Stopp nach dem Durchlauf legt keine Stelle am Ende mehr an', async () 
 const ENDLOS = { name: 'Endlos', fortsetzen: true, wiederholen: true, titel: KINDER.titel };
 
 test('einstieg geht den Vorlauf zurueck, aber nie unter null', () => {
-  assert.equal(einstieg(30000), 25000);
-  assert.equal(einstieg(5000), 0);
+  assert.equal(einstieg(30000), 20000);
+  assert.equal(einstieg(10000), 0);
   assert.equal(einstieg(3000), 0, 'eine Stelle, die noch keine ist, ist keine wert');
   assert.equal(einstieg(0), 0);
   assert.equal(einstieg(undefined), 0);
   assert.equal(einstieg(-1), 0, 'Unsinn aus der Datenbank faengt eben von vorn an');
 });
 
-test('Nach dreissig Sekunden gestoppt heisst beim naechsten Mal ab fuenfundzwanzig', async () => {
+test('Nach dreissig Sekunden gestoppt heisst beim naechsten Mal ab zwanzig', async () => {
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 30000 });
   const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
   assert.equal(r.outputSpeech.text, 'Ich spiele Hörspiel weiter.');
   assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 25000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 20000);
 });
 
 test('Ein Stand kurz nach dem Titelanfang ist keiner', async () => {
@@ -1225,7 +1225,7 @@ test('"Weiter" ohne laufenden Stream nimmt die zuletzt gestoppte Playlist auf', 
   const redis = mitStand(HOERSPIEL, { position: 2, runde: 0, seed: 0, offset: 65000, zeit: 1000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
   assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|2|0|0');
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 60000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 55000);
   assert.equal(r.outputSpeech, undefined, '"weiter" kommt auch vom Knopf in der App');
 });
 
@@ -1240,7 +1240,7 @@ test('"Weiter" nimmt die juengste von mehreren gemerkten Playlists auf', async (
   });
   const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
   assert.equal(spielt(r).audioItem.stream.token, 'Zweites|2|0|0');
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 35000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 30000);
 });
 
 test('"Weiter" greift nicht auf Playlists ohne den Schalter zurueck', async () => {
@@ -1291,7 +1291,7 @@ test('Hoerbuch: derselbe Stand fuehrt auf die Sekunde', async () => {
   // Die Gegenprobe zum Album - derselbe Stand, nur die Gangart ist anders.
   const redis = mitStand({ ...ALBUM, name: 'Hoerbuch', fortsetzen: 'sekunde' }, { position: 2, runde: 0, seed: 0, offset: 47000 });
   const r = await skill(sucheIntent('hoerbuch'), {}, null, redis);
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 42000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 37000);
 });
 
 test('Album am ersten Titel heisst nicht "weiter"', async () => {
@@ -1314,7 +1314,7 @@ test('Album: eine Pause fuehrt trotzdem an derselben Stelle weiter', async () =>
   // will nicht das halbe Lied noch einmal.
   const redis = mitStand(ALBUM);
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Album|1|0|0', offset: 47000 }, null, redis);
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 42000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 37000);
 });
 
 test('Album: "weiter" ohne laufenden Stream nimmt den Titelanfang', async () => {
@@ -1345,7 +1345,7 @@ test('"Weiter" nimmt die gemerkte Sekunde, wenn das Geraet nur noch den Titel we
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, redis);
   assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 590000);
 });
 
 test('"Weiter" nimmt die gemerkte Sekunde auch ohne jede Offset-Angabe', async () => {
@@ -1353,7 +1353,7 @@ test('"Weiter" nimmt die gemerkte Sekunde auch ohne jede Offset-Angabe', async (
   // stillschweigend einen Titelanfang.
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', ohneOffset: true, aktivitaet: 'FINISHED' }, null, redis);
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 590000);
 });
 
 test('"Weiter" traut dem Geraet, wenn es die groessere Stelle kennt', async () => {
@@ -1361,7 +1361,7 @@ test('"Weiter" traut dem Geraet, wenn es die groessere Stelle kennt', async () =
   // alte Marke darf eine echte Pause nicht ueberstimmen.
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 20000 });
   const r = await skill(intent('AMAZON.ResumeIntent'), { token: 'Hörspiel|1|0|0', offset: 90000 }, null, redis);
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 85000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 80000);
 });
 
 test('"Weiter" nimmt keine Stelle aus einem fremden Titel', async () => {
@@ -1392,7 +1392,7 @@ test('Album: nur das Geraet darf "weiter" sekundengenau machen', async () => {
   // sekundengenau, ein spaeteres Wiederaufnehmen bei Album nicht.
   const stand = { position: 1, runde: 0, seed: 0, offset: 47000 };
   const pause = await skill(intent('AMAZON.ResumeIntent'), { token: 'Album|1|0|0', offset: 47000 }, null, mitStand(ALBUM, stand));
-  assert.equal(spielt(pause).audioItem.stream.offsetInMilliseconds, 42000, 'die Pause zaehlt');
+  assert.equal(spielt(pause).audioItem.stream.offsetInMilliseconds, 37000, 'die Pause zaehlt');
 
   const spaeter = await skill(intent('AMAZON.ResumeIntent'), { token: 'Album|1|0|0', offset: 0, aktivitaet: 'STOPPED' }, null, mitStand(ALBUM, stand));
   assert.equal(spielt(spaeter).audioItem.stream.offsetInMilliseconds, 0, 'die gemerkte Stelle nicht');
@@ -1565,7 +1565,7 @@ test('Ein Titelanfang bei einer Sekunde loescht die gemerkte Stelle auch nicht',
 
   // Und die Probe aufs Exempel: Der naechste Start landet wieder dort.
   const r = await skill(sucheIntent('hörspiel'), {}, null, redis);
-  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 595000);
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 590000);
 });
 
 test('Ein Titelanfang mitten im Stueck schreibt seine Stelle', async () => {
@@ -1573,8 +1573,8 @@ test('Ein Titelanfang mitten im Stueck schreibt seine Stelle', async () => {
   // Wiedereinstieg meldet seine Stelle, und die ist die neue Wahrheit -
   // auch wenn sie um den Vorlauf kleiner ist als die gemerkte.
   const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
-  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 595000 }, {}, null, redis);
-  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 595000);
+  await skill({ type: 'AudioPlayer.PlaybackStarted', token: 'Hörspiel|1|0|0', offsetInMilliseconds: 590000 }, {}, null, redis);
+  assert.equal(redis.speicher.musik_stand['hörspiel'].offset, 590000);
 });
 
 test('Ein Stopp schreibt keine Null ueber eine gemerkte Stelle', async () => {
@@ -1621,7 +1621,7 @@ test('Ein Stopp schreibt nichts, wenn der Stand nicht gelesen werden konnte', as
 });
 
 test('einstiegNachGangart kennt die Gangart, einstieg nur den Vorlauf', () => {
-  assert.equal(einstiegNachGangart({ fortsetzen: 'sekunde' }, 47000), 42000);
+  assert.equal(einstiegNachGangart({ fortsetzen: 'sekunde' }, 47000), 37000);
   assert.equal(einstiegNachGangart({ fortsetzen: 'titel' }, 47000), 0);
   assert.equal(einstiegNachGangart({ fortsetzen: 'sekunde' }, 3000), 0, 'unter dem Vorlauf: von vorn');
 });
@@ -1637,7 +1637,10 @@ test('standNichtZurueck sperrt alles unter dem Vorlauf, nicht nur die Null', () 
   // Sekunden, bei Titeln von rund einer Stunde.
   assert.equal(standNichtZurueck(stand, token, 1093), true, 'eine Stelle, die keine ist');
   assert.equal(standNichtZurueck(stand, token, 1), true, 'was einstieg() zu 0 macht, ist keine Stelle');
-  assert.equal(standNichtZurueck(stand, token, 5000), false, 'ab dem Vorlauf ist es eine Stelle');
+  // Die Grenze von beiden Seiten: Eine Millisekunde unter dem Vorlauf ergibt
+  // nach `einstieg()` noch den Titelanfang, genau auf ihm ist es eine Stelle.
+  assert.equal(standNichtZurueck(stand, token, 9999), true, 'knapp unter dem Vorlauf noch nicht');
+  assert.equal(standNichtZurueck(stand, token, 10000), false, 'ab dem Vorlauf ist es eine Stelle');
   assert.equal(standNichtZurueck(stand, token, 30000), false, 'auch eine kleinere echte Stelle gilt');
   assert.equal(standNichtZurueck({ ...stand, position: 2 }, token, 0), false, 'anderer Titel');
   assert.equal(standNichtZurueck({ ...stand, offset: 0 }, token, 0), false, 'nichts zu schuetzen');
@@ -2996,7 +2999,7 @@ test('ein "weiter" landet mit seiner Quelle im Verlauf', async () => {
   const [eintrag] = redis.liste;
   assert.equal(eintrag.was, 'wort');
   assert.equal(eintrag.ereignis, 'ResumeIntent', 'ohne den AMAZON-Vorsatz');
-  assert.equal(eintrag.offset, 595000, 'die Stelle, die hinausging');
+  assert.equal(eintrag.offset, 590000, 'die Stelle, die hinausging');
   assert.equal(eintrag.woher, 'stand', 'und woher sie kam');
   assert.equal(eintrag.gangart, 'sekunde');
   assert.equal(eintrag.aktivitaet, 'STOPPED', 'protokolliert, nicht verzweigt');
