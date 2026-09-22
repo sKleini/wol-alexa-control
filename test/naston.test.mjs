@@ -17,6 +17,7 @@ import {
   frischeAdresse,
   laufMarke,
   laufUeberholt,
+  laeuftAuffrischen,
   eigeneBasis,
   bereich,
   antwortKopf,
@@ -214,16 +215,39 @@ function attrappeRes() {
   return res;
 }
 
+/**
+ * Die laufenden Lieferungen als sortierte Menge: Marke -> Verfallszeitpunkt.
+ * `gemerkt` ist die erste gueltige Marke oder null - so lesen die Tests, ob
+ * gerade eine Lieferung eingetragen ist.
+ */
+function laeuferAttrappe(merkzettel, laeuft) {
+  const laeufer = new Map(laeuft ? [[laeuft, Date.now() + 120_000]] : []);
+  Object.defineProperty(merkzettel, 'gemerkt', {
+    get: () => [...laeufer].find(([, bis]) => bis >= Date.now())?.[0] ?? null,
+  });
+  return {
+    zadd: async (_k, a, b) => {
+      const { score, member } = b || a;
+      if (b && a.xx && !laeufer.has(member)) return;
+      laeufer.set(member, score);
+    },
+    zcount: async (_k, von) => [...laeufer.values()].filter(bis => bis >= von).length,
+    zrem: async (_k, marke) => { if (laeufer.delete(marke)) merkzettel.geloescht += 1; },
+    zremrangebyscore: async (_k, _von, bis) => {
+      for (const [m, s] of laeufer) if (s <= bis) laeufer.delete(m);
+    },
+  };
+}
+
 function attrappeRedis(stand = 0, laeuft = null) {
-  const merkzettel = { gezaehlt: 0, gemerkt: laeuft, geloescht: 0, verlauf: [] };
+  const merkzettel = { gezaehlt: 0, geloescht: 0, verlauf: [] };
   return {
     merkzettel,
-    // Der Zaehler und der Merkzettel liegen unter verschiedenen Schluesseln -
-    // und `stand` ist nur der des Zaehlers.
-    get: async (k) => (k === 'musik_ton_laeuft' ? merkzettel.gemerkt : stand),
-    set: async (k, v) => { if (k === 'musik_ton_laeuft') merkzettel.gemerkt = v; },
+    ...laeuferAttrappe(merkzettel, laeuft),
+    // Der Zaehler steht unter `get`, die Lieferungen in der Menge oben.
+    get: async () => stand,
+    set: async () => {},
     del: async (k) => {
-      if (k === 'musik_ton_laeuft') { merkzettel.gemerkt = null; merkzettel.geloescht += 1; }
       if (k === VERLAUF_KEY) { merkzettel.verlauf = []; }
     },
     incrby: async (_k, wert) => { merkzettel.gezaehlt += wert; },
@@ -1095,4 +1119,47 @@ test('dieselbe Wiedergabe laeuft ungestoert weiter', async () => {
 
   assert.equal(gesendet, 64, 'alles durch');
   assert.equal(Buffer.concat(res.stuecke).length, 64 * 1024);
+});
+
+test('Der Merkzettel wird nur aufgefrischt, solange der eigene Eintrag noch steht', async () => {
+  // Eine Lieferung kann laenger dauern als die 120 s Frist (gemessen: 205 s).
+  // Frischt sie ihren Eintrag nicht auf, verfaellt er mittendrin.
+  const merkzettel = { geloescht: 0 };
+  const redis = { ...laeuferAttrappe(merkzettel, 'meine'), expire: async () => {} };
+  await laeuftAuffrischen(redis, 'meine');
+  assert.equal(merkzettel.gemerkt, 'meine');
+
+  // Ein schon abgeraeumter Eintrag ersteht nicht wieder auf (`xx`).
+  await redis.zrem('k', 'meine');
+  await laeuftAuffrischen(redis, 'meine');
+  assert.equal(merkzettel.gemerkt, null);
+
+  await laeuftAuffrischen({ zadd: async () => { throw new Error('weg'); } }, 'meine');
+});
+
+test('Zwei ueberlappende Lieferungen: die zuerst fertige laesst die andere geschuetzt', async () => {
+  // Der Titelwechsel: A laeuft, B (der naechste Titel) kommt dazu und ist
+  // zuerst fertig. Mit einem einzigen Zettel raeumte B ihn ab, und A lief
+  // ungeschuetzt weiter - eine Anmeldung haette A kappen duerfen.
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  const token = tonToken(BOX, PFAD, 'test-schluessel');
+  const redis = attrappeRedis(0, 'lieferung-A');
+  const res = attrappeRes();
+  await mitAbruf(() => halbeAntwort(1024, 1024), async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, redis, token, async () => 'aabbccddeeff0011');
+    await Promise.all([lauf, fertig(res)]);
+  });
+  assert.equal(redis.merkzettel.gemerkt, 'lieferung-A', 'A steht nach dem Ende von B noch');
+
+  // Und B hat bei ihrem Abruf gesehen, dass A laeuft - also ohne Anmeldung.
+  const schalter = [];
+  const res2 = attrappeRes();
+  await mitAbruf(() => halbeAntwort(1024, 1024), async () => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res2, redis, token, async (_l, _e, ohneAnmeldung) => {
+      schalter.push(ohneAnmeldung);
+      return 'aabbccddeeff0011';
+    });
+    await Promise.all([lauf, fertig(res2)]);
+  });
+  assert.deepEqual(schalter, [true]);
 });
