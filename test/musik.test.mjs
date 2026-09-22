@@ -238,6 +238,26 @@ test('findePlaylist ist kulant beim gehoerten Wort', () => {
   assert.deepEqual(findePlaylist(liste, undefined), { playlist: null, gesagt: null });
 });
 
+test('findePlaylist nimmt beim Enthalten den laengsten Namen, nicht den ersten', () => {
+  // "Lieder" steckt in "Kinderlieder" - und stand frueher nur deshalb vorn,
+  // weil es in der Liste weiter oben stand.
+  const lieder = { name: 'Lieder', titel: [] };
+  assert.equal(findePlaylist([lieder, KINDER], { value: 'die Kinderlieder' }).playlist, KINDER);
+  assert.equal(findePlaylist([lieder, KINDER], { value: 'die Lieder' }).playlist, lieder);
+});
+
+test('findePlaylist uebergeht Namen ohne Buchstaben und Ziffern', () => {
+  // Ihre Vergleichsform ist leer, und '' steckt in jedem Text.
+  const unsagbar = { name: '!!!', titel: [] };
+  assert.equal(findePlaylist([unsagbar, KINDER], { value: 'Kinderlieder bitte' }).playlist, KINDER);
+  assert.equal(findePlaylist([unsagbar], { value: 'Jazz' }).playlist, null);
+});
+
+test('validierePlaylist lehnt Namen ab, die sich nicht sagen lassen', () => {
+  assert.match(validierePlaylist({ name: '!!!', urls: 'https://h.de/1.mp3' }).fehler, /Buchstaben oder Ziffern/);
+  assert.ok(validierePlaylist({ name: 'CD 1', urls: 'https://h.de/1.mp3' }).playlist);
+});
+
 // --- Token und Schritte -------------------------------------------------------
 
 test('Token hin und zurueck', () => {
@@ -828,6 +848,15 @@ test('Ohne Ansage startet die Musik ohne ein Wort davor', async () => {
   assert.equal(spielt(r).audioItem.stream.token, 'Leise|0|0|0');
 });
 
+test('Ohne Ansage und ohne Sitzung traegt die Antwort kein shouldEndSession', async () => {
+  // Ohne Sitzung verwirft Alexa eine Antwort mit `shouldEndSession` ganz -
+  // die Regel aus `hatSitzung` gilt auch fuer den stillen Start.
+  const r = await skill(sucheIntent('leise'), { ohneSitzung: true }, [STILL]);
+  assert.equal(r.shouldEndSession, undefined);
+  assert.equal(r.outputSpeech, undefined);
+  assert.equal(spielt(r).audioItem.stream.token, 'Leise|0|0|0', 'die Musik geht trotzdem hinaus');
+});
+
 test('Mit Ansage bleibt der Satz vor der Musik', async () => {
   const r = await skill(intent('PlayPlaylistIntent', 'kinderlieder'));
   assert.equal(r.outputSpeech.text, 'Ich spiele Kinderlieder.');
@@ -1259,6 +1288,22 @@ test('Ein durchgelaufener Vermerk ist fuer "weiter" kein Stand', async () => {
   assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 0);
 });
 
+test('"Weiter" nimmt die unterbrochene Playlist, nicht eine juengere durchgelaufene', async () => {
+  // Hoerspiel mittendrin gestoppt, danach lief eine andere Playlist zu Ende.
+  // "Weiter" meint das Hoerspiel - die fertige hat nichts fortzusetzen.
+  const zweite = { name: 'Zweites', fortsetzen: true, titel: KINDER.titel };
+  const redis = redisMit({
+    [REDIS_KEY]: [HOERSPIEL, zweite],
+    musik_stand: {
+      'hörspiel': { position: 1, runde: 0, seed: 0, offset: 20000, zeit: 1000 },
+      zweites: { position: 0, runde: 0, seed: 0, offset: 0, fertig: true, zeit: 2000 },
+    },
+  });
+  const r = await skill(intent('AMAZON.ResumeIntent'), {}, null, redis);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|1|0|0');
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 10000);
+});
+
 // Ein Album: setzt fort, aber titelgenau. Drei Titel wie ueberall hier.
 const ALBUM = { name: 'Album', fortsetzen: 'titel', wiederholen: false, titel: KINDER.titel };
 
@@ -1594,6 +1639,19 @@ test('"Von vorn" laesst sich von der Null-Sperre nicht aufhalten', async () => {
   assert.equal(redis.speicher.musik_stand['hörspiel'].runde, 1);
 });
 
+test('"Von vorn" wartet nicht auf eine haengende Datenbank', async () => {
+  // Das Loeschen laeuft vor der Antwort. Haengt musik_stand, muss die Antwort
+  // trotzdem im Budget (hier 300 ms) herausgehen - der Stand bleibt dann
+  // eben stehen.
+  const redis = mitStand(HOERSPIEL, { position: 1, runde: 0, seed: 0, offset: 600000 });
+  const get = redis.get;
+  redis.get = (key) => (key === 'musik_stand' ? new Promise(() => {}) : get(key));
+  const beginn = Date.now();
+  const r = await skill(intent('AMAZON.StartOverIntent'), { token: 'Hörspiel|1|0|0' }, null, redis);
+  assert.ok(Date.now() - beginn < 2000, `nach ${Date.now() - beginn} ms`);
+  assert.equal(spielt(r).audioItem.stream.token, 'Hörspiel|0|1|0');
+});
+
 test('Der Wiederholungsversuch nach einem Fehlschlag laesst den Stand stehen', async () => {
   // `selberTitel` ignoriert `versuch` und `pech` absichtlich: Der zweite
   // Versuch ist derselbe Titel, und sein Anfang bei null darf die gemerkte
@@ -1732,6 +1790,20 @@ test('Die Sprachbefehle mischen nur den laufenden Stream', async () => {
 
   const aus = await skill(intent('AMAZON.ShuffleOffIntent'), { token: 'Kinderlieder|1|0|4711' });
   assert.equal(tokenLesen(spielt(aus).audioItem.stream.token).seed, 0);
+});
+
+test('Zufallswiedergabe aus spielt den laufenden Titel an seiner Stelle weiter', async () => {
+  // Gemischt laeuft an Stelle 2 irgendein Titel - nach dem Abschalten muss es
+  // derselbe sein, an derselben Sekunde, und nicht Titel eins der Liste.
+  const seed = 4711;
+  const laufend = titelAn(KINDER, 2, seed);
+  const r = await skill(intent('AMAZON.ShuffleOffIntent'), { token: `Kinderlieder|2|0|${seed}`, offset: 42000 });
+  const neu = tokenLesen(spielt(r).audioItem.stream.token);
+  assert.equal(neu.seed, 0);
+  assert.equal(neu.position, laufend.nummer, 'ungemischt ist die Stelle die Listennummer');
+  assert.equal(neu.runde, 1, 'neue Runde, damit der Token sich unterscheidet');
+  assert.ok(spielt(r).audioItem.stream.url.startsWith(laufend.titel.url));
+  assert.equal(spielt(r).audioItem.stream.offsetInMilliseconds, 42000);
 });
 
 test('Mischen ohne laufende Wiedergabe verweist aufs Dashboard', async () => {

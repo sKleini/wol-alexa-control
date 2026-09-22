@@ -17,6 +17,7 @@ import {
   frischeAdresse,
   laufMarke,
   laufUeberholt,
+  laeuftAuffrischen,
   eigeneBasis,
   bereich,
   antwortKopf,
@@ -1095,4 +1096,24 @@ test('dieselbe Wiedergabe laeuft ungestoert weiter', async () => {
 
   assert.equal(gesendet, 64, 'alles durch');
   assert.equal(Buffer.concat(res.stuecke).length, 64 * 1024);
+});
+
+test('Der Merkzettel wird nur aufgefrischt, solange er der eigene ist', async () => {
+  // Eine Lieferung kann laenger dauern als die 120 s Frist des Merkzettels
+  // (gemessen: 205 s). Frischt sie ihn nicht auf, verfaellt er mittendrin,
+  // und eine Anmeldung darf genau diesen Strom kappen.
+  const gesetzt = [];
+  let steht = 'meine';
+  const redis = {
+    get: async () => steht,
+    set: async (k, v, o) => { gesetzt.push([k, v, o]); steht = v; },
+  };
+  await laeuftAuffrischen(redis, 'meine');
+  assert.deepEqual(gesetzt, [['musik_ton_laeuft', 'meine', { ex: 120 }]]);
+
+  steht = 'fremde';
+  await laeuftAuffrischen(redis, 'meine');
+  assert.equal(gesetzt.length, 1, 'ein fremder Merkzettel bleibt, wie er ist');
+
+  await laeuftAuffrischen({ get: async () => { throw new Error('weg'); } }, 'meine');
 });
