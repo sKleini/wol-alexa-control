@@ -74,7 +74,7 @@
         .device-info h3 { font-size: 1rem; color: var(--primary); }
         .device-info p { font-size: 0.8rem; color: rgba(255,255,255,0.5); font-family: monospace; }
 
-        .btn-delete { width: 40px; height: 40px; background: rgba(255,77,77,0.1); color: #ff4d4d; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
+        .btn-delete { width: 40px; height: 40px; flex: none; background: rgba(255,77,77,0.1); color: #ff4d4d; border: none; border-radius: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
         .btn-delete:hover { background: #ff4d4d; color: white; }
 
         .item-actions { display: flex; gap: 8px; flex-shrink: 0; margin-left: 10px; }
@@ -82,6 +82,34 @@
         .btn-icon:hover { background: var(--primary); color: #0a0a0c; }
         .btn-icon:disabled { opacity: 0.5; cursor: wait; }
 
+        /* Die Playlist-Karte: Name und Eigenschaften links (ein Tipp
+           bearbeitet), rechts nur das Drei-Punkte-Menue. Das Menue haengt an
+           der Karte, deshalb ist sie der Bezugspunkt. */
+        .device-item.playlist { position: relative; align-items: flex-start; flex-wrap: wrap; }
+        .playlist-info { flex: 1; min-width: 0; cursor: pointer; border-radius: 8px; }
+        .playlist-info:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+        .playlist-info h3 { overflow-wrap: anywhere; }
+        .btn-mehr { flex: none; margin-left: 8px; }
+        .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+        .chip { font-size: 0.75rem; line-height: 1.4; padding: 2px 9px; border-radius: 999px; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.65); }
+        /* Der Ordnerpfad der FRITZ!NAS-Marke klappt als eigene Zeile auf. */
+        .chip-quelle { display: inline-flex; flex-wrap: wrap; align-items: baseline; max-width: 100%; overflow-wrap: anywhere; }
+        .popup-menue { position: absolute; top: 58px; right: 12px; z-index: 20; min-width: 190px; padding: 6px; border-radius: 12px; background: #1c1c24; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 12px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+        .popup-menue button { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: none; border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 0.9rem; text-align: left; cursor: pointer; }
+        .popup-menue button i { width: 1.1em; text-align: center; color: var(--primary); }
+        .popup-menue button:hover:not(:disabled), .popup-menue button:focus-visible { background: rgba(255,255,255,0.08); outline: none; }
+        .popup-menue button:disabled { opacity: 0.35; cursor: default; }
+        .popup-menue button.gefahr { color: #ff6b6b; border-top: 1px solid rgba(255,255,255,0.08); border-radius: 0 0 8px 8px; margin-top: 4px; }
+        .popup-menue button.gefahr i { color: inherit; }
+        /* Auf dem Handy: weniger Rahmen, mehr Platz fuer Namen. Gilt fuer alle
+           Abschnitte, nicht nur die Playlists. */
+        @media (max-width: 520px) {
+            body { padding: 10px 8px; }
+            .glass-card { padding: 20px 14px; border-radius: 18px; }
+            .device-item { padding: 12px; }
+            h1 { font-size: 1.6rem; }
+            .item-actions { margin-left: 6px; }
+        }
         .hint { font-size: 0.8rem; color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.03); border-left: 3px solid var(--primary); border-radius: 8px; padding: 10px 12px; margin-bottom: 15px; line-height: 1.5; }
         .hint code { font-family: monospace; color: rgba(255,255,255,0.85); }
         details.hint > summary { cursor: pointer; font-weight: 600; color: rgba(255,255,255,0.8); list-style: none; display: flex; align-items: center; gap: 8px; }
@@ -108,15 +136,17 @@
            Verschieben per Pfeil oder - am Rechner - per Ziehen. */
         .track-order { flex-basis: 100%; margin-top: 10px; }
         .track-order ol { list-style: none; margin: 0 0 10px; padding: 0; }
-        .track-order li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem; cursor: grab; }
+        .track-order li { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-top: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem; cursor: grab; }
         .track-order li.dragging { opacity: 0.4; }
         .track-order li.drop-target { border-top: 2px solid var(--primary); }
         .track-order .nr { flex: none; width: 2.2em; text-align: right; color: rgba(255,255,255,0.45); font-family: monospace; }
         .track-order .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .track-order li .btn-icon { width: 30px; height: 30px; flex: none; }
+        .track-order li .btn-icon { width: 40px; height: 40px; flex: none; }
         .track-order li .btn-icon:disabled { cursor: default; opacity: 0.25; }
-        .track-order .knoepfe { display: flex; gap: 8px; }
-        .track-order .knoepfe .btn { padding: 10px; }
+        .track-order .knoepfe { display: flex; flex-wrap: wrap; gap: 8px; }
+        .track-order .knoepfe .btn { flex: 1 1 0; padding: 10px; white-space: nowrap; }
+        /* Schmal: Save order ueber die volle Breite, A-Z und Cancel darunter. */
+        @media (max-width: 520px) { .track-order .knoepfe .btn:first-child { flex-basis: 100%; } }
 
         .device-item.session-expired { border-color: rgba(255,77,77,0.4); background: rgba(255,77,77,0.06); }
         .session-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 5px 10px; border-radius: 999px; background: rgba(255,77,77,0.15); color: #ff8080; font-size: 0.75rem; font-weight: 600; }
@@ -660,12 +690,17 @@
             playlists.forEach((pl, nummer) => {
                 const titel = Array.isArray(pl.titel) ? pl.titel : [];
                 const item = document.createElement('div');
-                item.className = 'device-item';
-                item.style.flexWrap = 'wrap';
+                item.className = 'device-item playlist';
 
                 const info = document.createElement('div');
-                info.className = 'device-info';
-                info.style.flex = '1';
+                info.className = 'device-info playlist-info';
+                // Ein Tipp auf Name oder Eigenschaften bearbeitet die Playlist -
+                // wie in der App. Alles Weitere steht im Menue daneben, statt
+                // sechs Knoepfe je Zeile, die auf dem Handy nicht in die Karte
+                // passten.
+                info.setAttribute('role', 'button');
+                info.tabIndex = 0;
+                info.title = 'Edit';
                 // Ein fehlendes Feld heisst "wiederholt sich" - genau wie im
                 // Backend, sonst zeigte die Liste fuer alte Playlists das
                 // Gegenteil dessen an, was der Skill tut.
@@ -677,33 +712,106 @@
                     pl.ansage !== false ? 'announced' : 'silent start',
                     pl.zufall === true ? 'shuffled' : null,
                     fortsetzText(pl.fortsetzen),
-                ].filter(Boolean).join(' · ');
-                info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${zustand}</p>`;
-                if (pl.quelle?.typ === 'fritz') info.querySelector('p').append(' · ', quelleMarke(pl.quelle));
+                ].filter(Boolean);
+                info.innerHTML = `<h3>${esc(pl.name)}</h3><div class="chips">${zustand.map(z => `<span class="chip">${esc(z)}</span>`).join('')}</div>`;
+                if (pl.quelle?.typ === 'fritz') {
+                    const chip = quelleMarke(pl.quelle);
+                    chip.classList.add('chip', 'chip-quelle');
+                    info.querySelector('.chips').append(chip);
+                }
+                // Knoepfe und Links darin (die FRITZ!NAS-Marke, der Ordner-Link)
+                // tun ihr Eigenes und oeffnen nicht nebenbei das Formular.
+                info.addEventListener('click', (e) => {
+                    if (e.target.closest('button, a')) return;
+                    editPlaylist(pl);
+                });
+                info.addEventListener('keydown', (e) => {
+                    if (e.target !== info || (e.key !== 'Enter' && e.key !== ' ')) return;
+                    e.preventDefault();
+                    editPlaylist(pl);
+                });
                 item.appendChild(info);
 
-                const actions = document.createElement('div');
-                actions.className = 'item-actions';
-                // Die Reihenfolge ist nicht nur Kosmetik: In ihr zaehlt Alexa
-                // die Playlists auf, wenn sie fragt, welche sie spielen soll.
-                const hoch = iconButton('arrow-up', 'Move up', () => verschiebePlaylist(pl.name, -1));
-                const runter = iconButton('arrow-down', 'Move down', () => verschiebePlaylist(pl.name, +1));
-                hoch.disabled = nummer === 0;
-                runter.disabled = nummer === playlists.length - 1;
-                // Das gemeinsame :disabled zeigt einen Warte-Zeiger - richtig
-                // fuer "Check URLs laeuft gerade", falsch fuer einen Pfeil, der
-                // schlicht am Ende der Liste steht.
-                for (const b of [hoch, runter]) if (b.disabled) b.style.cursor = 'default';
-                actions.appendChild(hoch);
-                actions.appendChild(runter);
-                actions.appendChild(iconButton('pen', 'Edit', () => editPlaylist(pl)));
-                if (titel.length > 1) actions.appendChild(iconButton('list-ol', 'Track order', () => zeigeTitelfolge(pl, item)));
-                const checkBtn = iconButton('stethoscope', 'Check URLs', () => checkPlaylist(pl.name, item, checkBtn));
-                actions.appendChild(checkBtn);
-                actions.appendChild(deleteButton(() => deletePlaylist(pl.name)));
-                item.appendChild(actions);
+                const mehr = iconButton('ellipsis-vertical', 'More actions', () => {});
+                mehr.classList.add('btn-mehr');
+                // Die Reihenfolge der Eintraege wie im Menue der App. Hoch und
+                // runter sind nicht nur Kosmetik: In dieser Reihenfolge zaehlt
+                // Alexa die Playlists auf, wenn sie fragt, welche sie spielen soll.
+                const eintraege = [
+                    { icon: 'pen', text: 'Edit', tun: () => editPlaylist(pl) },
+                    { icon: 'stethoscope', text: 'Check URLs', aus: titel.length === 0, tun: () => checkPlaylist(pl.name, item, mehr) },
+                    { icon: 'list-ol', text: 'Track order', aus: titel.length < 2, tun: () => zeigeTitelfolge(pl, item) },
+                    { icon: 'arrow-up', text: 'Move up', aus: nummer === 0, tun: () => verschiebePlaylist(pl.name, -1) },
+                    { icon: 'arrow-down', text: 'Move down', aus: nummer === playlists.length - 1, tun: () => verschiebePlaylist(pl.name, +1) },
+                    { icon: 'trash', text: 'Delete', gefahr: true, tun: () => deletePlaylist(pl.name) },
+                ];
+                menueAnbinden(mehr, item, eintraege);
+                item.appendChild(mehr);
 
                 container.appendChild(item);
+            });
+        }
+
+        /**
+         * Ein kleines Menue unter einem Knopf - das Gegenstueck zum
+         * Drei-Punkte-Menue der App.
+         *
+         * Immer nur eines offen: `offenesMenue` schliesst das vorige, bevor ein
+         * neues aufgeht. Zu geht es mit einer Auswahl, mit Escape und mit einem
+         * Klick daneben; der Fokus kehrt dann auf den Knopf zurueck. Die
+         * Pfeiltasten wandern durch die aktiven Eintraege.
+         */
+        let offenesMenue = null;
+
+        function schliesseMenue(fokusZurueck = false) {
+            if (!offenesMenue) return;
+            const { menue, knopf } = offenesMenue;
+            offenesMenue = null;
+            menue.remove();
+            knopf.setAttribute('aria-expanded', 'false');
+            if (fokusZurueck) knopf.focus();
+        }
+
+        document.addEventListener('click', (e) => {
+            if (offenesMenue && !offenesMenue.menue.contains(e.target) && !offenesMenue.knopf.contains(e.target)) schliesseMenue();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && offenesMenue) schliesseMenue(true);
+        });
+
+        function menueAnbinden(knopf, karte, eintraege) {
+            knopf.setAttribute('aria-haspopup', 'menu');
+            knopf.setAttribute('aria-expanded', 'false');
+            knopf.addEventListener('click', () => {
+                const warOffen = offenesMenue?.knopf === knopf;
+                schliesseMenue();
+                if (warOffen) return;
+
+                const menue = document.createElement('div');
+                menue.className = 'popup-menue';
+                menue.setAttribute('role', 'menu');
+                for (const e of eintraege) {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.setAttribute('role', 'menuitem');
+                    if (e.gefahr) b.className = 'gefahr';
+                    b.disabled = !!e.aus;
+                    b.innerHTML = `<i class="fas fa-${e.icon}"></i> ${esc(e.text)}`;
+                    b.addEventListener('click', () => { schliesseMenue(); e.tun(); });
+                    menue.appendChild(b);
+                }
+                menue.addEventListener('keydown', (ev) => {
+                    if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+                    ev.preventDefault();
+                    const aktiv = [...menue.querySelectorAll('button:not(:disabled)')];
+                    const i = aktiv.indexOf(document.activeElement);
+                    const n = ev.key === 'ArrowDown' ? i + 1 : i - 1;
+                    aktiv[(n + aktiv.length) % aktiv.length]?.focus();
+                });
+                karte.appendChild(menue);
+                knopf.setAttribute('aria-expanded', 'true');
+                offenesMenue = { menue, knopf };
+                menue.querySelector('button:not(:disabled)')?.focus();
             });
         }
 
