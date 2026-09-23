@@ -83,17 +83,15 @@
         .btn-icon:disabled { opacity: 0.5; cursor: wait; }
 
         /* Die Playlist-Karte: Name und Eigenschaften links (ein Tipp
-           bearbeitet), rechts nur das Drei-Punkte-Menue. Das Menue haengt an
+           bearbeitet), rechts Titelreihenfolge, Pruefen und das
+           Drei-Punkte-Menue. Das Menue haengt an
            der Karte, deshalb ist sie der Bezugspunkt. */
         .device-item.playlist { position: relative; align-items: flex-start; flex-wrap: wrap; }
         .playlist-info { flex: 1; min-width: 0; cursor: pointer; border-radius: 8px; }
         .playlist-info:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
         .playlist-info h3 { overflow-wrap: anywhere; }
-        .btn-mehr { flex: none; margin-left: 8px; }
-        .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-        .chip { font-size: 0.75rem; line-height: 1.4; padding: 2px 9px; border-radius: 999px; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.65); }
-        /* Der Ordnerpfad der FRITZ!NAS-Marke klappt als eigene Zeile auf. */
-        .chip-quelle { display: inline-flex; flex-wrap: wrap; align-items: baseline; max-width: 100%; overflow-wrap: anywhere; }
+        .playlist-knoepfe { flex: none; display: flex; gap: 6px; margin-left: 8px; }
+        .playlist-knoepfe .btn-icon:disabled:not(.laeuft) { cursor: default; opacity: 0.3; }
         .popup-menue { position: absolute; top: 58px; right: 12px; z-index: 20; min-width: 190px; padding: 6px; border-radius: 12px; background: #1c1c24; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 12px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
         .popup-menue button { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: none; border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 0.9rem; text-align: left; cursor: pointer; }
         .popup-menue button i { width: 1.1em; text-align: center; color: var(--primary); }
@@ -724,13 +722,9 @@
                     pl.ansage !== false ? 'announced' : 'silent start',
                     pl.zufall === true ? 'shuffled' : null,
                     fortsetzText(pl.fortsetzen),
-                ].filter(Boolean);
-                info.innerHTML = `<h3>${esc(pl.name)}</h3><div class="chips">${zustand.map(z => `<span class="chip">${esc(z)}</span>`).join('')}</div>`;
-                if (pl.quelle?.typ === 'fritz') {
-                    const chip = quelleMarke(pl.quelle);
-                    chip.classList.add('chip', 'chip-quelle');
-                    info.querySelector('.chips').append(chip);
-                }
+                ].filter(Boolean).join(' · ');
+                info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${zustand}</p>`;
+                if (pl.quelle?.typ === 'fritz') info.querySelector('p').append(' · ', quelleMarke(pl.quelle));
                 // Knoepfe und Links darin (die FRITZ!NAS-Marke, der Ordner-Link)
                 // tun ihr Eigenes und oeffnen nicht nebenbei das Formular.
                 info.addEventListener('click', (e) => {
@@ -744,21 +738,32 @@
                 });
                 item.appendChild(info);
 
+                // Titelreihenfolge und Pruefen braucht man oft, sie stehen
+                // direkt auf der Karte. Bei einem Titel ist die Reihenfolge
+                // ausgegraut statt weg, damit die Knoepfe in jeder Karte an
+                // derselben Stelle stehen.
+                const knoepfe = document.createElement('div');
+                knoepfe.className = 'playlist-knoepfe';
+                const folgeBtn = iconButton('list-ol', 'Track order', () => zeigeTitelfolge(pl, item));
+                folgeBtn.disabled = titel.length < 2;
+                const checkBtn = iconButton('stethoscope', 'Check URLs', () => {
+                    checkBtn.classList.add('laeuft');
+                    checkPlaylist(pl.name, item, checkBtn).finally(() => checkBtn.classList.remove('laeuft'));
+                });
+                checkBtn.disabled = titel.length === 0;
                 const mehr = iconButton('ellipsis-vertical', 'More actions', () => {});
-                mehr.classList.add('btn-mehr');
-                // Die Reihenfolge der Eintraege wie im Menue der App. Hoch und
+                // Der Rest im Menue, in der Reihenfolge der App. Hoch und
                 // runter sind nicht nur Kosmetik: In dieser Reihenfolge zaehlt
                 // Alexa die Playlists auf, wenn sie fragt, welche sie spielen soll.
                 const eintraege = [
                     { icon: 'pen', text: 'Edit', tun: () => editPlaylist(pl) },
-                    { icon: 'stethoscope', text: 'Check URLs', aus: titel.length === 0, tun: () => checkPlaylist(pl.name, item, mehr) },
-                    { icon: 'list-ol', text: 'Track order', aus: titel.length < 2, tun: () => zeigeTitelfolge(pl, item) },
                     { icon: 'arrow-up', text: 'Move up', aus: nummer === 0, tun: () => verschiebePlaylist(pl.name, -1) },
                     { icon: 'arrow-down', text: 'Move down', aus: nummer === playlists.length - 1, tun: () => verschiebePlaylist(pl.name, +1) },
                     { icon: 'trash', text: 'Delete', gefahr: true, tun: () => deletePlaylist(pl.name) },
                 ];
                 menueAnbinden(mehr, item, eintraege);
-                item.appendChild(mehr);
+                knoepfe.append(folgeBtn, checkBtn, mehr);
+                item.appendChild(knoepfe);
 
                 container.appendChild(item);
             });
