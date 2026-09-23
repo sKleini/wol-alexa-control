@@ -1007,6 +1007,16 @@
                 const [t] = folge.splice(von, 1);
                 folge.splice(nach, 0, t);
                 zeichne(nach, fokus);
+                sortierRichtung('az');
+            }
+
+            // Was der Sortierknopf als Naechstes tut. Nach einem Verschieben
+            // von Hand ist die Liste nicht mehr sortiert, also wieder A-Z.
+            function sortierRichtung(naechste) {
+                sortierKnopf.dataset.richtung = naechste;
+                sortierKnopf.innerHTML = naechste === 'za'
+                    ? '<i class="fas fa-arrow-down-z-a"></i> Z–A'
+                    : '<i class="fas fa-arrow-down-a-z"></i> A–Z';
             }
 
             /**
@@ -1024,6 +1034,7 @@
                 griff.setPointerCapture(e.pointerId);
                 li.classList.add('dragging');
                 const zug = { y: e.clientY, zeigerY: e.clientY, laeuft: true };
+                const vorher = [...liste.children].map(z => z.title).join('\n');
                 const nummern = () => [...liste.children].forEach((z, i) => { z.querySelector('.nr').textContent = i + 1; });
 
                 const bewege = () => {
@@ -1078,6 +1089,7 @@
                     const neu = [...liste.children].map(z => z.title);
                     folge.sort((a, b) => neu.indexOf(a.url) - neu.indexOf(b.url));
                     zeichne(neu.indexOf(li.title));
+                    if (neu.join('\n') !== vorher) sortierRichtung('az');
                 };
                 addEventListener('pointermove', ziehe);
                 addEventListener('pointerup', lass);
@@ -1101,12 +1113,17 @@
                 playlistStatus(`Track order of "${pl.name}" saved.`, 'ok');
                 renderPlaylists();
             });
-            // A-Z nach Titelnamen, wie beim Knopf fuer die Playlists: 'de'
-            // fuer die Umlaute, numeric damit "Folge 10" hinter "Folge 9" steht.
-            knopf('A–Z', 'arrow-down-a-z', 'rgba(255,255,255,0.08)', () => {
-                folge.sort((a, b) => (a.name || a.url).localeCompare(b.name || b.url, 'de', { sensitivity: 'base', numeric: true }));
+            // Nach Titelnamen, wie beim Knopf fuer die Playlists: 'de' fuer
+            // die Umlaute, numeric damit "Folge 10" hinter "Folge 9" steht.
+            // Ein Knopf fuer beide Richtungen: Er zeigt, was er als Naechstes
+            // tut - nach A-Z also Z-A und umgekehrt.
+            const sortierKnopf = knopf('A–Z', 'arrow-down-a-z', 'rgba(255,255,255,0.08)', () => {
+                const richtung = sortierKnopf.dataset.richtung === 'za' ? -1 : 1;
+                folge.sort((a, b) => richtung * (a.name || a.url).localeCompare(b.name || b.url, 'de', { sensitivity: 'base', numeric: true }));
                 zeichne();
+                sortierRichtung(richtung === 1 ? 'za' : 'az');
             });
+            sortierKnopf.title = 'Sort tracks by name';
             // Mit Aenderungen wird gefragt - dreissig verschobene Titel waeren
             // sonst mit einem Fehltipp weg.
             knopf('Cancel', 'xmark', 'rgba(255,255,255,0.08)', () => {
