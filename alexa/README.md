@@ -127,7 +127,7 @@ sich bewusst nicht:
 | Intent | Slot-Typ | Sätze | wofür |
 |---|---|---|---|
 | `SuchePlaylistIntent` | `AMAZON.SearchQuery` | immer mit Trägerwort, Slot am Ende (`spiele {suche}`) | der Ein-Satz-Aufruf, beliebige Namen |
-| `PlayPlaylistIntent` | `PLAYLIST_NAME` | `{playlist}` allein | die Antwort auf die Rückfrage |
+| `PlayPlaylistIntent` | `PLAYLIST_NAME` | `{playlist}` allein (dazu `die playlist {playlist}`) | die Antwort auf die Rückfrage |
 
 Beide landen in derselben Funktion; welcher Slot ankommt, ist dem Rest egal.
 `findePlaylist` normalisiert Groß- und Kleinschreibung, Umlaute und Leerzeichen
