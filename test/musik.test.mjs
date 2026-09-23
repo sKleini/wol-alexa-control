@@ -51,6 +51,8 @@ import {
   audioNamenImText,
   seitenDiagnose,
   sortierePlaylists,
+  sortiereTitel,
+  standNachUmsortieren,
   REDIS_KEY,
   alsSidTafel,
   fremderOrdner,
@@ -2370,6 +2372,78 @@ test('das Umsortieren laesst die Playlists selbst unangetastet', async () => {
     redis,
   );
   assert.deepEqual(redis.speicher[REDIS_KEY][0], voll);
+});
+
+// --- Titel einer Playlist umsortieren -------------------------------------------
+
+const vierTitel = () => ({
+  name: 'Hörspiel',
+  titel: ['1', '2', '3', '4'].map(n => ({ url: `https://h.de/${n}.mp3`, name: n })),
+  zufall: false,
+  quelle: { typ: 'fritz', link: FRITZ_LINK, ordner: '/Musik/Hörspiel' },
+});
+const urls = (...n) => n.map(x => `https://h.de/${x}.mp3`);
+
+test('sortiereTitel bringt die Titel in die gewuenschte Reihenfolge und laesst den Rest stehen', () => {
+  const alt = vierTitel();
+  const neu = sortiereTitel(alt, urls(3, 1, 4, 2));
+  assert.deepEqual(neu.titel.map(t => t.name), ['3', '1', '4', '2']);
+  assert.deepEqual(neu.quelle, alt.quelle);
+  assert.equal(neu.name, alt.name);
+  // Der Bestand selbst bleibt unangetastet.
+  assert.deepEqual(alt.titel.map(t => t.name), ['1', '2', '3', '4']);
+});
+
+test('sortiereTitel verliert nichts und stolpert ueber nichts', () => {
+  // Eine unbekannte URL wird uebergangen, fehlende haengen sich hinten an.
+  const neu = sortiereTitel(vierTitel(), [...urls(4), 'https://h.de/weg.mp3', '', null, ...urls(2)]);
+  assert.deepEqual(neu.titel.map(t => t.name), ['4', '2', '1', '3']);
+  assert.deepEqual(sortiereTitel(vierTitel(), undefined).titel.map(t => t.name), ['1', '2', '3', '4']);
+});
+
+test('standNachUmsortieren zeigt weiter auf denselben Titel', () => {
+  const alt = vierTitel();
+  const neu = sortiereTitel(alt, urls(4, 3, 2, 1));
+  // Stand bei Titel "2" (Position 1) steht danach an Position 2.
+  const stand = { position: 1, runde: 0, seed: 0, offset: 12345, zeit: 7 };
+  assert.deepEqual(standNachUmsortieren(stand, alt, neu), { ...stand, position: 2 });
+  // Nichts zu tun: ohne Stand, oder wenn der Titel an seiner Stelle bleibt.
+  assert.equal(standNachUmsortieren(null, alt, neu), null);
+  assert.equal(standNachUmsortieren(stand, alt, sortiereTitel(alt, urls(3, 2))), null);
+});
+
+test('standNachUmsortieren rechnet bei einer gemischten Playlist ueber dieselbe Mischung', () => {
+  const alt = vierTitel();
+  const neu = sortiereTitel(alt, urls(4, 3, 2, 1));
+  const seed = 12345;
+  for (let position = 0; position < 4; position++) {
+    const vorher = alt.titel[reihenfolge(4, seed)[position]].url;
+    const stand = standNachUmsortieren({ position, runde: 1, seed }, alt, neu) || { position };
+    assert.equal(neu.titel[reihenfolge(4, seed)[stand.position]].url, vorher);
+  }
+});
+
+test('handleManage sortiert die Titel um und nimmt den Stand mit, ohne seine Zeit', async () => {
+  const redis = redisMit({
+    [REDIS_KEY]: [pl('Andere'), vierTitel()],
+    musik_stand: { 'hörspiel': { position: 0, runde: 0, seed: 0, offset: 99, zeit: 42 } },
+  });
+  const res = antwortFaenger();
+  await handleManage(
+    { method: 'POST', query: { titelSortieren: '1' }, body: { name: 'HÖRSPIEL', urls: urls(2, 1, 3, 4) } },
+    res,
+    redis,
+  );
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(redis.speicher[REDIS_KEY][1].titel.map(t => t.name), ['2', '1', '3', '4']);
+  assert.deepEqual(redis.speicher.musik_stand['hörspiel'], { position: 1, runde: 0, seed: 0, offset: 99, zeit: 42 });
+});
+
+test('handleManage meldet eine unbekannte Playlist beim Umsortieren der Titel', async () => {
+  const redis = redisMit({ [REDIS_KEY]: [vierTitel()] });
+  const res = antwortFaenger();
+  await handleManage({ method: 'POST', query: { titelSortieren: '1' }, body: { name: 'Gibtsnicht', urls: [] } }, res, redis);
+  assert.equal(res.statusCode, 404);
 });
 
 // --- Eine Sitzung je FRITZ!Box ----------------------------------------------------
