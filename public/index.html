@@ -129,7 +129,12 @@
         .form-status.ok { color: #7dffb3; }
 
         .check-list { min-width: 0; margin-top: 10px; font-size: 0.75rem; font-family: monospace; color: rgba(255,255,255,0.7); word-break: break-all; }
-        .check-list div { padding: 3px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+        .check-zeilen > div { padding: 3px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+        /* Kopf der Pruefung mit Schliessen-Knopf - sonst blieb die Ausgabe
+           stehen, bis die Seite neu geladen wurde. */
+        .check-kopf { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; font-family: inherit; font-size: 0.8rem; color: rgba(255,255,255,0.55); }
+        .check-kopf .btn-icon { width: 32px; height: 32px; background: transparent; color: rgba(255,255,255,0.6); }
+        .check-kopf .btn-icon:hover { background: rgba(255,255,255,0.08); color: var(--text); }
         /* Die Titelreihenfolge einer Playlist: nur die Namen, nummeriert, zum
            Verschieben per Pfeil oder - am Rechner - per Ziehen. */
         /* min-width: 0, sonst macht ein langer Titelname die Liste als
@@ -1140,20 +1145,41 @@
         // Pruefung in Haeppchen: Vercel gibt einer Function zehn Sekunden, also
         // liefert der Server hoechstens zwanzig Titel je Aufruf und sagt mit
         // `weiter`, wo es weitergeht.
+        //
+        // Ein zweiter Klick auf den Knopf schliesst die Ausgabe wieder, genau
+        // wie bei der Titelreihenfolge; dazu steht ein Schliessen-Knopf im Kopf.
+        // Wird sie waehrend der Pruefung geschlossen, holt die Schleife keine
+        // weiteren Haeppchen mehr.
         async function checkPlaylist(name, item, btn) {
-            btn.disabled = true;
-            let list = item.querySelector('.check-list');
-            if (!list) {
-                list = document.createElement('div');
-                list.className = 'check-list';
-                list.style.flexBasis = '100%';
-                item.appendChild(list);
+            const offen = item.querySelector('.check-list');
+            if (offen) {
+                offen.remove();
+                btn.setAttribute('aria-expanded', 'false');
+                return;
             }
-            list.innerHTML = '<div>Checking…</div>';
+            btn.disabled = true;
+            btn.setAttribute('aria-expanded', 'true');
+            const list = document.createElement('div');
+            list.className = 'check-list';
+            list.style.flexBasis = '100%';
+            const kopf = document.createElement('div');
+            kopf.className = 'check-kopf';
+            const titel = document.createElement('span');
+            titel.textContent = 'URL check';
+            kopf.append(titel, iconButton('xmark', 'Close', () => {
+                list.remove();
+                btn.setAttribute('aria-expanded', 'false');
+                btn.focus();
+            }));
+            const zeilen = document.createElement('div');
+            zeilen.className = 'check-zeilen';
+            list.append(kopf, zeilen);
+            item.appendChild(list);
+            zeilen.innerHTML = '<div>Checking…</div>';
             const lines = [];
             let ab = 0;
             try {
-                while (ab !== null) {
+                while (ab !== null && list.isConnected) {
                     const qs = `?type=playlists&pruefen=1&name=${encodeURIComponent(name)}&ab=${ab}`;
                     const r = await apiRequest('GET', null, qs);
                     if (!r || r.error) { lines.push(`❌ ${esc(r?.error || 'check failed')}`); break; }
@@ -1183,12 +1209,12 @@
                         lines.push(`${icon} ${esc(e.url)} — ${esc(teile.join(' · '))}`);
                     }
                     ab = r.weiter;
-                    list.innerHTML = lines.map(l => `<div>${l}</div>`).join('') + (ab !== null ? '<div>…</div>' : '');
+                    zeilen.innerHTML = lines.map(l => `<div>${l}</div>`).join('') + (ab !== null ? '<div>…</div>' : '');
                 }
             } catch (err) {
                 lines.push(`❌ ${esc(err.message)}`);
             }
-            list.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+            zeilen.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
             btn.disabled = false;
         }
 
