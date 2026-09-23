@@ -104,6 +104,19 @@
 
         .check-list { margin-top: 10px; font-size: 0.75rem; font-family: monospace; color: rgba(255,255,255,0.7); word-break: break-all; }
         .check-list div { padding: 3px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+        /* Die Titelreihenfolge einer Playlist: nur die Namen, nummeriert, zum
+           Verschieben per Pfeil oder - am Rechner - per Ziehen. */
+        .track-order { flex-basis: 100%; margin-top: 10px; }
+        .track-order ol { list-style: none; margin: 0 0 10px; padding: 0; }
+        .track-order li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem; cursor: grab; }
+        .track-order li.dragging { opacity: 0.4; }
+        .track-order li.drop-target { border-top: 2px solid var(--primary); }
+        .track-order .nr { flex: none; width: 2.2em; text-align: right; color: rgba(255,255,255,0.45); font-family: monospace; }
+        .track-order .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .track-order li .btn-icon { width: 30px; height: 30px; flex: none; }
+        .track-order li .btn-icon:disabled { cursor: default; opacity: 0.25; }
+        .track-order .knoepfe { display: flex; gap: 8px; }
+        .track-order .knoepfe .btn { padding: 10px; }
 
         .device-item.session-expired { border-color: rgba(255,77,77,0.4); background: rgba(255,77,77,0.06); }
         .session-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 5px 10px; border-radius: 999px; background: rgba(255,77,77,0.15); color: #ff8080; font-size: 0.75rem; font-weight: 600; }
@@ -684,6 +697,7 @@
                 actions.appendChild(hoch);
                 actions.appendChild(runter);
                 actions.appendChild(iconButton('pen', 'Edit', () => editPlaylist(pl)));
+                if (titel.length > 1) actions.appendChild(iconButton('list-ol', 'Track order', () => zeigeTitelfolge(pl, item)));
                 const checkBtn = iconButton('stethoscope', 'Check URLs', () => checkPlaylist(pl.name, item, checkBtn));
                 actions.appendChild(checkBtn);
                 actions.appendChild(deleteButton(() => deletePlaylist(pl.name)));
@@ -781,6 +795,110 @@
                 .join('\n');
             playlistStatus(`Editing "${pl.name}" — Save overwrites it.`);
             document.getElementById('playlist-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        /**
+         * Die Titel einer Playlist in ihrer Reihenfolge - und die Reihenfolge
+         * zum Aendern.
+         *
+         * Nur die Namen, nummeriert: Im Formular stehen die Titel als
+         * `URL | Name`, und bei zwanzig langen Adressen ist dort kaum zu sehen,
+         * was nach was kommt. Verschoben wird hier nur im Browser; erst "Save
+         * order" schickt die neue Folge, einmal fuer alle Schritte. Der Server
+         * nimmt dabei den "Weiterhoeren"-Stand mit - ein Speichern ueber das
+         * Formular tut das nicht.
+         */
+        function zeigeTitelfolge(pl, item) {
+            const alt = item.querySelector('.track-order');
+            if (alt) { alt.remove(); return; }
+            const folge = [...(pl.titel || [])];
+            const start = folge.map(t => t.url).join('\n');
+
+            const kasten = document.createElement('div');
+            kasten.className = 'track-order';
+            const hinweis = document.createElement('p');
+            hinweis.className = 'hint';
+            hinweis.style.margin = '0 0 8px';
+            hinweis.textContent = pl.zufall === true
+                ? 'Shuffle is on for this playlist — the order below only counts once shuffle is off.'
+                : 'Drag a track or use the arrows, then Save order.';
+            const liste = document.createElement('ol');
+            const knoepfe = document.createElement('div');
+            knoepfe.className = 'knoepfe';
+            const knopf = (text, icon, farbe, handler) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'btn';
+                b.style.background = farbe;
+                b.innerHTML = `<i class="fas fa-${icon}"></i> ${text}`;
+                b.addEventListener('click', handler);
+                knoepfe.appendChild(b);
+                return b;
+            };
+            const status = document.createElement('div');
+            status.className = 'form-status';
+
+            let gezogen = null;
+            const verschiebe = (von, nach) => {
+                if (nach < 0 || nach >= folge.length || von === nach) return;
+                const [t] = folge.splice(von, 1);
+                folge.splice(nach, 0, t);
+                zeichne();
+            };
+            function zeichne() {
+                liste.innerHTML = '';
+                folge.forEach((t, i) => {
+                    const li = document.createElement('li');
+                    li.draggable = true;
+                    li.title = t.url;
+                    li.innerHTML = `<span class="nr">${i + 1}.</span><span class="name">${esc(t.name || t.url)}</span>`;
+                    const hoch = iconButton('arrow-up', 'Move up', () => verschiebe(i, i - 1));
+                    const runter = iconButton('arrow-down', 'Move down', () => verschiebe(i, i + 1));
+                    hoch.disabled = i === 0;
+                    runter.disabled = i === folge.length - 1;
+                    li.append(hoch, runter);
+                    li.addEventListener('dragstart', (e) => { gezogen = i; li.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+                    li.addEventListener('dragend', () => { gezogen = null; li.classList.remove('dragging'); });
+                    li.addEventListener('dragover', (e) => { if (gezogen === null) return; e.preventDefault(); li.classList.add('drop-target'); });
+                    li.addEventListener('dragleave', () => li.classList.remove('drop-target'));
+                    li.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        li.classList.remove('drop-target');
+                        if (gezogen !== null) verschiebe(gezogen, i);
+                    });
+                    liste.appendChild(li);
+                });
+                speichern.disabled = folge.map(t => t.url).join('\n') === start;
+            }
+
+            const speichern = knopf('Save order', 'save', 'linear-gradient(135deg, var(--primary), var(--secondary))', async () => {
+                speichern.disabled = true;
+                let r;
+                try {
+                    r = await apiRequest('POST', { name: pl.name, urls: folge.map(t => t.url) }, '?type=playlists&titelSortieren=1');
+                } catch (err) {
+                    r = { error: err.message };
+                }
+                if (!r || r.error) {
+                    status.textContent = r?.error || 'Saving failed';
+                    status.className = 'form-status error';
+                    speichern.disabled = false;
+                    return;
+                }
+                playlistStatus(`Track order of "${pl.name}" saved.`, 'ok');
+                renderPlaylists();
+            });
+            // A-Z nach Titelnamen, wie beim Knopf fuer die Playlists: 'de'
+            // fuer die Umlaute, numeric damit "Folge 10" hinter "Folge 9" steht.
+            knopf('A–Z', 'arrow-down-a-z', 'rgba(255,255,255,0.08)', () => {
+                folge.sort((a, b) => (a.name || a.url).localeCompare(b.name || b.url, 'de', { sensitivity: 'base', numeric: true }));
+                zeichne();
+            });
+            knopf('Cancel', 'xmark', 'rgba(255,255,255,0.08)', () => kasten.remove());
+
+            kasten.append(hinweis, liste, knoepfe, status);
+            item.appendChild(kasten);
+            zeichne();
         }
 
         // Pruefung in Haeppchen: Vercel gibt einer Function zehn Sekunden, also
