@@ -83,17 +83,15 @@
         .btn-icon:disabled { opacity: 0.5; cursor: wait; }
 
         /* Die Playlist-Karte: Name und Eigenschaften links (ein Tipp
-           bearbeitet), rechts nur das Drei-Punkte-Menue. Das Menue haengt an
+           bearbeitet), rechts Titelreihenfolge, Pruefen und das
+           Drei-Punkte-Menue. Das Menue haengt an
            der Karte, deshalb ist sie der Bezugspunkt. */
         .device-item.playlist { position: relative; align-items: flex-start; flex-wrap: wrap; }
         .playlist-info { flex: 1; min-width: 0; cursor: pointer; border-radius: 8px; }
         .playlist-info:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
         .playlist-info h3 { overflow-wrap: anywhere; }
-        .btn-mehr { flex: none; margin-left: 8px; }
-        .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-        .chip { font-size: 0.75rem; line-height: 1.4; padding: 2px 9px; border-radius: 999px; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.65); }
-        /* Der Ordnerpfad der FRITZ!NAS-Marke klappt als eigene Zeile auf. */
-        .chip-quelle { display: inline-flex; flex-wrap: wrap; align-items: baseline; max-width: 100%; overflow-wrap: anywhere; }
+        .playlist-knoepfe { flex: none; display: flex; gap: 6px; margin-left: 8px; }
+        .playlist-knoepfe .btn-icon:disabled:not(.laeuft) { cursor: default; opacity: 0.3; }
         .popup-menue { position: absolute; top: 58px; right: 12px; z-index: 20; min-width: 190px; padding: 6px; border-radius: 12px; background: #1c1c24; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 12px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
         .popup-menue button { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: none; border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 0.9rem; text-align: left; cursor: pointer; }
         .popup-menue button i { width: 1.1em; text-align: center; color: var(--primary); }
@@ -130,21 +128,33 @@
         .form-status.error { color: #ff8080; }
         .form-status.ok { color: #7dffb3; }
 
-        .check-list { margin-top: 10px; font-size: 0.75rem; font-family: monospace; color: rgba(255,255,255,0.7); word-break: break-all; }
+        .check-list { min-width: 0; margin-top: 10px; font-size: 0.75rem; font-family: monospace; color: rgba(255,255,255,0.7); word-break: break-all; }
         .check-list div { padding: 3px 0; border-top: 1px solid rgba(255,255,255,0.05); }
         /* Die Titelreihenfolge einer Playlist: nur die Namen, nummeriert, zum
            Verschieben per Pfeil oder - am Rechner - per Ziehen. */
-        .track-order { flex-basis: 100%; margin-top: 10px; }
-        .track-order ol { list-style: none; margin: 0 0 10px; padding: 0; }
-        .track-order li { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-top: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem; cursor: grab; }
-        .track-order li.dragging { opacity: 0.4; }
-        .track-order li.drop-target { border-top: 2px solid var(--primary); }
-        .track-order .nr { flex: none; width: 2.2em; text-align: right; color: rgba(255,255,255,0.45); font-family: monospace; }
-        .track-order .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .track-order li .btn-icon { width: 40px; height: 40px; flex: none; }
-        .track-order li .btn-icon:disabled { cursor: default; opacity: 0.25; }
+        /* min-width: 0, sonst macht ein langer Titelname die Liste als
+           Flex-Kind breiter als die Karte - die Pfeile standen daneben. */
+        .track-order { flex-basis: 100%; min-width: 0; margin-top: 10px; }
+        .track-order ol { list-style: none; margin: 0 0 4px; padding: 0; }
+        .track-order li { display: flex; align-items: center; gap: 4px; min-height: 48px; padding: 2px 0; border-top: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem; border-radius: 8px; background: transparent; transition: background 0.4s; }
+        .track-order li.dragging { position: relative; z-index: 5; background: #262633; box-shadow: 0 8px 24px rgba(0,0,0,0.5); transition: none; }
+        .track-order li.bewegt { background: rgba(0,242,255,0.12); transition: none; }
+        /* Der Griff nimmt die Geste selbst (touch-action: none) - auf dem Rest
+           der Zeile scrollt die Seite wie gewohnt. */
+        .track-order .griff { flex: none; width: 36px; height: 44px; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.4); cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+        .track-order li.dragging .griff { cursor: grabbing; color: var(--primary); }
+        .track-order .nr { flex: none; min-width: 1.6em; text-align: right; color: rgba(255,255,255,0.4); font-variant-numeric: tabular-nums; font-size: 0.8rem; }
+        .track-order .name { flex: 1; min-width: 0; padding: 0 4px; line-height: 1.3; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .track-order .pfeile { flex: none; display: flex; gap: 2px; }
+        .track-order .pfeile .btn-icon { width: 36px; height: 40px; background: transparent; }
+        .track-order .pfeile .btn-icon:hover:not(:disabled) { background: rgba(0,242,255,0.12); color: var(--primary); }
+        .track-order .pfeile .btn-icon:disabled { cursor: default; opacity: 0.2; }
+        /* Die Knoepfe bleiben am unteren Bildrand stehen, solange die Liste
+           laeuft - bei dreissig Titeln muss niemand zum Speichern scrollen. */
+        .track-order .leiste { position: sticky; bottom: 0; z-index: 6; margin: 0 -4px; padding: 10px 4px; background: #17171d; border-top: 1px solid rgba(255,255,255,0.08); border-radius: 0 0 12px 12px; }
         .track-order .knoepfe { display: flex; flex-wrap: wrap; gap: 8px; }
         .track-order .knoepfe .btn { flex: 1 1 0; padding: 10px; white-space: nowrap; }
+        .track-order .leiste .form-status { margin-top: 6px; min-height: 0; }
         /* Schmal: Save order ueber die volle Breite, A-Z und Cancel darunter. */
         @media (max-width: 520px) { .track-order .knoepfe .btn:first-child { flex-basis: 100%; } }
 
@@ -712,13 +722,9 @@
                     pl.ansage !== false ? 'announced' : 'silent start',
                     pl.zufall === true ? 'shuffled' : null,
                     fortsetzText(pl.fortsetzen),
-                ].filter(Boolean);
-                info.innerHTML = `<h3>${esc(pl.name)}</h3><div class="chips">${zustand.map(z => `<span class="chip">${esc(z)}</span>`).join('')}</div>`;
-                if (pl.quelle?.typ === 'fritz') {
-                    const chip = quelleMarke(pl.quelle);
-                    chip.classList.add('chip', 'chip-quelle');
-                    info.querySelector('.chips').append(chip);
-                }
+                ].filter(Boolean).join(' · ');
+                info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${zustand}</p>`;
+                if (pl.quelle?.typ === 'fritz') info.querySelector('p').append(' · ', quelleMarke(pl.quelle));
                 // Knoepfe und Links darin (die FRITZ!NAS-Marke, der Ordner-Link)
                 // tun ihr Eigenes und oeffnen nicht nebenbei das Formular.
                 info.addEventListener('click', (e) => {
@@ -732,21 +738,32 @@
                 });
                 item.appendChild(info);
 
+                // Titelreihenfolge und Pruefen braucht man oft, sie stehen
+                // direkt auf der Karte. Bei einem Titel ist die Reihenfolge
+                // ausgegraut statt weg, damit die Knoepfe in jeder Karte an
+                // derselben Stelle stehen.
+                const knoepfe = document.createElement('div');
+                knoepfe.className = 'playlist-knoepfe';
+                const folgeBtn = iconButton('list-ol', 'Track order', () => zeigeTitelfolge(pl, item));
+                folgeBtn.disabled = titel.length < 2;
+                const checkBtn = iconButton('stethoscope', 'Check URLs', () => {
+                    checkBtn.classList.add('laeuft');
+                    checkPlaylist(pl.name, item, checkBtn).finally(() => checkBtn.classList.remove('laeuft'));
+                });
+                checkBtn.disabled = titel.length === 0;
                 const mehr = iconButton('ellipsis-vertical', 'More actions', () => {});
-                mehr.classList.add('btn-mehr');
-                // Die Reihenfolge der Eintraege wie im Menue der App. Hoch und
+                // Der Rest im Menue, in der Reihenfolge der App. Hoch und
                 // runter sind nicht nur Kosmetik: In dieser Reihenfolge zaehlt
                 // Alexa die Playlists auf, wenn sie fragt, welche sie spielen soll.
                 const eintraege = [
                     { icon: 'pen', text: 'Edit', tun: () => editPlaylist(pl) },
-                    { icon: 'stethoscope', text: 'Check URLs', aus: titel.length === 0, tun: () => checkPlaylist(pl.name, item, mehr) },
-                    { icon: 'list-ol', text: 'Track order', aus: titel.length < 2, tun: () => zeigeTitelfolge(pl, item) },
                     { icon: 'arrow-up', text: 'Move up', aus: nummer === 0, tun: () => verschiebePlaylist(pl.name, -1) },
                     { icon: 'arrow-down', text: 'Move down', aus: nummer === playlists.length - 1, tun: () => verschiebePlaylist(pl.name, +1) },
                     { icon: 'trash', text: 'Delete', gefahr: true, tun: () => deletePlaylist(pl.name) },
                 ];
                 menueAnbinden(mehr, item, eintraege);
-                item.appendChild(mehr);
+                knoepfe.append(folgeBtn, checkBtn, mehr);
+                item.appendChild(knoepfe);
 
                 container.appendChild(item);
             });
@@ -929,8 +946,10 @@
             hinweis.style.margin = '0 0 8px';
             hinweis.textContent = pl.zufall === true
                 ? 'Shuffle is on for this playlist — the order below only counts once shuffle is off.'
-                : 'Drag a track or use the arrows, then Save order.';
+                : 'Drag a track by its handle or use the arrows, then Save order.';
             const liste = document.createElement('ol');
+            const leiste = document.createElement('div');
+            leiste.className = 'leiste';
             const knoepfe = document.createElement('div');
             knoepfe.className = 'knoepfe';
             const knopf = (text, icon, farbe, handler) => {
@@ -946,37 +965,135 @@
             const status = document.createElement('div');
             status.className = 'form-status';
 
-            let gezogen = null;
-            const verschiebe = (von, nach) => {
-                if (nach < 0 || nach >= folge.length || von === nach) return;
-                const [t] = folge.splice(von, 1);
-                folge.splice(nach, 0, t);
-                zeichne();
-            };
-            function zeichne() {
+            const geaendert = () => folge.map(t => t.url).join('\n') !== start;
+
+            /**
+             * Zeichnet die Liste neu. `bewegt` hebt die Zeile kurz hervor, die
+             * gerade gewandert ist - nach einem Pfeil sieht man sonst nicht, wo
+             * sie gelandet ist. `fokus` setzt den Fokus wieder auf denselben
+             * Pfeil der gewanderten Zeile, damit man ihn mehrmals hintereinander
+             * antippen kann.
+             */
+            function zeichne(bewegt = -1, fokus = null) {
                 liste.innerHTML = '';
                 folge.forEach((t, i) => {
                     const li = document.createElement('li');
-                    li.draggable = true;
                     li.title = t.url;
-                    li.innerHTML = `<span class="nr">${i + 1}.</span><span class="name">${esc(t.name || t.url)}</span>`;
-                    const hoch = iconButton('arrow-up', 'Move up', () => verschiebe(i, i - 1));
-                    const runter = iconButton('arrow-down', 'Move down', () => verschiebe(i, i + 1));
+                    li.innerHTML = `<span class="griff" title="Drag to move" aria-hidden="true"><i class="fas fa-grip-vertical"></i></span><span class="nr">${i + 1}</span><span class="name">${esc(t.name || t.url)}</span>`;
+                    const pfeile = document.createElement('span');
+                    pfeile.className = 'pfeile';
+                    const hoch = iconButton('arrow-up', 'Move up', () => verschiebe(i, i - 1, 'hoch'));
+                    const runter = iconButton('arrow-down', 'Move down', () => verschiebe(i, i + 1, 'runter'));
                     hoch.disabled = i === 0;
                     runter.disabled = i === folge.length - 1;
-                    li.append(hoch, runter);
-                    li.addEventListener('dragstart', (e) => { gezogen = i; li.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
-                    li.addEventListener('dragend', () => { gezogen = null; li.classList.remove('dragging'); });
-                    li.addEventListener('dragover', (e) => { if (gezogen === null) return; e.preventDefault(); li.classList.add('drop-target'); });
-                    li.addEventListener('dragleave', () => li.classList.remove('drop-target'));
-                    li.addEventListener('drop', (e) => {
-                        e.preventDefault();
-                        li.classList.remove('drop-target');
-                        if (gezogen !== null) verschiebe(gezogen, i);
-                    });
+                    pfeile.append(hoch, runter);
+                    li.append(pfeile);
+                    li.querySelector('.griff').addEventListener('pointerdown', (e) => greife(e, li));
                     liste.appendChild(li);
+                    if (i === bewegt) {
+                        li.classList.add('bewegt');
+                        setTimeout(() => li.classList.remove('bewegt'), 50);
+                        // Erst jetzt, wo die Zeile im Dokument steht, nimmt
+                        // der Pfeil den Fokus an.
+                        const ziel = fokus === 'hoch' ? hoch : fokus === 'runter' ? runter : null;
+                        if (ziel && !ziel.disabled) ziel.focus({ preventScroll: true });
+                    }
                 });
-                speichern.disabled = folge.map(t => t.url).join('\n') === start;
+                speichern.disabled = !geaendert();
+            }
+
+            function verschiebe(von, nach, fokus) {
+                if (nach < 0 || nach >= folge.length || von === nach) return;
+                const [t] = folge.splice(von, 1);
+                folge.splice(nach, 0, t);
+                zeichne(nach, fokus);
+                sortierRichtung('az');
+            }
+
+            // Was der Sortierknopf als Naechstes tut. Nach einem Verschieben
+            // von Hand ist die Liste nicht mehr sortiert, also wieder A-Z.
+            function sortierRichtung(naechste) {
+                sortierKnopf.dataset.richtung = naechste;
+                sortierKnopf.innerHTML = naechste === 'za'
+                    ? '<i class="fas fa-arrow-down-z-a"></i> Z–A'
+                    : '<i class="fas fa-arrow-down-a-z"></i> A–Z';
+            }
+
+            /**
+             * Ziehen am Griff - mit Zeigerereignissen statt HTML-Drag-and-Drop.
+             * Das eingebaute Ziehen kennt auf dem Handy nur langes Druecken,
+             * endet dort nicht zuverlaessig und liess die Zeile halb durchsichtig
+             * stehen. So geht es mit Finger und Maus gleich: Die Zeile folgt dem
+             * Zeiger, springt an ihren Nachbarn vorbei, sobald sie ueber deren
+             * Mitte kommt, und am Bildrand rollt die Seite mit.
+             */
+            function greife(e, li) {
+                if (e.button !== 0 && e.pointerType === 'mouse') return;
+                e.preventDefault();
+                const griff = e.currentTarget;
+                griff.setPointerCapture(e.pointerId);
+                li.classList.add('dragging');
+                const zug = { y: e.clientY, zeigerY: e.clientY, laeuft: true };
+                const vorher = [...liste.children].map(z => z.title).join('\n');
+                const nummern = () => [...liste.children].forEach((z, i) => { z.querySelector('.nr').textContent = i + 1; });
+
+                const bewege = () => {
+                    let dy = zug.zeigerY - zug.y;
+                    const vor = li.previousElementSibling;
+                    const nach = li.nextElementSibling;
+                    if (nach && dy > nach.offsetHeight / 2) {
+                        liste.insertBefore(nach, li);
+                        zug.y += nach.offsetHeight;
+                        nummern();
+                    } else if (vor && dy < -vor.offsetHeight / 2) {
+                        // Immer den Nachbarn umsetzen, nie die gezogene Zeile:
+                        // Wer sie selbst aus dem Dokument nimmt, verliert den
+                        // Zeiger, und das Ziehen bleibt haengen.
+                        liste.insertBefore(vor, li.nextSibling);
+                        zug.y -= vor.offsetHeight;
+                        nummern();
+                    }
+                    dy = zug.zeigerY - zug.y;
+                    li.style.transform = `translateY(${dy}px)`;
+                };
+                // Am Rand rollt die Seite, auch wenn der Finger stillhaelt.
+                const rolle = () => {
+                    if (!zug.laeuft) return;
+                    const rand = 70;
+                    const schritt = zug.zeigerY < rand ? -10 : zug.zeigerY > innerHeight - rand ? 10 : 0;
+                    if (schritt) {
+                        const alt = scrollY;
+                        scrollBy(0, schritt);
+                        zug.y -= scrollY - alt;
+                        bewege();
+                    }
+                    requestAnimationFrame(rolle);
+                };
+                requestAnimationFrame(rolle);
+
+                // Am Fenster statt am Griff: Auch wenn der Zeiger den Griff
+                // verlaesst oder das Festhalten verloren geht, kommt das
+                // Loslassen an - sonst bliebe die Zeile angehoben stehen.
+                const ziehe = (ev) => { if (ev.pointerId !== e.pointerId) return; zug.zeigerY = ev.clientY; bewege(); };
+                const lass = (ev) => {
+                    if (ev.pointerId !== e.pointerId) return;
+                    zug.laeuft = false;
+                    removeEventListener('pointermove', ziehe);
+                    removeEventListener('pointerup', lass);
+                    removeEventListener('pointercancel', lass);
+                    li.classList.remove('dragging');
+                    li.style.transform = '';
+                    // Die neue Folge steht jetzt im DOM - von dort zurueck in
+                    // das Array, und einmal sauber neu zeichnen (Pfeile an den
+                    // Enden, Speichern-Knopf).
+                    const neu = [...liste.children].map(z => z.title);
+                    folge.sort((a, b) => neu.indexOf(a.url) - neu.indexOf(b.url));
+                    zeichne(neu.indexOf(li.title));
+                    if (neu.join('\n') !== vorher) sortierRichtung('az');
+                };
+                addEventListener('pointermove', ziehe);
+                addEventListener('pointerup', lass);
+                addEventListener('pointercancel', lass);
             }
 
             const speichern = knopf('Save order', 'save', 'linear-gradient(135deg, var(--primary), var(--secondary))', async () => {
@@ -996,15 +1113,26 @@
                 playlistStatus(`Track order of "${pl.name}" saved.`, 'ok');
                 renderPlaylists();
             });
-            // A-Z nach Titelnamen, wie beim Knopf fuer die Playlists: 'de'
-            // fuer die Umlaute, numeric damit "Folge 10" hinter "Folge 9" steht.
-            knopf('A–Z', 'arrow-down-a-z', 'rgba(255,255,255,0.08)', () => {
-                folge.sort((a, b) => (a.name || a.url).localeCompare(b.name || b.url, 'de', { sensitivity: 'base', numeric: true }));
+            // Nach Titelnamen, wie beim Knopf fuer die Playlists: 'de' fuer
+            // die Umlaute, numeric damit "Folge 10" hinter "Folge 9" steht.
+            // Ein Knopf fuer beide Richtungen: Er zeigt, was er als Naechstes
+            // tut - nach A-Z also Z-A und umgekehrt.
+            const sortierKnopf = knopf('A–Z', 'arrow-down-a-z', 'rgba(255,255,255,0.08)', () => {
+                const richtung = sortierKnopf.dataset.richtung === 'za' ? -1 : 1;
+                folge.sort((a, b) => richtung * (a.name || a.url).localeCompare(b.name || b.url, 'de', { sensitivity: 'base', numeric: true }));
                 zeichne();
+                sortierRichtung(richtung === 1 ? 'za' : 'az');
             });
-            knopf('Cancel', 'xmark', 'rgba(255,255,255,0.08)', () => kasten.remove());
+            sortierKnopf.title = 'Sort tracks by name';
+            // Mit Aenderungen wird gefragt - dreissig verschobene Titel waeren
+            // sonst mit einem Fehltipp weg.
+            knopf('Cancel', 'xmark', 'rgba(255,255,255,0.08)', () => {
+                if (geaendert() && !confirm('Discard the new track order?')) return;
+                kasten.remove();
+            });
 
-            kasten.append(hinweis, liste, knoepfe, status);
+            leiste.append(knoepfe, status);
+            kasten.append(hinweis, liste, leiste);
             item.appendChild(kasten);
             zeichne();
         }
