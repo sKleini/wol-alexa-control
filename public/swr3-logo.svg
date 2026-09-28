@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="SWR3">
+  <!-- Nachgebaut, nicht das Original: Aus der Build-Umgebung war die
+       Originaldatei nicht zu laden. Wer das echte Logo hat, legt es unter
+       genau diesem Namen ab - das Dashboard zeigt dann das. -->
+  <rect width="120" height="120" rx="26" fill="#ffd400"/>
+  <text x="60" y="75" text-anchor="middle"
+        font-family="'Arial Black', 'Helvetica Neue', Arial, sans-serif"
+        font-size="40" font-weight="900" letter-spacing="-2" fill="#13212c">SWR3</text>
+</svg>
