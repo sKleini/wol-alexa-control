@@ -378,17 +378,28 @@ test('Mit Zeitansage sagt Alexa die Sendezeit der neuesten Sendung', async () =>
   });
 });
 
-test('Ohne Zeitansage, ohne Ansage oder ohne Auskunft bleibt es beim alten Satz', async () => {
+test('Die Zeitansage geht auch ohne Ansage - dann ohne "Ich spiele die"', async () => {
+  await mitAbruf((k, optionen) => server(FRISCH)(optionen), async () => {
+    const r = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true, ansage: false });
+    assert.equal(r.outputSpeech.text, 'SWR3 Nachrichten von 21 Uhr.');
+    assert.ok(r.directives.some(d => d.type === 'AudioPlayer.Play'), 'und die Sendung laeuft');
+  });
+});
+
+test('Ohne Zeitansage oder ohne Auskunft bleibt es beim alten Satz - oder bei Stille', async () => {
   await mitAbruf((k, optionen) => server(FRISCH)(optionen), async (aufrufe) => {
     const ohne = await spieleNachrichten(NACHRICHTEN);
     assert.equal(ohne.outputSpeech.text, 'Ich spiele SWR3 Nachrichten.');
-    const still = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true, ansage: false });
-    assert.equal(still.outputSpeech, undefined, 'ohne Ansage keine Uhrzeit');
-    assert.equal(aufrufe.length, 0, 'und dann wird der Sender auch nicht gefragt');
+    const still = await spieleNachrichten({ ...NACHRICHTEN, ansage: false });
+    assert.equal(still.outputSpeech, undefined, 'weder Ansage noch Zeitansage: Stille');
+    assert.equal(aufrufe.length, 0, 'und ohne Zeitansage wird der Sender vorher nicht gefragt');
   });
   await mitAbruf(() => { throw new Error('keine Verbindung'); }, async () => {
     const r = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true });
     assert.equal(r.outputSpeech.text, 'Ich spiele SWR3 Nachrichten.', 'kein Stand - dann eben ohne Uhrzeit');
+    const still = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true, ansage: false });
+    assert.equal(still.outputSpeech, undefined, 'ohne Ansage und ohne Stand: Stille');
+    assert.ok(still.directives.some(d => d.type === 'AudioPlayer.Play'), 'die Sendung laeuft trotzdem');
   });
 });
 
