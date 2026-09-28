@@ -15,7 +15,7 @@ process.env.MUSIK_BUDGET_MS = '300';
 
 import {
   SENDER, senderKennung, senderAus, senderUrl, mitDurchleitung, sendezeit, senderTon, senderStand,
-  netz, serverBild, sendezeitGesprochen, frisch, waehleServer, adressenFuer, vergiss, GEMERKT_KEY,
+  netz, serverBild, sendezeitGesprochen, frisch, waehleServer, adressenFuer, vergiss, GEMERKT_KEY, SERVERLOG_KEY, serverLogLesen,
 } from '../lib/sender.js'
 import { playDirektive, handleSkill, handleManage, validierePlaylist, sagtZeitAn, REDIS_KEY } from '../lib/musik.js'
 
@@ -41,16 +41,18 @@ function attrappeRes() {
 }
 
 function attrappeRedis(daten = {}) {
-  const merkzettel = { gezaehlt: 0, verlauf: [] };
+  const merkzettel = { gezaehlt: 0, verlauf: [], serverlog: [] };
   return {
     merkzettel,
     get: async (k) => daten[k] ?? null,
     set: async (k, v) => { daten[k] = v; },
     incrby: async (_k, wert) => { merkzettel.gezaehlt += wert; },
     expire: async () => {},
-    lpush: async (_k, eintrag) => { merkzettel.verlauf.unshift(typeof eintrag === 'string' ? JSON.parse(eintrag) : eintrag); },
+    lpush: async (k, eintrag) => {
+      (k === SERVERLOG_KEY ? merkzettel.serverlog : merkzettel.verlauf).unshift(typeof eintrag === 'string' ? JSON.parse(eintrag) : eintrag);
+    },
     ltrim: async () => {},
-    lrange: async () => [],
+    lrange: async (k) => (k === SERVERLOG_KEY ? merkzettel.serverlog : []),
     del: async () => {},
   };
 }
@@ -364,6 +366,30 @@ test('Die Adresse mit der neuesten Sendung wird gemerkt und beim naechsten Mal z
     assert.equal(aufrufe[0].adresse, '10.0.0.3');
     assert.equal(aufrufe.find(a => a.optionen.headers.Range === 'bytes=0-').adresse, '10.0.0.3');
   }, ['10.0.0.1', '10.0.0.2', '10.0.0.3']);
+});
+
+test('Das Server-Log zeigt je Wahl, welche Adresse was hatte - die gewaehlte zuerst', async () => {
+  const zeiten = { '10.0.0.1': VORHIN, '10.0.0.2': VORHIN, '10.0.0.3': FRISCH };
+  const redis = attrappeRedis();
+  const quellen = { '10.0.0.1': ['System', '1.1.1.1'], '10.0.0.2': ['8.8.8.8'], '10.0.0.3': ['9.9.9.9'] };
+  await mitAbruf((k, optionen, adresse) => server(zeiten[adresse])(optionen), async () => {
+    netz.adressen = async () => Object.defineProperty(['10.0.0.1', '10.0.0.2', '10.0.0.3'], 'quellen', { value: quellen });
+    await senderStand('swr3', undefined, redis, 'Dashboard');
+    const res = attrappeRes();
+    await senderTon(anfrage(`sender=swr3&k=${senderKennung('swr3', SCHLUESSEL)}`, { range: 'bytes=0-' }), res, redis);
+  }, ['10.0.0.1', '10.0.0.2', '10.0.0.3']);
+  const log = await serverLogLesen(redis);
+  assert.deepEqual(log.map(e => e.anlass), ['Echo', 'Dashboard']);
+  assert.deepEqual(log[1].proben[0], { adresse: '10.0.0.3', dns: ['9.9.9.9'], stand: '21:05' });
+  assert.deepEqual(log[1].proben[1].dns, ['System', '1.1.1.1']);
+  // Beim Echo danach steht die gemerkte Adresse vorn - und dass sie gemerkt war.
+  assert.deepEqual(log[0].proben.find(p => p.adresse === '10.0.0.3').dns, ['9.9.9.9', 'gemerkt']);
+  assert.equal(log[1].proben.length, 4);
+  assert.ok(log[1].proben.slice(1).every(p => p.stand === '20:05'));
+  // Ohne Anlass (etwa die Tests oben) wird nichts geschrieben.
+  const still = attrappeRedis();
+  await mitAbruf((k, optionen) => server(FRISCH)(optionen), () => senderStand('swr3', undefined, still));
+  assert.equal(still.merkzettel.serverlog.length, 0);
 });
 
 test('Ohne Adressen fragt die Verbindung selbst nach dem Namen', async () => {
