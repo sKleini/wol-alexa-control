@@ -30,6 +30,8 @@ import {
   mischt,
   setztFort,
   fortsetzArt,
+  holtNeueste,
+  neuesteFassung,
   reihenfolge,
   titelAn,
   neuerSeed,
@@ -3590,5 +3592,78 @@ test('MUSIK_STARTWACHE=0 schaltet die Wache ab', async () => {
   } finally {
     if (vorher === undefined) delete process.env.MUSIK_STARTWACHE;
     else process.env.MUSIK_STARTWACHE = vorher;
+  }
+});
+
+// --- Live: Adressen, hinter denen jede Stunde etwas Neues liegt ---------------
+//
+// Der Anlass: die SWR3-Nachrichten. Die Adresse bleibt, die Sendung dahinter
+// wechselt jede Stunde. Im Browser kam sie mit `?t=<jetzt>` jedes Mal frisch;
+// genau diese Form bekommt der Echo jetzt auch.
+
+const SWR3_URL = 'https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3';
+const NACHRICHTEN = {
+  name: 'SWR3 Nachrichten', aktuell: true, wiederholen: false,
+  titel: [{ url: SWR3_URL, name: 'SWR3 Nachrichten' }],
+};
+
+test('neuesteFassung haengt ein t an - und ersetzt ein altes, statt zu stapeln', () => {
+  assert.equal(neuesteFassung(SWR3_URL, 1700), `${SWR3_URL}?t=1700`);
+  assert.equal(neuesteFassung(`${SWR3_URL}?t=1700`, 1800), `${SWR3_URL}?t=1800`);
+  // Andere Parameter bleiben Zeichen fuer Zeichen stehen, auch ihre Kodierung.
+  assert.equal(neuesteFassung('https://h.de/a.mp3?x=1%202&t=5&y=2', 9), 'https://h.de/a.mp3?x=1%202&y=2&t=9');
+  assert.equal(neuesteFassung('https://h.de/a.mp3?t=5&y=2', 9), 'https://h.de/a.mp3?y=2&t=9');
+  // Ein Parameter, der nur auf t endet, ist nicht gemeint.
+  assert.equal(neuesteFassung('https://h.de/a.mp3?at=5', 9), 'https://h.de/a.mp3?at=5&t=9');
+  // Der Anker bleibt hinten.
+  assert.equal(neuesteFassung('https://h.de/a.mp3#x', 9), 'https://h.de/a.mp3?t=9#x');
+  // Die eigenen Adressen haben ihr `n` und bleiben hier unberuehrt.
+  const eigen = 'https://meine-app.vercel.app/api/skill?ton=abc.def';
+  assert.equal(neuesteFassung(eigen, 9), eigen);
+  assert.equal(neuesteFassung('', 9), '');
+  assert.equal(neuesteFassung(undefined, 9), undefined);
+});
+
+test('validierePlaylist: Live ist aus, bis es jemand anschaltet - und nimmt das Fortsetzen mit', () => {
+  const zeile = SWR3_URL;
+  assert.equal(validierePlaylist({ name: 'A', urls: zeile }).playlist.aktuell, false);
+  const live = validierePlaylist({ name: 'A', urls: zeile, aktuell: true, fortsetzen: 'sekunde' }).playlist;
+  assert.equal(live.aktuell, true);
+  assert.equal(live.fortsetzen, false, 'eine Live-Playlist merkt sich keine Stelle');
+  // Wie jeder Schalter: ein fehlendes Feld laesst den gespeicherten Wert stehen.
+  assert.equal(validierePlaylist({ name: 'A', urls: zeile }, { aktuell: true }).playlist.aktuell, true);
+  assert.equal(validierePlaylist({ name: 'A', urls: zeile, aktuell: false }, { aktuell: true }).playlist.aktuell, false);
+});
+
+test('holtNeueste und fortsetzArt: Live schlaegt jede gespeicherte Gangart', () => {
+  assert.equal(holtNeueste(KINDER), false, 'alte Playlists ohne Feld bleiben, wie sie sind');
+  assert.equal(holtNeueste(NACHRICHTEN), true);
+  assert.equal(fortsetzArt({ ...NACHRICHTEN, fortsetzen: 'sekunde' }), 'aus');
+  assert.equal(setztFort({ ...NACHRICHTEN, fortsetzen: true }), false);
+});
+
+test('playDirektive: eine Live-Playlist bekommt bei jedem Abruf eine neue Adresse', () => {
+  const start = playDirektive(NACHRICHTEN, 0, 0, { stempel: 1700 });
+  assert.equal(start.audioItem.stream.url, `${SWR3_URL}?t=1700`);
+  const angehaengt = playDirektive(NACHRICHTEN, 0, 1, { verhalten: 'ENQUEUE', vorherigerToken: 'x', stempel: 1800 });
+  assert.equal(angehaengt.audioItem.stream.url, `${SWR3_URL}?t=1800`);
+  // Ohne den Schalter bleibt eine fremde Adresse, wie sie ist.
+  assert.equal(playDirektive(KINDER, 0, 0, { stempel: 1700 }).audioItem.stream.url, 'https://example.org/k/01.mp3');
+});
+
+test('"Spiele SWR drei Nachrichten" startet die neueste Sendung von vorn', async () => {
+  // Gemerkt ist eine Stelle aus einer alten Sendung - aus der Zeit, bevor der
+  // Schalter an war. Sie darf nicht mitten in die neue springen.
+  const redis = mitStand({ ...NACHRICHTEN, fortsetzen: 'sekunde' }, { position: 0, runde: 0, seed: 0, offset: 120000 });
+  for (const gesagt of ['swr drei nachrichten', 'SWR3 Nachrichten', 's. w. r. drei nachrichten']) {
+    const vorher = Date.now();
+    const r = await skill(sucheIntent(gesagt), {}, null, redis);
+    const stream = spielt(r)?.audioItem.stream;
+    assert.ok(stream, gesagt);
+    assert.equal(r.outputSpeech.text, 'Ich spiele SWR3 Nachrichten.', gesagt);
+    assert.equal(stream.offsetInMilliseconds, 0, `${gesagt}: von vorn`);
+    const [basis, t] = stream.url.split('?t=');
+    assert.equal(basis, SWR3_URL, gesagt);
+    assert.ok(Number(t) >= vorher, `${gesagt}: frischer Stempel ${t}`);
   }
 });

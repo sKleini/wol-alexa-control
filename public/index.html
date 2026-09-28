@@ -270,7 +270,7 @@
             <details class="hint">
                 <summary>How playlists work — URLs, folder import &amp; FRITZ!NAS</summary>
                 <div class="hint-body">
-                    <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks).<br>
+                    <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks). <em>Live</em> is for a URL whose file changes behind it, like the hourly news at <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>: every play gets a fresh <code>?t=…</code>, so the Echo always fetches the latest broadcast — turn <em>Repeat</em> off for it.<br>
                     Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
                     <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
                     <strong>FRITZ!NAS folder shares take a detour, and they have to:</strong> such a share hands out its files only with a session number, and the box ties that number to the address that fetched it — for the Echo it is worthless, whoever fetched it. The tracks therefore point at this app, which fetches the file itself and passes the bytes through. Nothing is stored; the counter below the list says how much ran through this month.
@@ -308,6 +308,12 @@
                     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                         <input type="checkbox" id="playlist-shuffle" style="width: auto;">
                         Shuffle — play the tracks in a random order, reshuffled each round
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="playlist-live" style="width: auto;">
+                        Live — the URL always holds the newest file (news, e.g. SWR3 Nachrichten): fetch it fresh on every play, never resume
                     </label>
                 </div>
                 <div class="input-group">
@@ -726,7 +732,8 @@
                     pl.wiederholen !== false ? 'repeats' : 'plays once',
                     pl.ansage !== false ? 'announced' : 'silent start',
                     pl.zufall === true ? 'shuffled' : null,
-                    fortsetzText(pl.fortsetzen),
+                    // Live schlaegt das Fortsetzen - wie `fortsetzArt` im Backend.
+                    pl.aktuell === true ? 'live' : fortsetzText(pl.fortsetzen),
                 ].filter(Boolean).join(' · ');
                 info.innerHTML = `<h3>${esc(pl.name)}</h3><p>${zustand}</p>`;
                 if (pl.quelle?.typ === 'fritz') info.querySelector('p').append(' · ', quelleMarke(pl.quelle));
@@ -918,8 +925,10 @@
             document.getElementById('playlist-repeat').checked = pl.wiederholen !== false;
             document.getElementById('playlist-announce').checked = pl.ansage !== false;
             document.getElementById('playlist-shuffle').checked = pl.zufall === true;
+            document.getElementById('playlist-live').checked = pl.aktuell === true;
             document.getElementById('playlist-resume').value =
                 pl.fortsetzen === true ? 'sekunde' : (pl.fortsetzen || 'aus');
+            liveSperrtFortsetzen();
             document.getElementById('playlist-urls').value = (pl.titel || [])
                 .map(t => t.name ? `${t.url} | ${t.name}` : t.url)
                 .join('\n');
@@ -1471,14 +1480,15 @@
             const wiederholen = document.getElementById('playlist-repeat').checked;
             const ansage = document.getElementById('playlist-announce').checked;
             const zufall = document.getElementById('playlist-shuffle').checked;
-            const fortsetzen = document.getElementById('playlist-resume').value;
+            const aktuell = document.getElementById('playlist-live').checked;
+            const fortsetzen = aktuell ? 'aus' : document.getElementById('playlist-resume').value;
             // Steht im Feld ein anderer Ordner als der hinterlegte, hat jemand
             // ihn getippt, aber nicht importiert. Gespeichert wird dann der
             // alte - das waere still falsch, also wird es gesagt.
             const imFeld = document.getElementById('playlist-import-url').value.trim();
             const abweichend = imFeld && fritzQuelle && imFeld !== fritzQuelle.link;
 
-            const r = await apiRequest('POST', { name, urls, wiederholen, ansage, zufall, fortsetzen, quelle: fritzQuelle }, '?type=playlists');
+            const r = await apiRequest('POST', { name, urls, wiederholen, ansage, zufall, fortsetzen, aktuell, quelle: fritzQuelle }, '?type=playlists');
             if (!r) return;
             if (r.error) { playlistStatus(r.error, 'error'); return; }
             if (abweichend) {
@@ -1488,9 +1498,29 @@
             }
             playlistStatus(`Saved "${name.trim()}".`, 'ok');
             document.getElementById('playlist-form').reset();
+            liveSperrtFortsetzen();
             document.getElementById('playlist-import-diagnose').textContent = '';
             fritzQuelle = null;
             renderPlaylists();
+        });
+
+        // Eine Live-Playlist merkt sich keine Stelle (siehe `holtNeueste` im
+        // Backend) - also steht die Auswahl dann auf Off und ist gesperrt,
+        // statt etwas anzubieten, das der Skill nicht tut.
+        function liveSperrtFortsetzen() {
+            const live = document.getElementById('playlist-live').checked;
+            const resume = document.getElementById('playlist-resume');
+            if (live) resume.value = 'aus';
+            resume.disabled = live;
+        }
+        document.getElementById('playlist-live').addEventListener('change', () => {
+            liveSperrtFortsetzen();
+            // Nachrichten, die sich wiederholen, laufen die ganze Nacht. Beim
+            // Anschalten wird Repeat deshalb mit abgewaehlt - zurueck geht es
+            // von Hand, falls jemand das doch will.
+            if (document.getElementById('playlist-live').checked) {
+                document.getElementById('playlist-repeat').checked = false;
+            }
         });
 
         document.getElementById('person-form').addEventListener('submit', async (e) => {
