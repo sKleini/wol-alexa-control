@@ -23,6 +23,7 @@ on:
       - 'lib/fritznas.js'
       - 'lib/netz.js'
       - 'lib/naston.js'
+      - 'lib/sender.js'
       - 'test/**'
       - '.github/workflows/alexa-modell.yml'
   push:
@@ -35,6 +36,7 @@ on:
       - 'lib/fritznas.js'
       - 'lib/netz.js'
       - 'lib/naston.js'
+      - 'lib/sender.js'
       - 'test/**'
   workflow_dispatch:
 
