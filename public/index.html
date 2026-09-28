@@ -289,7 +289,7 @@
                 <summary>How it works</summary>
                 <div class="hint-body">
                     <strong>"Alexa, sage meine Plattenkiste spiele <span id="swr3-sprich">SWR3 Nachrichten</span>"</strong> plays the latest SWR3 news broadcast from the start. A new one is up about five minutes past every hour.<br>
-                    Behind it is a Plattenkiste playlist with a single URL, <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>. The Echo does not fetch it itself: a cache on the home connection can hold a broadcast from hours ago, so this app fetches it from the data centre and passes it through (about 4 MB per play, counted below the playlists). Some of SWR's servers keep an old broadcast for hours, so every fetch asks four of them at once and takes the newest. The line above says which broadcast the app gets right now and what the servers had, and the listen button plays exactly that. It plays once, is never shuffled and never resumes — only the two settings below are yours to choose. It does not show up again under Playlists.
+                    Behind it is a Plattenkiste playlist with a single URL, <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>. The Echo does not fetch it itself: a cache on the home connection can hold a broadcast from hours ago, so this app fetches it from the data centre and passes it through (about 4 MB per play, counted below the playlists). Some of SWR's servers keep an old broadcast for hours, so every fetch asks four of them at once and takes the newest. The line above says which broadcast the app gets right now and what the servers had, and the listen button plays exactly that. It plays once, is never shuffled and never resumes — only the settings below are yours to choose. With <em>Say the broadcast time</em> Alexa announces the time of the broadcast she is about to play, e.g. "SWR3 Nachrichten von 20 Uhr 5". It does not show up again under Playlists.
                 </div>
             </details>
 
@@ -302,6 +302,12 @@
                     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                         <input type="checkbox" id="swr3-announce" style="width: auto;" checked>
                         Announce — Alexa says "Ich spiele …" before the news
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="swr3-zeit" style="width: auto;">
+                        <span>Say the broadcast time — "<span id="swr3-zeit-beispiel">SWR3 Nachrichten</span> von 20:05 Uhr" instead of "Ich spiele …"</span>
                     </label>
                 </div>
                 <div class="swr3-knoepfe">
@@ -1583,19 +1589,33 @@
             if (swr3Playlist) {
                 document.getElementById('swr3-name').value = swr3Playlist.name;
                 document.getElementById('swr3-announce').checked = swr3Playlist.ansage !== false;
+                document.getElementById('swr3-zeit').checked = swr3Playlist.zeitansage === true;
             }
-            document.getElementById('swr3-sprich').textContent =
-                document.getElementById('swr3-name').value.trim() || 'SWR3 Nachrichten';
+            swr3NameZeigen();
+            swr3ZeitSperren();
         }
 
-        document.getElementById('swr3-name').addEventListener('input', (e) => {
-            document.getElementById('swr3-sprich').textContent = e.target.value.trim() || 'SWR3 Nachrichten';
-        });
+        // Der Name steht im Hilfetext und im Beispiel der Zeitansage - beide
+        // sagen, was Alexa wirklich sagen wird.
+        function swr3NameZeigen() {
+            const name = document.getElementById('swr3-name').value.trim() || 'SWR3 Nachrichten';
+            document.getElementById('swr3-sprich').textContent = name;
+            document.getElementById('swr3-zeit-beispiel').textContent = name;
+        }
+        // Ohne Ansage gibt es nichts, worin eine Uhrzeit stehen koennte - also
+        // ist die Zeitansage dann gesperrt, statt still nichts zu tun.
+        function swr3ZeitSperren() {
+            const ansage = document.getElementById('swr3-announce').checked;
+            document.getElementById('swr3-zeit').disabled = !ansage;
+        }
+        document.getElementById('swr3-name').addEventListener('input', swr3NameZeigen);
+        document.getElementById('swr3-announce').addEventListener('change', swr3ZeitSperren);
 
         document.getElementById('swr3-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const name = document.getElementById('swr3-name').value.trim();
             const ansage = document.getElementById('swr3-announce').checked;
+            const zeitansage = ansage && document.getElementById('swr3-zeit').checked;
             const alt = swr3Playlist?.name || null;
             // Der Server speichert nach Namen: Ein Name, den schon eine andere
             // Playlist traegt, wuerde sie still ueberschreiben.
@@ -1605,7 +1625,7 @@
             const r = await apiRequest('POST', {
                 name,
                 urls: `${SWR3_URL} | SWR3 Nachrichten`,
-                wiederholen: false, ansage, zufall: false, fortsetzen: 'aus', aktuell: true,
+                wiederholen: false, ansage, zeitansage, zufall: false, fortsetzen: 'aus', aktuell: true,
             }, '?type=playlists');
             if (!r) return;
             if (r.error) { swr3Status(r.error, 'error'); return; }
@@ -1624,6 +1644,8 @@
             if (!r) return;
             if (r.error) { swr3Status(r.error, 'error'); return; }
             document.getElementById('swr3-form').reset();
+            swr3NameZeigen();
+            swr3ZeitSperren();
             swr3Status('Removed.', 'ok');
             renderPlaylists();
         });

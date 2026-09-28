@@ -15,9 +15,9 @@ process.env.MUSIK_BUDGET_MS = '300';
 
 import {
   SENDER, senderKennung, senderAus, senderUrl, mitDurchleitung, sendezeit, senderTon, senderStand,
-  netz, serverBild,
+  netz, serverBild, sendezeitGesprochen,
 } from '../lib/sender.js'
-import { playDirektive, handleSkill, handleManage, REDIS_KEY } from '../lib/musik.js'
+import { playDirektive, handleSkill, handleManage, validierePlaylist, sagtZeitAn, REDIS_KEY } from '../lib/musik.js'
 
 const SCHLUESSEL = 'geheim-und-lang-genug';
 const BASIS = 'https://meine-app.vercel.app';
@@ -271,4 +271,78 @@ test('Das Dashboard erfaehrt, welche Sendung die App gerade bekommt', async () =
       'der Anhoer-Knopf hoert, was der Echo hoert');
   });
   assert.deepEqual(await senderStand('unbekannt'), { error: 'Unknown station' });
+});
+
+// --- Die Zeitansage ----------------------------------------------------------------
+//
+// "SWR3 Nachrichten von 20 Uhr 5." statt "Ich spiele SWR3 Nachrichten." -
+// geschaltet in der SWR3-Karte, und die Uhrzeit ist die der Sendung, die die
+// App gerade beim Sender bekommt.
+
+function spieleNachrichten(playlist, redis = attrappeRedis({ [REDIS_KEY]: [playlist] })) {
+  const res = attrappeRes();
+  const body = {
+    context: { System: { application: { applicationId: 'amzn1.ask.skill.musik' } } },
+    session: { new: true, sessionId: 's', application: { applicationId: 'amzn1.ask.skill.musik' } },
+    request: {
+      type: 'IntentRequest', timestamp: new Date().toISOString(),
+      intent: { name: 'SuchePlaylistIntent', slots: { suche: { name: 'suche', value: 'swr3 nachrichten' } } },
+    },
+  };
+  return handleSkill(body, res, redis, BASIS).then(() => res.koerper.response);
+}
+
+test('sendezeitGesprochen: so, wie Alexa es sagen soll', () => {
+  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 18:05:12 GMT'), '20 Uhr 5');
+  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 19:00:00 GMT'), '21 Uhr', 'zur vollen Stunde ohne Minuten');
+  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 22:05:00 GMT'), '0 Uhr 5', 'nach Mitternacht');
+  assert.equal(sendezeitGesprochen('Wed, 28 Jan 2026 08:05:00 GMT'), '9 Uhr 5', 'Winterzeit');
+  assert.equal(sendezeitGesprochen(null), null);
+});
+
+test('validierePlaylist: die Zeitansage ist aus, bis sie jemand anschaltet', () => {
+  assert.equal(validierePlaylist({ name: 'A', urls: SWR3 }).playlist.zeitansage, false);
+  assert.equal(validierePlaylist({ name: 'A', urls: SWR3, zeitansage: true }).playlist.zeitansage, true);
+  assert.equal(validierePlaylist({ name: 'A', urls: SWR3 }, { zeitansage: true }).playlist.zeitansage, true,
+    'ein fehlendes Feld laesst den gespeicherten Wert stehen');
+  assert.equal(sagtZeitAn(KINDER), false);
+});
+
+test('Mit Zeitansage sagt Alexa die Sendezeit der neuesten Sendung', async () => {
+  const server_ = [server(ALT), server(FRISCH), server(ALT), server(FRISCH)];
+  await mitAbruf((k, optionen) => server_[k](optionen), async (aufrufe) => {
+    const r = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true });
+    assert.equal(r.outputSpeech.text, 'SWR3 Nachrichten von 21 Uhr 5.');
+    assert.ok(r.directives.some(d => d.type === 'AudioPlayer.Play'), 'und die Sendung laeuft');
+    assert.ok(aufrufe.every(a => a.optionen.headers.Range === 'bytes=0-0'), 'vor der Antwort nur Proben');
+  });
+});
+
+test('Ohne Zeitansage, ohne Ansage oder ohne Auskunft bleibt es beim alten Satz', async () => {
+  await mitAbruf((k, optionen) => server(FRISCH)(optionen), async (aufrufe) => {
+    const ohne = await spieleNachrichten(NACHRICHTEN);
+    assert.equal(ohne.outputSpeech.text, 'Ich spiele SWR3 Nachrichten.');
+    const still = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true, ansage: false });
+    assert.equal(still.outputSpeech, undefined, 'ohne Ansage keine Uhrzeit');
+    assert.equal(aufrufe.length, 0, 'und dann wird der Sender auch nicht gefragt');
+  });
+  await mitAbruf(() => { throw new Error('keine Verbindung'); }, async () => {
+    const r = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true });
+    assert.equal(r.outputSpeech.text, 'Ich spiele SWR3 Nachrichten.', 'kein Stand - dann eben ohne Uhrzeit');
+  });
+});
+
+test('Eine Zeitansage bei Musik bleibt folgenlos', async () => {
+  await mitAbruf(() => { throw new Error('darf nicht gefragt werden'); }, async (aufrufe) => {
+    const lieder = { ...KINDER, zeitansage: true };
+    const res = attrappeRes();
+    await handleSkill({
+      context: { System: { application: { applicationId: 'x' } } },
+      session: { new: true, sessionId: 's', application: { applicationId: 'x' } },
+      request: { type: 'IntentRequest', timestamp: new Date().toISOString(),
+        intent: { name: 'SuchePlaylistIntent', slots: { suche: { name: 'suche', value: 'kinderlieder' } } } },
+    }, res, attrappeRedis({ [REDIS_KEY]: [lieder] }), BASIS);
+    assert.equal(res.koerper.response.outputSpeech.text, 'Ich spiele Kinderlieder.');
+    assert.equal(aufrufe.length, 0);
+  });
 });
