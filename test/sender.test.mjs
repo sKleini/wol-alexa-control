@@ -15,7 +15,7 @@ process.env.MUSIK_BUDGET_MS = '300';
 
 import {
   SENDER, senderKennung, senderAus, senderUrl, mitDurchleitung, sendezeit, senderTon, senderStand,
-  netz, serverBild, sendezeitGesprochen, frisch, waehleServer,
+  netz, serverBild, sendezeitGesprochen, frisch, waehleServer, adressenFuer, vergiss, GEMERKT_KEY,
 } from '../lib/sender.js'
 import { playDirektive, handleSkill, handleManage, validierePlaylist, sagtZeitAn, REDIS_KEY } from '../lib/musik.js'
 
@@ -60,18 +60,21 @@ function attrappeRedis(daten = {}) {
  * fuer Verbindung k. So laesst sich nachstellen, dass manche Server eine alte
  * Sendung halten - der Fall, fuer den `waehleServer` da ist.
  */
-async function mitAbruf(antwortGeber, arbeit) {
-  const echt = { verbindung: netz.verbindung, einfach: netz.einfach, jetzt: netz.jetzt };
+async function mitAbruf(antwortGeber, arbeit, adressen = []) {
+  const echt = { verbindung: netz.verbindung, einfach: netz.einfach, jetzt: netz.jetzt, adressen: netz.adressen };
+  vergiss();
   const aufrufe = [];
   const geschlossen = [];
-  const verbindung = (k) => ({
+  const verbindung = (k, adresse = null) => ({
+    adresse,
     fetch: async (url, optionen) => {
-      aufrufe.push({ url: String(url), optionen, k });
-      return antwortGeber(k, optionen);
+      aufrufe.push({ url: String(url), optionen, k, adresse });
+      return antwortGeber(k, optionen, adresse);
     },
     close: async () => { geschlossen.push(k); },
   });
-  netz.verbindung = async (k) => verbindung(k);
+  netz.verbindung = async (k, adresse) => verbindung(k, adresse);
+  netz.adressen = async () => adressen;
   netz.einfach = () => verbindung('einfach');
   // Die Uhr steht fest: 21:10 am Abend der Meldung. Ob eine Sendung als
   // aktuell gilt, darf nicht davon abhaengen, wann die Tests laufen.
@@ -330,6 +333,44 @@ test('Das Dashboard erfaehrt, welche Sendung die App gerade bekommt', async () =
       'der Anhoer-Knopf hoert, was der Echo hoert');
   });
   assert.deepEqual(await senderStand('unbekannt'), { error: 'Unknown station' });
+});
+
+test('Die Proben gehen reihum an alle Adressen, auch die der oeffentlichen Namensdienste', async () => {
+  // Gemeldet um 22 Uhr: je Abruf hatten alle Server dasselbe - welche Gruppe
+  // antwortet, haengt an der Adresse. Hier hat nur 10.0.0.3 die neue Sendung.
+  const zeiten = { '10.0.0.1': VORHIN, '10.0.0.2': VORHIN, '10.0.0.3': FRISCH };
+  await mitAbruf((k, optionen, adresse) => server(zeiten[adresse])(optionen), async (aufrufe) => {
+    const stand = await senderStand('swr3');
+    assert.deepEqual(aufrufe.map(a => a.adresse), ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.1']);
+    assert.equal(stand.sendezeit, '21:05');
+    assert.equal(stand.server, '21:05 ×1, 20:05 ×3');
+  }, ['10.0.0.1', '10.0.0.2', '10.0.0.3']);
+});
+
+test('Die Adresse mit der neuesten Sendung wird gemerkt und beim naechsten Mal zuerst gefragt', async () => {
+  const zeiten = { '10.0.0.1': VORHIN, '10.0.0.2': VORHIN, '10.0.0.3': FRISCH };
+  const redis = attrappeRedis();
+  await mitAbruf((k, optionen, adresse) => server(zeiten[adresse])(optionen), async () => {
+    await senderStand('swr3', undefined, redis);
+  }, ['10.0.0.1', '10.0.0.2', '10.0.0.3']);
+  assert.deepEqual(await redis.get(GEMERKT_KEY), { swr3: { adresse: '10.0.0.3', zeit: Date.parse(FRISCH) } });
+
+  // Eine andere Function-Instanz (nichts im Speicher) liest es aus Redis:
+  // Der Anhoer-Knopf fragt dort zuerst, wo die Anzeige die Sendung fand.
+  await mitAbruf((k, optionen, adresse) => server(zeiten[adresse])(optionen), async (aufrufe) => {
+    assert.deepEqual(await adressenFuer('swr3', redis), ['10.0.0.3', '10.0.0.1', '10.0.0.2']);
+    const res = attrappeRes();
+    await senderTon(anfrage(`sender=swr3&k=${senderKennung('swr3', SCHLUESSEL)}`, { range: 'bytes=0-' }), res, redis);
+    assert.equal(aufrufe[0].adresse, '10.0.0.3');
+    assert.equal(aufrufe.find(a => a.optionen.headers.Range === 'bytes=0-').adresse, '10.0.0.3');
+  }, ['10.0.0.1', '10.0.0.2', '10.0.0.3']);
+});
+
+test('Ohne Adressen fragt die Verbindung selbst nach dem Namen', async () => {
+  await mitAbruf((k, optionen) => server(FRISCH)(optionen), async (aufrufe) => {
+    await senderStand('swr3');
+    assert.ok(aufrufe.every(a => a.adresse === null));
+  });
 });
 
 // --- Die Zeitansage ----------------------------------------------------------------
