@@ -3651,6 +3651,18 @@ test('playDirektive: eine Live-Playlist bekommt bei jedem Abruf eine neue Adress
   assert.equal(playDirektive(KINDER, 0, 0, { stempel: 1700 }).audioItem.stream.url, 'https://example.org/k/01.mp3');
 });
 
+test('playDirektive: eine Live-Playlist bekommt bei jedem Abruf einen eigenen Token', () => {
+  // Der Echo spielte unter dem alten Token die Sendung von 9 Uhr weiter, obwohl
+  // er die von 21:05 geladen hatte - siehe `liveRunde`.
+  const eins = playDirektive(NACHRICHTEN, 0, 0, { stempel: 1_790_000_000_000 }).audioItem.stream.token;
+  const zwei = playDirektive(NACHRICHTEN, 0, 0, { stempel: 1_790_000_060_000 }).audioItem.stream.token;
+  assert.equal(eins, 'SWR3 Nachrichten|0|1790000000|0');
+  assert.notEqual(eins, zwei);
+  assert.deepEqual(tokenLesen(eins), { name: 'SWR3 Nachrichten', position: 0, runde: 1790000000, seed: 0, versuch: 0, pech: 0 });
+  // Musik behaelt ihren Token - dort ist derselbe Token bei derselben Datei richtig.
+  assert.equal(playDirektive(KINDER, 0, 0, { stempel: 1_790_000_000_000 }).audioItem.stream.token, 'Kinderlieder|0|0|0');
+});
+
 test('"Spiele SWR drei Nachrichten" startet die neueste Sendung von vorn', async () => {
   // Gemerkt ist eine Stelle aus einer alten Sendung - aus der Zeit, bevor der
   // Schalter an war. Sie darf nicht mitten in die neue springen.
@@ -3662,6 +3674,7 @@ test('"Spiele SWR drei Nachrichten" startet die neueste Sendung von vorn', async
     assert.ok(stream, gesagt);
     assert.equal(r.outputSpeech.text, 'Ich spiele SWR3 Nachrichten.', gesagt);
     assert.equal(stream.offsetInMilliseconds, 0, `${gesagt}: von vorn`);
+    assert.notEqual(stream.token, 'SWR3 Nachrichten|0|0|0', `${gesagt}: nie der Token von vorhin`);
     const [basis, t] = stream.url.split('?t=');
     assert.equal(basis, SWR3_URL, gesagt);
     assert.ok(Number(t) >= vorher, `${gesagt}: frischer Stempel ${t}`);
