@@ -3,8 +3,12 @@
   "regions": [
     "fra1"
   ],
+  "fluid": false,
   "functions": {
     "api/skill.js": {
+      "maxDuration": 60
+    },
+    "api/manage.js": {
       "maxDuration": 60
     }
   },
