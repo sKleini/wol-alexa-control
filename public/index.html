@@ -286,7 +286,7 @@
             <div class="swr3-zustand" id="swr3-sendung" role="button" tabindex="0" title="Click to refresh" style="cursor: pointer;"><i class="fas fa-tower-broadcast"></i> <span>Checking the latest broadcast…</span></div>
             <details id="swr3-serverlog" style="margin: -8px 0 15px;">
                 <summary class="hint" style="cursor: pointer;"><i class="fas fa-list"></i> Server log</summary>
-                <div id="swr3-serverlog-liste" style="font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow-x: auto; padding: 8px 0;"></div>
+                <div id="swr3-serverlog-liste" style="font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow: auto; margin-top: 8px; position: relative;"></div>
             </details>
 
             <details class="hint">
@@ -1688,13 +1688,26 @@
             liste.textContent = 'Loading…';
             const r = await apiRequest('GET', null, '?type=playlists&serverlog=1');
             const eintraege = r && Array.isArray(r.eintraege) ? r.eintraege : [];
-            liste.textContent = eintraege.length ? eintraege.map((e) => {
+            liste.style.maxHeight = '';
+            liste.textContent = eintraege.length ? '' : 'No entries yet.';
+            const bloecke = eintraege.map((e) => {
                 const kopf = `${new Date(e.zeit).toLocaleTimeString()}  ${e.anlass || ''}`;
                 const zeilen = (e.proben || []).map((p, i) =>
                     `  ${i === 0 ? '✓' : ' '} ${String(p.stand).padEnd(6)} ${(p.adresse || '(DNS)').padEnd(15)}`
                     + (p.dns && p.dns.length ? `  via ${p.dns.join(', ')}` : ''));
-                return [kopf, ...zeilen].join('\n');
-            }).join('\n\n') : 'No entries yet.';
+                const block = document.createElement('div');
+                block.style.paddingBottom = '1.6em';
+                block.textContent = [kopf, ...zeilen].join('\n');
+                liste.appendChild(block);
+                return block;
+            });
+            // Sichtbar sind die zwei neuesten Wahlen, der Rest ist zu scrollen.
+            // Die Hoehe richtet sich nach den Bloecken selbst - eine Wahl kann
+            // 4, 8 oder 12 Server haben.
+            if (bloecke.length > 2) {
+                liste.style.maxHeight = `${bloecke[2].offsetTop}px`;
+                liste.scrollTop = 0;
+            }
         }
         document.getElementById('swr3-serverlog').addEventListener('toggle', (e) => {
             if (e.currentTarget.open) zeigeSwr3Serverlog();
