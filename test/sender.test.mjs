@@ -275,7 +275,7 @@ test('Das Dashboard erfaehrt, welche Sendung die App gerade bekommt', async () =
 
 // --- Die Zeitansage ----------------------------------------------------------------
 //
-// "SWR3 Nachrichten von 20 Uhr 5." statt "Ich spiele SWR3 Nachrichten." -
+// "SWR3 Nachrichten von 20 Uhr." statt "Ich spiele SWR3 Nachrichten." -
 // geschaltet in der SWR3-Karte, und die Uhrzeit ist die der Sendung, die die
 // App gerade beim Sender bekommt.
 
@@ -292,11 +292,12 @@ function spieleNachrichten(playlist, redis = attrappeRedis({ [REDIS_KEY]: [playl
   return handleSkill(body, res, redis, BASIS).then(() => res.koerper.response);
 }
 
-test('sendezeitGesprochen: so, wie Alexa es sagen soll', () => {
-  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 18:05:12 GMT'), '20 Uhr 5');
-  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 19:00:00 GMT'), '21 Uhr', 'zur vollen Stunde ohne Minuten');
-  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 22:05:00 GMT'), '0 Uhr 5', 'nach Mitternacht');
-  assert.equal(sendezeitGesprochen('Wed, 28 Jan 2026 08:05:00 GMT'), '9 Uhr 5', 'Winterzeit');
+test('sendezeitGesprochen: nur die volle Stunde', () => {
+  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 18:05:12 GMT'), '20 Uhr', 'die Sendung von 20:05 sind die Nachrichten von 20 Uhr');
+  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 19:00:00 GMT'), '21 Uhr');
+  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 18:59:59 GMT'), '20 Uhr', 'nie aufgerundet');
+  assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 22:05:00 GMT'), '0 Uhr', 'nach Mitternacht');
+  assert.equal(sendezeitGesprochen('Wed, 28 Jan 2026 08:05:00 GMT'), '9 Uhr', 'Winterzeit');
   assert.equal(sendezeitGesprochen(null), null);
 });
 
@@ -312,7 +313,7 @@ test('Mit Zeitansage sagt Alexa die Sendezeit der neuesten Sendung', async () =>
   const server_ = [server(ALT), server(FRISCH), server(ALT), server(FRISCH)];
   await mitAbruf((k, optionen) => server_[k](optionen), async (aufrufe) => {
     const r = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true });
-    assert.equal(r.outputSpeech.text, 'SWR3 Nachrichten von 21 Uhr 5.');
+    assert.equal(r.outputSpeech.text, 'SWR3 Nachrichten von 21 Uhr.');
     assert.ok(r.directives.some(d => d.type === 'AudioPlayer.Play'), 'und die Sendung laeuft');
     assert.ok(aufrufe.every(a => a.optionen.headers.Range === 'bytes=0-0'), 'vor der Antwort nur Proben');
   });
