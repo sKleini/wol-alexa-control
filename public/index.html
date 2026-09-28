@@ -289,7 +289,7 @@
                 <summary>How it works</summary>
                 <div class="hint-body">
                     <strong>"Alexa, sage meine Plattenkiste spiele <span id="swr3-sprich">SWR3 Nachrichten</span>"</strong> plays the latest SWR3 news broadcast from the start. A new one is up about five minutes past every hour.<br>
-                    Behind it is a Plattenkiste playlist with a single URL, <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>. The Echo does not fetch it itself: a cache on the home connection can hold a broadcast from hours ago, so this app fetches it from the data centre and passes it through (about 4 MB per play, counted below the playlists). Some of SWR's servers keep an old broadcast for hours, so every fetch asks four of them at once and takes the newest. The line above says which broadcast the app gets right now and what the servers had, and the listen button plays exactly that. It plays once, is never shuffled and never resumes — only the settings below are yours to choose. With <em>Say the broadcast time</em> Alexa announces the time of the broadcast she is about to play, e.g. "SWR3 Nachrichten von 20 Uhr" (the full hour, for the broadcast uploaded at 20:05). It does not show up again under Playlists.
+                    Behind it is a Plattenkiste playlist with a single URL, <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>. The Echo does not fetch it itself: a cache on the home connection can hold a broadcast from hours ago, so this app fetches it from the data centre and passes it through (about 4 MB per play, counted below the playlists). Some of SWR's servers keep an old broadcast for hours, so every fetch asks four of them at once and takes the newest. The line above says which broadcast the app gets right now and what the servers had, and the listen button plays exactly that. It plays once, is never shuffled and never resumes — only the settings below are yours to choose. With <em>Say the broadcast time</em> Alexa names the hour of the broadcast she is about to play, e.g. "Ich spiele die SWR3 Nachrichten von 21 Uhr" for the one uploaded at 21:05 — the example next to the checkbox shows the hour of the latest broadcast right now. It does not show up again under Playlists.
                 </div>
             </details>
 
@@ -307,7 +307,7 @@
                 <div class="input-group">
                     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                         <input type="checkbox" id="swr3-zeit" style="width: auto;">
-                        <span>Say the broadcast time — "<span id="swr3-zeit-beispiel">SWR3 Nachrichten</span> von 20 Uhr" instead of "Ich spiele …"</span>
+                        <span>Say the broadcast time — "Ich spiele die <span id="swr3-zeit-beispiel">SWR3 Nachrichten</span> von <span id="swr3-zeit-stunde">…</span>"</span>
                     </label>
                 </div>
                 <div class="swr3-knoepfe">
@@ -1668,6 +1668,9 @@
             swr3Hoeradresse = r.url || null;
             // Dahinter, was die einzelnen Server hatten: Genau daran war zu
             // sehen, dass manche noch die Sendung von heute frueh halten.
+            // Der Beispielsatz der Zeitansage nimmt dieselbe Stunde, die Alexa
+            // jetzt sagen wuerde - nicht eine feste Beispielzeit.
+            document.getElementById('swr3-zeit-stunde').textContent = r.gesprochen || '…';
             if (r.sendezeit) zeile.textContent = `Latest broadcast the app gets: ${r.sendezeit}`
                 + (r.server ? ` (servers: ${r.server})` : '');
             else if (r.ok === false) zeile.textContent = `SWR3 not reachable (${r.grund || 'HTTP ' + r.status})`;

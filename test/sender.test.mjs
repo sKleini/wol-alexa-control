@@ -262,6 +262,7 @@ test('Das Dashboard erfaehrt, welche Sendung die App gerade bekommt', async () =
     const stand = await senderStand('swr3');
     assert.equal(stand.sendezeit, '21:05', 'die neueste, auch wenn ein Server die alte hat');
     assert.equal(stand.server, '21:05 ×3, 09:05 ×1');
+    assert.equal(stand.gesprochen, '21 Uhr', 'die Stunde fuer den Beispielsatz im Dashboard');
     assert.ok(aufrufe.every(a => a.optionen.headers.Range === 'bytes=0-0'), 'ein Byte genuegt');
 
     const res = attrappeRes();
@@ -275,7 +276,7 @@ test('Das Dashboard erfaehrt, welche Sendung die App gerade bekommt', async () =
 
 // --- Die Zeitansage ----------------------------------------------------------------
 //
-// "SWR3 Nachrichten von 20 Uhr." statt "Ich spiele SWR3 Nachrichten." -
+// "Ich spiele die SWR3 Nachrichten von 21 Uhr." statt "Ich spiele SWR3 Nachrichten." -
 // geschaltet in der SWR3-Karte, und die Uhrzeit ist die der Sendung, die die
 // App gerade beim Sender bekommt.
 
@@ -313,7 +314,7 @@ test('Mit Zeitansage sagt Alexa die Sendezeit der neuesten Sendung', async () =>
   const server_ = [server(ALT), server(FRISCH), server(ALT), server(FRISCH)];
   await mitAbruf((k, optionen) => server_[k](optionen), async (aufrufe) => {
     const r = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true });
-    assert.equal(r.outputSpeech.text, 'SWR3 Nachrichten von 21 Uhr.');
+    assert.equal(r.outputSpeech.text, 'Ich spiele die SWR3 Nachrichten von 21 Uhr.');
     assert.ok(r.directives.some(d => d.type === 'AudioPlayer.Play'), 'und die Sendung laeuft');
     assert.ok(aufrufe.every(a => a.optionen.headers.Range === 'bytes=0-0'), 'vor der Antwort nur Proben');
   });
