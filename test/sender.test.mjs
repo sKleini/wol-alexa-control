@@ -15,7 +15,7 @@ process.env.MUSIK_BUDGET_MS = '300';
 
 import {
   SENDER, senderKennung, senderAus, senderUrl, mitDurchleitung, sendezeit, senderTon, senderStand,
-  netz, serverBild, sendezeitGesprochen,
+  netz, serverBild, sendezeitGesprochen, frisch, waehleServer,
 } from '../lib/sender.js'
 import { playDirektive, handleSkill, handleManage, validierePlaylist, sagtZeitAn, REDIS_KEY } from '../lib/musik.js'
 
@@ -61,7 +61,7 @@ function attrappeRedis(daten = {}) {
  * Sendung halten - der Fall, fuer den `waehleServer` da ist.
  */
 async function mitAbruf(antwortGeber, arbeit) {
-  const echt = { verbindung: netz.verbindung, einfach: netz.einfach };
+  const echt = { verbindung: netz.verbindung, einfach: netz.einfach, jetzt: netz.jetzt };
   const aufrufe = [];
   const geschlossen = [];
   const verbindung = (k) => ({
@@ -73,11 +73,16 @@ async function mitAbruf(antwortGeber, arbeit) {
   });
   netz.verbindung = async (k) => verbindung(k);
   netz.einfach = () => verbindung('einfach');
+  // Die Uhr steht fest: 21:10 am Abend der Meldung. Ob eine Sendung als
+  // aktuell gilt, darf nicht davon abhaengen, wann die Tests laufen.
+  netz.jetzt = () => JETZT;
   try { return await arbeit(aufrufe, geschlossen); } finally { Object.assign(netz, echt); }
 }
 
 const FRISCH = 'Sun, 28 Sep 2026 19:05:12 GMT';   // 21:05
+const VORHIN = 'Sun, 28 Sep 2026 18:05:12 GMT';   // 20:05
 const ALT = 'Sun, 28 Sep 2026 07:05:12 GMT';      // 09:05
+const JETZT = Date.parse('Sun, 28 Sep 2026 19:10:00 GMT');  // 21:10
 
 /** Ein Server mit dieser Sendung: ein Byte fuer die Probe, sonst die ganze. */
 function server(lastModified, groesse = 3000) {
@@ -235,7 +240,60 @@ test('Kommt keine Verbindung zustande, geht es wie frueher mit einem einfachen A
     await senderTon(anfrage(`sender=swr3&k=${senderKennung('swr3', SCHLUESSEL)}`, { range: 'bytes=0-' }), res, redis);
     assert.equal(aufrufe.filter(a => a.k === 'einfach').length, 1);
     assert.equal(Buffer.concat(res.stuecke).length, 3000, 'besser eine Sendung als Stille');
-    assert.match(redis.merkzettel.verlauf[0].datei, /Server: Fehler ×4/);
+    assert.match(redis.merkzettel.verlauf[0].datei, /Server: Fehler ×12/, 'drei Runden, dann der Rueckfall');
+  });
+});
+
+test('frisch: ab xx:08 muss es die Sendung der laufenden Stunde sein', () => {
+  const um = (zeit) => Date.parse(`Sun, 28 Sep 2026 ${zeit} GMT`);
+  assert.equal(frisch(Date.parse(FRISCH), JETZT), true, '21:05 um 21:10');
+  assert.equal(frisch(Date.parse(VORHIN), um('19:04:00')), true, '20:05 um 21:04 - die neue ist noch nicht da');
+  assert.equal(frisch(Date.parse(VORHIN), um('19:07:59')), true, '20:05 um 21:07 - noch in der Schonfrist');
+  assert.equal(frisch(Date.parse(VORHIN), um('19:08:00')), false, '20:05 um 21:08 - jetzt wird weitergesucht');
+  assert.equal(frisch(Date.parse(VORHIN), JETZT), false, '20:05 um 21:10 - der gemeldete Fall');
+  assert.equal(frisch(Date.parse(FRISCH), um('20:03:00')), true, '21:05 um 22:03');
+  assert.equal(frisch(Date.parse(ALT), JETZT), false);
+  assert.equal(frisch(0, JETZT), false);
+  assert.equal(frisch(-1, JETZT), false, 'ein Fehler ist nie aktuell');
+});
+
+test('Hat keiner der ersten vier die aktuelle Sendung, wird weitergefragt', async () => {
+  // Der gemeldete Fall: 20:05 ×1, 09:05 ×3 um kurz nach 21 Uhr. Erst in der
+  // zweiten Runde hat einer die Sendung von 21:05.
+  const zeiten = [VORHIN, ALT, ALT, ALT, ALT, ALT, FRISCH, ALT, FRISCH, FRISCH, FRISCH, FRISCH];
+  await mitAbruf((k, optionen) => server(zeiten[k])(optionen), async (aufrufe, geschlossen) => {
+    const res = attrappeRes();
+    const redis = attrappeRedis();
+    await senderTon(anfrage(`sender=swr3&k=${senderKennung('swr3', SCHLUESSEL)}`, { range: 'bytes=0-' }), res, redis);
+    const proben = aufrufe.filter(a => a.optionen.headers.Range === 'bytes=0-0');
+    assert.equal(proben.length, 8, 'zwei Runden, die dritte nicht mehr');
+    const abruf = aufrufe.find(a => a.optionen.headers.Range === 'bytes=0-');
+    assert.equal(abruf.k, 6, 'ueber die Verbindung, die 21:05 hatte');
+    assert.equal(redis.merkzettel.verlauf[0].datei, 'SWR3 (Stand 21:05; Server: 21:05 ×1, 20:05 ×1, 09:05 ×6)');
+    assert.equal(geschlossen.length, 8, 'alle Verbindungen beider Runden wieder zu');
+  });
+});
+
+test('Findet auch die dritte Runde nichts Aktuelles, gilt die neueste gefundene', async () => {
+  const zeiten = [ALT, ALT, VORHIN, ALT, ALT, ALT, ALT, ALT, ALT, ALT, ALT, ALT];
+  await mitAbruf((k, optionen) => server(zeiten[k])(optionen), async (aufrufe) => {
+    const stand = await senderStand('swr3');
+    assert.equal(aufrufe.length, 12, 'drei Runden, dann Schluss');
+    assert.equal(stand.sendezeit, '20:05');
+    assert.equal(stand.server, '20:05 ×1, 09:05 ×11', 'die neueste zuerst');
+  });
+});
+
+test('Die Frist begrenzt die Runden', async () => {
+  // Jede Probe braucht 60 ms, die Frist ist 100 ms: Die zweite Runde faengt
+  // noch an, eine dritte nicht mehr.
+  await mitAbruf(async (k, optionen) => {
+    await new Promise(r => setTimeout(r, 60));
+    return server(ALT)(optionen);
+  }, async (aufrufe) => {
+    const { schliessen } = await waehleServer('swr3', { frist: 100 });
+    await schliessen();
+    assert.equal(aufrufe.length, 8);
   });
 });
 
