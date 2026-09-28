@@ -283,12 +283,13 @@
             </div>
 
             <div class="swr3-zustand" id="swr3-zustand" aria-live="polite"><i class="fas fa-circle"></i> <span>Loading…</span></div>
+            <div class="swr3-zustand" id="swr3-sendung" role="button" tabindex="0" title="Click to refresh" style="cursor: pointer;"><i class="fas fa-tower-broadcast"></i> <span>Checking the latest broadcast…</span></div>
 
             <details class="hint">
                 <summary>How it works</summary>
                 <div class="hint-body">
                     <strong>"Alexa, sage meine Plattenkiste spiele <span id="swr3-sprich">SWR3 Nachrichten</span>"</strong> plays the latest SWR3 news broadcast from the start. A new one is up about five minutes past every hour.<br>
-                    Behind it is a Plattenkiste playlist with a single URL, <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>, that is fetched fresh on every play. It plays once, is never shuffled and never resumes — only the two settings below are yours to choose. It does not show up again under Playlists.
+                    Behind it is a Plattenkiste playlist with a single URL, <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>. The Echo does not fetch it itself: a cache on the home connection can hold a broadcast from hours ago, so this app fetches it from the data centre and passes it through (about 4 MB per play, counted below the playlists). The line above says which broadcast the app gets right now, and the listen button plays exactly that. It plays once, is never shuffled and never resumes — only the two settings below are yours to choose. It does not show up again under Playlists.
                 </div>
             </details>
 
@@ -751,6 +752,7 @@
             // den Skill. Hier haben sie ihre eigene Sektion und stehen deshalb
             // nicht noch einmal in der Liste.
             zeigeSwr3(alle);
+            if (!swr3Abgefragt) zeigeSwr3Sendung();
             const playlists = alle.filter(pl => !istSwr3(pl));
 
             const container = document.getElementById('playlist-list');
@@ -1633,10 +1635,38 @@
             renderPlaylists();
         });
 
-        // Wie beim Echo: mit einem frischen `t`, sonst liefert ein Cache im
-        // Browser die Sendung von vorhin.
+        // Welche Sendung die App beim Sender bekommt - und damit der Echo,
+        // der seit lib/sender.js ueber die App hoert. Die Adresse dazu kommt
+        // mit: Der Anhoer-Knopf nimmt denselben Weg, sonst hoerte er im WLAN
+        // den Zwischenspeicher von heute frueh.
+        let swr3Hoeradresse = null;
+        // Einmal beim Laden; danach auf Klick. Jede Abfrage ist ein Abruf
+        // beim Sender, und die Playlists werden nach jedem Speichern neu
+        // gezeichnet.
+        let swr3Abgefragt = false;
+        async function zeigeSwr3Sendung() {
+            swr3Abgefragt = true;
+            const zeile = document.getElementById('swr3-sendung').querySelector('span');
+            zeile.textContent = 'Checking the latest broadcast…';
+            const r = await apiRequest('GET', null, '?type=playlists&sender=swr3');
+            if (!r) return;
+            swr3Hoeradresse = r.url || null;
+            if (r.sendezeit) zeile.textContent = `Latest broadcast the app gets: ${r.sendezeit}`;
+            else if (r.ok === false) zeile.textContent = `SWR3 not reachable (${r.grund || 'HTTP ' + r.status})`;
+            else zeile.textContent = 'The broadcast time is not known';
+        }
+        document.getElementById('swr3-sendung').addEventListener('click', zeigeSwr3Sendung);
+        document.getElementById('swr3-sendung').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); zeigeSwr3Sendung(); }
+        });
+
+        // Mit einem frischen `t`, sonst liefert der Browser-Cache die Sendung
+        // von vorhin. Ohne App-Adresse (kein Schluessel gesetzt) direkt vom
+        // Sender - wie der Echo dann auch.
         document.getElementById('swr3-hoeren').addEventListener('click', (e) => {
-            e.currentTarget.href = `${SWR3_URL}?t=${Date.now()}`;
+            e.currentTarget.href = swr3Hoeradresse
+                ? `${swr3Hoeradresse}&t=${Date.now()}`
+                : `${SWR3_URL}?t=${Date.now()}`;
         });
 
         // Eine Live-Playlist merkt sich keine Stelle (siehe `holtNeueste` im

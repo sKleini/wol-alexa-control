@@ -19,7 +19,8 @@ import { Redis } from '@upstash/redis'
 import { buildLocationSpeech } from '../lib/geo.js'
 import { befehlAnPerson } from '../lib/ring.js'
 import { handleSkill as musikBox, fritzSid } from '../lib/musik.js'
-import { nasTon } from '../lib/naston.js'
+import { nasTon, eigeneBasis } from '../lib/naston.js'
+import { senderTon } from '../lib/sender.js'
 import { queryOf } from '../lib/query.js'
 import {
   speak,
@@ -57,6 +58,12 @@ export default async function handler(req, res) {
     ));
   }
 
+  // Und die Nachrichten eines Senders, aus demselben Grund hier - siehe
+  // lib/sender.js.
+  if (queryOf(req).sender && (req.method === 'GET' || req.method === 'HEAD')) {
+    return senderTon(req, res, redis);
+  }
+
   const body = req.body;
   if (!body || !body.request) return res.status(400).end();
 
@@ -75,7 +82,9 @@ export default async function handler(req, res) {
   // spricht, sagt die Skill-ID. Beide Pruefungen sind fail-closed: ohne
   // gesetzte Env-Var passt keine ID.
   if (appId && process.env.MUSIK_SKILL_ID && appId === process.env.MUSIK_SKILL_ID) {
-    return musikBox(body, res, redis);
+    // Die eigene Adresse, damit der Skill die Sender durch diese App
+    // schicken kann (siehe `mitDurchleitung` in lib/sender.js).
+    return musikBox(body, res, redis, eigeneBasis(req));
   }
   if (!process.env.ALEXA_SKILL_ID || appId !== process.env.ALEXA_SKILL_ID) {
     return res.status(401).end();
