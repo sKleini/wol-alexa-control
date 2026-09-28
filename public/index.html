@@ -124,6 +124,18 @@
         #playlist-ton:hover, #playlist-ton:focus-visible { color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.07); }
         #playlist-ton:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
         #playlist-ton > i { flex: none; opacity: 0.7; }
+        /* Die SWR3-Sektion: Logo statt Icon, sonst dieselbe Karte. */
+        .swr3-kopf { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 20px; }
+        .swr3-kopf h1 { margin: 0; }
+        .swr3-logo { width: 64px; height: 64px; flex: none; }
+        .swr3-zustand { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; margin-bottom: 15px; color: rgba(255,255,255,0.7); }
+        .swr3-zustand i { color: rgba(255,255,255,0.4); }
+        .swr3-zustand.an i { color: #7dffb3; }
+        .swr3-knoepfe { display: flex; gap: 10px; margin-top: 10px; }
+        .swr3-knoepfe .btn { margin-top: 0; }
+        .swr3-knoepfe .btn[hidden] { display: none; }
+        /* Ein Link im Knopf-Kleid erbt sonst die groessere Schrift der Seite. */
+        a.btn { font-size: 13.3333px; }
         .form-status { font-size: 0.85rem; margin-top: 10px; min-height: 1.2em; }
         .form-status.error { color: #ff8080; }
         .form-status.ok { color: #7dffb3; }
@@ -264,13 +276,49 @@
             </div>
         </div>
 
+        <div class="glass-card" style="margin-top: 20px;" id="swr3-karte">
+            <div class="swr3-kopf">
+                <img src="swr3-logo.png" alt="SWR3" class="swr3-logo">
+                <h1>Nachrichten</h1>
+            </div>
+
+            <div class="swr3-zustand" id="swr3-zustand" aria-live="polite"><i class="fas fa-circle"></i> <span>Loading…</span></div>
+
+            <details class="hint">
+                <summary>How it works</summary>
+                <div class="hint-body">
+                    <strong>"Alexa, sage meine Plattenkiste spiele <span id="swr3-sprich">SWR3 Nachrichten</span>"</strong> plays the latest SWR3 news broadcast from the start. A new one is up about five minutes past every hour.<br>
+                    Behind it is a Plattenkiste playlist with a single URL, <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>, that is fetched fresh on every play. It plays once, is never shuffled and never resumes — only the two settings below are yours to choose. It does not show up again under Playlists.
+                </div>
+            </details>
+
+            <form id="swr3-form">
+                <div class="input-group">
+                    <label for="swr3-name">Name (speech-ready, this is what you say to Alexa)</label>
+                    <input type="text" id="swr3-name" value="SWR3 Nachrichten" maxlength="64" required>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="swr3-announce" style="width: auto;" checked>
+                        Announce — Alexa says "Ich spiele …" before the news
+                    </label>
+                </div>
+                <div class="swr3-knoepfe">
+                    <button type="submit" class="btn btn-add" id="swr3-save"><i class="fas fa-save"></i> Set up</button>
+                    <button type="button" class="btn" id="swr3-remove" style="background: rgba(255,77,77,0.15); color: #ff8080;" hidden><i class="fas fa-trash"></i> Remove</button>
+                </div>
+                <a class="btn" id="swr3-hoeren" href="https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3" target="_blank" rel="noopener noreferrer" style="display: block; text-align: center; text-decoration: none; background: rgba(255,255,255,0.08); margin-top: 10px;"><i class="fas fa-headphones"></i> Listen to the latest broadcast</a>
+                <div class="form-status" id="swr3-status"></div>
+            </form>
+        </div>
+
         <div class="glass-card" style="margin-top: 20px;">
             <h1><i class="fas fa-music"></i> Playlists</h1>
 
             <details class="hint">
                 <summary>How playlists work — URLs, folder import &amp; FRITZ!NAS</summary>
                 <div class="hint-body">
-                    <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks). <em>Live</em> is for a URL whose file changes behind it, like the hourly news at <code>https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3</code>: every play gets a fresh <code>?t=…</code>, so the Echo always fetches the latest broadcast — turn <em>Repeat</em> off for it.<br>
+                    <strong>"Alexa, öffne meine plattenkiste und spiele &lt;Playlist&gt;"</strong> plays these URLs in order. <em>Repeat</em> starts over after the last track, <em>Announce</em> has Alexa say "Ich spiele …" first, <em>Shuffle</em> randomises the order, <em>Resume</em> picks up where the playlist last stopped — as a whole track again (albums) or to the second (audiobooks). <em>Live</em> is for a URL whose file changes behind it, like hourly news: every play gets a fresh <code>?t=…</code>, so the Echo always fetches the newest file — turn <em>Repeat</em> off for it. The SWR3 news have a section of their own above.<br>
                     Every URL must be <strong>https://</strong> and deliver the file <strong>directly</strong>, without a preview page or login: Dropbox needs <code>?dl=1</code>, Nextcloud share links need <code>/download</code>, Google Drive usually does not work. <em>Check URLs</em> fetches each link the way the Echo does and reports status, content type and range support (without ranges, "weiter" restarts the track).<br>
                     <strong>A whole folder at once:</strong> paste a folder share link into <em>Import folder</em> — a FRITZ!NAS share (<code>…/nas/filelink.lua?id=…</code>), a Nextcloud folder or a plain directory index — and every audio file behind it is added below as its own track. Nothing is stored until you press <em>Save Playlist</em>.<br>
                     <strong>FRITZ!NAS folder shares take a detour, and they have to:</strong> such a share hands out its files only with a session number, and the box ties that number to the address that fetched it — for the Echo it is worthless, whoever fetched it. The tracks therefore point at this app, which fetches the file itself and passes the bytes through. Nothing is stored; the counter below the list says how much ran through this month.
@@ -697,8 +745,13 @@
         }
 
         async function renderPlaylists() {
-            const playlists = await apiRequest('GET', null, '?type=playlists');
-            if (!playlists) return;
+            const alle = await apiRequest('GET', null, '?type=playlists');
+            if (!Array.isArray(alle)) return;
+            // Die SWR3-Nachrichten sind eine Playlist wie jede andere - fuer
+            // den Skill. Hier haben sie ihre eigene Sektion und stehen deshalb
+            // nicht noch einmal in der Liste.
+            zeigeSwr3(alle);
+            const playlists = alle.filter(pl => !istSwr3(pl));
 
             const container = document.getElementById('playlist-list');
             container.innerHTML = playlists.length ? '' : '<p style="text-align:center; padding: 20px;">No playlists configured.</p>';
@@ -1502,6 +1555,88 @@
             document.getElementById('playlist-import-diagnose').textContent = '';
             fritzQuelle = null;
             renderPlaylists();
+        });
+
+        // --- SWR3 Nachrichten ---------------------------------------------
+        //
+        // Keine eigene API: Die Sektion legt eine Playlist mit genau einer
+        // Adresse an, Live an, alles andere aus. Erkannt wird sie an dieser
+        // Adresse und nicht am Namen - der ist frei waehlbar, und eine von
+        // Hand unter Playlists angelegte SWR3-Playlist taucht so von selbst
+        // hier auf statt doppelt.
+        const SWR3_URL = 'https://swr-pd.ard-mcdn.de/swr3/radionachrichten.mp3';
+        const istSwr3 = (pl) => Array.isArray(pl?.titel) && pl.titel.length === 1 && pl.titel[0].url === SWR3_URL;
+        let swr3Playlist = null;
+
+        function swr3Status(text, art = '') {
+            const el = document.getElementById('swr3-status');
+            el.textContent = text;
+            el.className = 'form-status' + (art ? ' ' + art : '');
+        }
+
+        function zeigeSwr3(alle) {
+            swr3Playlist = alle.find(istSwr3) || null;
+            const zustand = document.getElementById('swr3-zustand');
+            zustand.classList.toggle('an', !!swr3Playlist);
+            zustand.querySelector('span').textContent = swr3Playlist
+                ? 'Active — Alexa can play the news'
+                : 'Not set up yet';
+            document.getElementById('swr3-save').innerHTML = swr3Playlist
+                ? '<i class="fas fa-save"></i> Save'
+                : '<i class="fas fa-plus"></i> Set up';
+            document.getElementById('swr3-remove').hidden = !swr3Playlist;
+            if (swr3Playlist) {
+                document.getElementById('swr3-name').value = swr3Playlist.name;
+                document.getElementById('swr3-announce').checked = swr3Playlist.ansage !== false;
+            }
+            document.getElementById('swr3-sprich').textContent =
+                document.getElementById('swr3-name').value.trim() || 'SWR3 Nachrichten';
+        }
+
+        document.getElementById('swr3-name').addEventListener('input', (e) => {
+            document.getElementById('swr3-sprich').textContent = e.target.value.trim() || 'SWR3 Nachrichten';
+        });
+
+        document.getElementById('swr3-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('swr3-name').value.trim();
+            const ansage = document.getElementById('swr3-announce').checked;
+            const alt = swr3Playlist?.name || null;
+            // Der Server speichert nach Namen: Ein Name, den schon eine andere
+            // Playlist traegt, wuerde sie still ueberschreiben.
+            const belegt = zuletztGerendert.find(pl => pl.name.toLowerCase() === name.toLowerCase());
+            if (belegt) { swr3Status(`"${belegt.name}" is already a playlist — pick another name.`, 'error'); return; }
+
+            const r = await apiRequest('POST', {
+                name,
+                urls: `${SWR3_URL} | SWR3 Nachrichten`,
+                wiederholen: false, ansage, zufall: false, fortsetzen: 'aus', aktuell: true,
+            }, '?type=playlists');
+            if (!r) return;
+            if (r.error) { swr3Status(r.error, 'error'); return; }
+            // Umbenannt: Die alte bleibt sonst als zweite daneben stehen.
+            if (alt && alt.toLowerCase() !== name.toLowerCase()) {
+                await apiRequest('DELETE', { name: alt }, '?type=playlists');
+            }
+            swr3Status(alt ? 'Saved.' : `Set up — say "Alexa, sage meine Plattenkiste spiele ${name}".`, 'ok');
+            renderPlaylists();
+        });
+
+        document.getElementById('swr3-remove').addEventListener('click', async () => {
+            if (!swr3Playlist) return;
+            if (!confirm('Remove the SWR3 news from Alexa?')) return;
+            const r = await apiRequest('DELETE', { name: swr3Playlist.name }, '?type=playlists');
+            if (!r) return;
+            if (r.error) { swr3Status(r.error, 'error'); return; }
+            document.getElementById('swr3-form').reset();
+            swr3Status('Removed.', 'ok');
+            renderPlaylists();
+        });
+
+        // Wie beim Echo: mit einem frischen `t`, sonst liefert ein Cache im
+        // Browser die Sendung von vorhin.
+        document.getElementById('swr3-hoeren').addEventListener('click', (e) => {
+            e.currentTarget.href = `${SWR3_URL}?t=${Date.now()}`;
         });
 
         // Eine Live-Playlist merkt sich keine Stelle (siehe `holtNeueste` im
