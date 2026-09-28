@@ -284,6 +284,10 @@
 
             <div class="swr3-zustand" id="swr3-zustand" aria-live="polite"><i class="fas fa-circle"></i> <span>Loading…</span></div>
             <div class="swr3-zustand" id="swr3-sendung" role="button" tabindex="0" title="Click to refresh" style="cursor: pointer;"><i class="fas fa-tower-broadcast"></i> <span>Checking the latest broadcast…</span></div>
+            <details id="swr3-serverlog" style="margin: -8px 0 15px;">
+                <summary class="hint" style="cursor: pointer;"><i class="fas fa-list"></i> Server log</summary>
+                <div id="swr3-serverlog-liste" style="font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow-x: auto; padding: 8px 0;"></div>
+            </details>
 
             <details class="hint">
                 <summary>How it works</summary>
@@ -1677,7 +1681,27 @@
             else if (r.ok === false) zeile.textContent = `SWR3 not reachable (${r.grund || 'HTTP ' + r.status})`;
             else zeile.textContent = 'The broadcast time is not known';
         }
-        document.getElementById('swr3-sendung').addEventListener('click', zeigeSwr3Sendung);
+        // Die letzten Serverwahlen (Dashboard, Echo, Zeitansage): je Wahl die
+        // gefragten Adressen und was sie hatten. Die mit ✓ wurde genommen.
+        async function zeigeSwr3Serverlog() {
+            const liste = document.getElementById('swr3-serverlog-liste');
+            liste.textContent = 'Loading…';
+            const r = await apiRequest('GET', null, '?type=playlists&serverlog=1');
+            const eintraege = r && Array.isArray(r.eintraege) ? r.eintraege : [];
+            liste.textContent = eintraege.length ? eintraege.map((e) => {
+                const kopf = `${new Date(e.zeit).toLocaleTimeString()}  ${e.anlass || ''}`;
+                const zeilen = (e.proben || []).map((p, i) =>
+                    `  ${i === 0 ? '✓' : ' '} ${String(p.stand).padEnd(6)} ${p.adresse || '(DNS)'}`);
+                return [kopf, ...zeilen].join('\n');
+            }).join('\n\n') : 'No entries yet.';
+        }
+        document.getElementById('swr3-serverlog').addEventListener('toggle', (e) => {
+            if (e.currentTarget.open) zeigeSwr3Serverlog();
+        });
+        document.getElementById('swr3-sendung').addEventListener('click', async () => {
+            await zeigeSwr3Sendung();
+            if (document.getElementById('swr3-serverlog').open) zeigeSwr3Serverlog();
+        });
         document.getElementById('swr3-sendung').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); zeigeSwr3Sendung(); }
         });
