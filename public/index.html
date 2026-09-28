@@ -1691,7 +1691,8 @@
             liste.textContent = eintraege.length ? eintraege.map((e) => {
                 const kopf = `${new Date(e.zeit).toLocaleTimeString()}  ${e.anlass || ''}`;
                 const zeilen = (e.proben || []).map((p, i) =>
-                    `  ${i === 0 ? '✓' : ' '} ${String(p.stand).padEnd(6)} ${p.adresse || '(DNS)'}`);
+                    `  ${i === 0 ? '✓' : ' '} ${String(p.stand).padEnd(6)} ${(p.adresse || '(DNS)').padEnd(15)}`
+                    + (p.dns && p.dns.length ? `  via ${p.dns.join(', ')}` : ''));
                 return [kopf, ...zeilen].join('\n');
             }).join('\n\n') : 'No entries yet.';
         }
