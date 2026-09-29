@@ -15,7 +15,7 @@ process.env.MUSIK_BUDGET_MS = '300';
 
 import {
   SENDER, senderKennung, senderAus, senderUrl, mitDurchleitung, sendezeit, senderTon, senderStand,
-  netz, serverBild, sendezeitGesprochen, frisch, waehleServer, adressenFuer, vergiss, GEMERKT_KEY, SERVERLOG_KEY, serverLogLesen,
+  netz, serverBild, sendezeitGesprochen, sendungAnzeige, frisch, waehleServer, adressenFuer, vergiss, GEMERKT_KEY, SERVERLOG_KEY, serverLogLesen,
 } from '../lib/sender.js'
 import { playDirektive, handleSkill, handleManage, validierePlaylist, sagtZeitAn, REDIS_KEY } from '../lib/musik.js'
 
@@ -417,6 +417,33 @@ function spieleNachrichten(playlist, redis = attrappeRedis({ [REDIS_KEY]: [playl
   };
   return handleSkill(body, res, redis, BASIS).then(() => res.koerper.response);
 }
+
+test('sendungAnzeige: Tag, Monat und volle Stunde wie beim SWR3-Skill', () => {
+  assert.equal(sendungAnzeige('Mon, 29 Sep 2026 14:05:12 GMT'), '29. September, 16:00 Uhr');
+  assert.equal(sendungAnzeige('Sun, 28 Sep 2026 22:05:00 GMT'), '29. September, 00:00 Uhr', 'nach Mitternacht der neue Tag');
+  assert.equal(sendungAnzeige(null), null);
+});
+
+test('Der Echo Show zeigt bei einem Sender Logo und Sendung statt "1 von 1"', () => {
+  const [pl] = mitDurchleitung([NACHRICHTEN], BASIS, SCHLUESSEL);
+  const mit = playDirektive(pl, 0, 0, { stempel: 1700, sendung: '29. September, 16:00 Uhr' }).audioItem.metadata;
+  assert.equal(mit.title, 'SWR3 Nachrichten');
+  assert.equal(mit.subtitle, '29. September, 16:00 Uhr – SWR3 Nachrichten');
+  assert.equal(mit.art.sources[0].url, `${BASIS}/swr3-logo.png`);
+  const ohne = playDirektive(pl, 0, 0, { stempel: 1700 }).audioItem.metadata;
+  assert.equal(ohne.subtitle, 'Neueste Sendung – SWR3 Nachrichten', 'ohne Sendezeit kein "1 von 1"');
+  assert.equal(ohne.art.sources[0].url, `${BASIS}/swr3-logo.png`);
+  assert.equal(playDirektive(KINDER, 0, 0).audioItem.metadata.art, undefined, 'Musik bleibt ohne Bild');
+});
+
+test('Mit Zeitansage steht die Sendung auch in der Anzeige', async () => {
+  await mitAbruf((k, optionen) => server(FRISCH)(optionen), async () => {
+    const r = await spieleNachrichten({ ...NACHRICHTEN, zeitansage: true });
+    const play = r.directives.find(d => d.type === 'AudioPlayer.Play');
+    assert.equal(play.audioItem.metadata.subtitle, '28. September, 21:00 Uhr – SWR3 Nachrichten');
+    assert.equal(play.audioItem.metadata.art.sources[0].url, `${BASIS}/swr3-logo.png`);
+  });
+});
 
 test('sendezeitGesprochen: nur die volle Stunde', () => {
   assert.equal(sendezeitGesprochen('Sun, 28 Sep 2026 18:05:12 GMT'), '20 Uhr', 'die Sendung von 20:05 sind die Nachrichten von 20 Uhr');
