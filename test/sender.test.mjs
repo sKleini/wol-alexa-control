@@ -249,17 +249,40 @@ test('Kommt keine Verbindung zustande, geht es wie frueher mit einem einfachen A
   });
 });
 
-test('frisch: ab xx:08 muss es die Sendung der laufenden Stunde sein', () => {
+test('frisch: nur die Sendung der laufenden Stunde', () => {
   const um = (zeit) => Date.parse(`Sun, 28 Sep 2026 ${zeit} GMT`);
   assert.equal(frisch(Date.parse(FRISCH), JETZT), true, '21:05 um 21:10');
-  assert.equal(frisch(Date.parse(VORHIN), um('19:04:00')), true, '20:05 um 21:04 - die neue ist noch nicht da');
-  assert.equal(frisch(Date.parse(VORHIN), um('19:07:59')), true, '20:05 um 21:07 - noch in der Schonfrist');
-  assert.equal(frisch(Date.parse(VORHIN), um('19:08:00')), false, '20:05 um 21:08 - jetzt wird weitergesucht');
+  assert.equal(frisch(Date.parse(FRISCH), um('19:59:59')), true, '21:05 um 21:59');
+  assert.equal(frisch(Date.parse(FRISCH), um('20:00:00')), false, '21:05 um 22:00 - jetzt ist es die Vorstunde');
+  // Keine Schonfrist mehr: Auch vor xx:05 wird weitergefragt - vielleicht
+  // hat ein Server die neue schon.
+  assert.equal(frisch(Date.parse(VORHIN), um('19:04:00')), false, '20:05 um 21:04');
+  assert.equal(frisch(Date.parse(VORHIN), um('19:07:59')), false, '20:05 um 21:07');
   assert.equal(frisch(Date.parse(VORHIN), JETZT), false, '20:05 um 21:10 - der gemeldete Fall');
-  assert.equal(frisch(Date.parse(FRISCH), um('20:03:00')), true, '21:05 um 22:03');
   assert.equal(frisch(Date.parse(ALT), JETZT), false);
   assert.equal(frisch(0, JETZT), false);
   assert.equal(frisch(-1, JETZT), false, 'ein Fehler ist nie aktuell');
+});
+
+test('Um 21:06 wird weitergefragt, wenn die erste Runde nur 20:05 hat', async () => {
+  // Der Fall aus der Pruefung: Bis xx:08 galt die Vorstunde als aktuell, und
+  // nach der ersten Runde war Schluss - mit 20:05, obwohl 21:05 schon da war.
+  const zeiten = [VORHIN, VORHIN, VORHIN, VORHIN, FRISCH, VORHIN, VORHIN, VORHIN];
+  await mitAbruf((k, optionen) => server(zeiten[k])(optionen), async (aufrufe) => {
+    netz.jetzt = () => Date.parse('Sun, 28 Sep 2026 19:06:00 GMT');
+    const stand = await senderStand('swr3');
+    assert.equal(aufrufe.length, 8, 'zwei Runden - die zweite hatte 21:05');
+    assert.equal(stand.sendezeit, '21:05');
+  });
+});
+
+test('Gibt es die neue noch nicht, gewinnt nach allen Runden die Vorstunde', async () => {
+  await mitAbruf((k, optionen) => server(VORHIN)(optionen), async (aufrufe) => {
+    netz.jetzt = () => Date.parse('Sun, 28 Sep 2026 19:03:00 GMT');
+    const stand = await senderStand('swr3');
+    assert.equal(aufrufe.length, 12, 'alle drei Runden - die neue koennte schon irgendwo liegen');
+    assert.equal(stand.sendezeit, '20:05');
+  });
 });
 
 test('Hat keiner der ersten vier die aktuelle Sendung, wird weitergefragt', async () => {
