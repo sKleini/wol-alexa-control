@@ -28,3 +28,31 @@ test('Ohne Fluid Compute brauchen Ton und Pruefung ihr eigenes Zeitlimit', () =>
   assert.equal(konfig.functions?.['api/skill.js']?.maxDuration, 60);
   assert.equal(konfig.functions?.['api/manage.js']?.maxDuration, 60);
 });
+
+test('strom_rewrite_vor_der_startseite', () => {
+  // /api/strom hat keine eigene Funktion - der Hobby-Tarif erlaubt zwoelf, und
+  // api/ hat zwoelf. Der Rewrite fuehrt zu api/relay-status.js, das an
+  // lib/strom.js weitergibt.
+  const rewrites = konfig.rewrites || [];
+  const strom = rewrites.findIndex(r => r.source === '/api/strom');
+  const start = rewrites.findIndex(r => r.source === '/');
+  assert.notEqual(strom, -1);
+  assert.equal(rewrites[strom].destination, '/api/relay-status?art=strom');
+  assert.ok(strom < start);
+  assert.ok(!Object.keys(konfig.functions || {}).some(k => k.includes('strom')));
+});
+
+test('relay_status_leitet_strom_vor_der_schluesselpruefung_weiter', () => {
+  // Als Text geprueft: api/relay-status.js laedt @upstash/redis, und das ist
+  // in der Test-Umgebung nicht installiert. Die Weiterleitung muss vor
+  // keyOk() und vor der Methodenpruefung stehen - sonst bekaeme DELETE ein
+  // 405 und der VPS mit seinem Push-Schluessel ein 401.
+  const text = readFileSync(new URL('../api/relay-status.js', import.meta.url), 'utf8');
+  const weiter = text.indexOf('return handleStrom(req, res, redis)');
+  assert.notEqual(weiter, -1);
+  assert.ok(weiter < text.indexOf("if (!['GET', 'POST'].includes(req.method))"));
+  assert.ok(weiter < text.indexOf('if (!keyOk(req))'));
+  // Ob Vercel die Query des Rewrite-Ziels in req.url schreibt, ist nicht
+  // sicher - darum zaehlt auch der Pfad.
+  assert.match(text, /queryOf\(req\)\.art === 'strom' \|\| \(req\.url \|\| ''\)\.startsWith\('\/api\/strom'\)/);
+});
