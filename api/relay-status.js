@@ -6,6 +6,8 @@
 // stale position. GET returns the current status (e.g. for a dashboard badge).
 import { Redis } from '@upstash/redis'
 import { keyOk } from '../lib/auth.js'
+import { queryOf } from '../lib/query.js'
+import { handleStrom } from '../lib/strom.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -15,6 +17,12 @@ const redis = new Redis({
 const STATUS_KEY = 'relay_status:smarttag'
 
 export default async function handler(req, res) {
+  // /api/strom (Stromdaten vom VPS fuer den Actions Hub) wohnt hier mit, weil
+  // der Hobby-Tarif nur zwoelf Funktionen erlaubt und api/ zwoelf hat. Vor
+  // allen Pruefungen: /api/strom nimmt DELETE an und hat eigene Schluessel.
+  // Der Pfad zaehlt mit, weil nicht sicher ist, ob Vercel beim Rewrite die
+  // Query des Ziels (?art=strom) in req.url schreibt.
+  if (queryOf(req).art === 'strom' || (req.url || '').startsWith('/api/strom')) return handleStrom(req, res, redis);
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   if (!keyOk(req)) return res.status(401).end();
 
