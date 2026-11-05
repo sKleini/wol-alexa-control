@@ -135,24 +135,23 @@ test('Fernseher erkennen: Viewport-Modus TV, auch in Viewports[]', () => {
   assert.equal(istFernseher(null), false);
 });
 
-test('Fire TV holt die Kacheln ueber diese App, Echo Show direkt bei OSM', () => {
+test('Fire TV und Echo Show holen die Kacheln ueber diese App', () => {
   const p = { name: 'J', lat: 51.5178, lon: 7.4593, ort: 'x', alter: 'y' };
   const basis = 'https://app.example';
-  const tv = JSON.stringify(kartenDirektive(p, true, basis));
-  assert.match(tv, /https:\/\/app\.example\/api\/skill\?kachel=1&z=16&x=34125&y=21789/);
-  assert.doesNotMatch(tv, /tile\.openstreetmap\.org/);
-  const show = JSON.stringify(kartenDirektive(p, false, basis));
-  assert.match(show, /tile\.openstreetmap\.org\/16\//);
-  assert.doesNotMatch(show, /kachel=1/);
-  // Ohne eigene Adresse bleibt auch der Fernseher bei OSM direkt.
-  assert.match(JSON.stringify(kartenDirektive(p, true, '')), /tile\.openstreetmap\.org/);
+  for (const fernseher of [true, false]) {
+    const json = JSON.stringify(kartenDirektive(p, fernseher, basis));
+    assert.match(json, /https:\/\/app\.example\/api\/skill\?kachel=1&z=16&x=34125&y=21789/);
+    assert.doesNotMatch(json, /tile\.openstreetmap\.org/);
+  }
+  // Ohne eigene Adresse direkt zu OSM.
+  assert.match(JSON.stringify(kartenDirektive(p, false, '')), /tile\.openstreetmap\.org/);
 });
 
 test('Kachelquelle fuer Fernseher separat umstellbar', () => {
   process.env.KARTE_KACHELN_TV = 'https://tv.example/{z}/{x}/{y}.png';
   try {
     assert.match(JSON.stringify(kartenDirektive({ name: 'J', lat: 51, lon: 7, ort: 'x', alter: 'y' }, true, 'https://app.example')), /tv\.example\/16\//);
-    assert.match(JSON.stringify(kartenDirektive({ name: 'J', lat: 51, lon: 7, ort: 'x', alter: 'y' }, false)), /tile\.openstreetmap\.org/);
+    assert.match(JSON.stringify(kartenDirektive({ name: 'J', lat: 51, lon: 7, ort: 'x', alter: 'y' }, false, 'https://app.example')), /app\.example\/api\/skill\?kachel=1/);
   } finally {
     delete process.env.KARTE_KACHELN_TV;
   }

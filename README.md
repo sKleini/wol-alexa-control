@@ -351,12 +351,12 @@ The `u` parameter must match the person's name in the dashboard (8.2). For more 
      the phone reported it — the accuracy circle; a stale position is drawn grey. The map stays on
      screen for 25 seconds (Vercel env var `KARTE_DAUER_SEK`, 10–600 s; the device may cap it) —
      the session stays open without the microphone, *"Alexa, stopp"* closes it early. Without the interface (or on an Echo Dot) the skill only speaks, as
-     before. Echo Show devices load the tiles from `tile.openstreetmap.org`. A **Fire TV**
-     (viewport mode `TV`) loads them through this app instead (`/api/skill?kachel=1&z=…&x=…&y=…`,
-     cached a week by Vercel's CDN): OSM answers the Fire TV's image loader with *"403 Access
-     blocked"* because it does not send the identification OSM's tile policy requires; the app
-     fetches with its own User-Agent. Override with the Vercel env vars `KARTE_KACHELN`
-     (Echo Show & co.) and `KARTE_KACHELN_TV` (TVs), each a template with `{z}`, `{x}`, `{y}`.
+     before. All devices load the tiles through this app
+     (`/api/skill?kachel=1&z=…&x=…&y=…`, cached a week by Vercel's CDN), which fetches them from
+     `tile.openstreetmap.org` with its own User-Agent: fetched directly, OSM answered the Fire TV's
+     image loader with *"403 Access blocked"* because it does not send the identification OSM's
+     tile policy requires. Override with the Vercel env vars `KARTE_KACHELN` (Echo Show & co.) and
+     `KARTE_KACHELN_TV` (TVs), each a template with `{z}`, `{x}`, `{y}`.
 5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"*.
 6. Copy the **Skill ID** (`amzn1.ask.skill....`) into the `ALEXA_SKILL_ID` environment variable in Vercel and redeploy.
 7. The skill works on all Echo devices of the same Amazon account while it stays in **Development** mode — no publishing needed. Test it in the **Test** tab (set to *Development*): type `frag familien finder wo julia ist`.
