@@ -193,7 +193,10 @@ async function standort(body, res, person, direktiven) {
     // nicht zu "Es ist leider ein Fehler aufgetreten" werden.
     console.error('Karte nicht gebaut:', err);
   }
-  return speak(res, info.text, true, karte ? [...direktiven, karte] : direktiven);
+  // Mit Karte bleibt die Sitzung offen (ohne Mikrofon), sonst raeumt der Echo
+  // die Anzeige nach wenigen Sekunden ab - siehe `speak` in lib/alexa.js.
+  if (karte) return speak(res, info.text, null, [...direktiven, karte]);
+  return speak(res, info.text, true, direktiven);
 }
 
 /**
