@@ -345,6 +345,13 @@ The `u` parameter must match the person's name in the dashboard (8.2). For more 
 > just found the ringing phone should not have to answer a question first.
 
 4. **Build the model**.
+   - *(Optional, for Echo Show)* **Build → Interfaces → Alexa Presentation Language** → switch on
+     (tick the device shapes you own) → **Save Interfaces** → build again. Devices with a screen
+     then show a **map** with the position next to the answer: OpenStreetMap tiles, a pin and — if
+     the phone reported it — the accuracy circle; a stale position is drawn grey. The map stays on
+     screen for a minute. Without the interface (or on an Echo Dot) the skill only speaks, as
+     before. The tiles come straight from `tile.openstreetmap.org`; set the Vercel env var
+     `KARTE_KACHELN` (template with `{z}`, `{x}`, `{y}`) to use another tile server.
 5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"*.
 6. Copy the **Skill ID** (`amzn1.ask.skill....`) into the `ALEXA_SKILL_ID` environment variable in Vercel and redeploy.
 7. The skill works on all Echo devices of the same Amazon account while it stays in **Development** mode — no publishing needed. Test it in the **Test** tab (set to *Development*): type `frag familien finder wo julia ist`.

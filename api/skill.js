@@ -16,7 +16,8 @@
 // nebenbei die halbe Sorge schon selbst erledigt, weil ihn niemand
 // versehentlich sagt.
 import { Redis } from '@upstash/redis'
-import { buildLocationSpeech } from '../lib/geo.js'
+import { buildLocationInfo } from '../lib/geo.js'
+import { kannKarte, kartenDirektive } from '../lib/karte.js'
 import { befehlAnPerson } from '../lib/ring.js'
 import { handleSkill as musikBox, fritzSid } from '../lib/musik.js'
 import { nasTon, eigeneBasis } from '../lib/naston.js'
@@ -108,14 +109,14 @@ export default async function handler(req, res) {
     if (body.request.type === 'LaunchRequest') {
       const person = standardPerson(personen);
       if (!person) return speak(res, 'Es ist noch keine Person eingerichtet. Bitte lege im Dashboard eine Person an.', true, direktiven);
-      return speak(res, await buildLocationSpeech(redis, person), true, direktiven);
+      return await standort(body, res, person, direktiven);
     }
 
     if (body.request.type === 'IntentRequest') {
       const intent = body.request.intent || {};
       switch (intent.name) {
         case 'WhereIsPersonIntent':
-          return handleWhereIs(intent, res, personen, direktiven);
+          return await handleWhereIs(body, intent, res, personen, direktiven);
         case 'RingPersonIntent':
           return handleRing(intent, res, personen, direktiven);
         case 'SilencePersonIntent':
@@ -166,14 +167,33 @@ export function dynamischeEntitaeten(personen) {
   return dynamischeWerte('PERSON_NAME', (personen || []).map(p => p?.name));
 }
 
-async function handleWhereIs(intent, res, personen, direktiven) {
+async function handleWhereIs(body, intent, res, personen, direktiven) {
   const value = resolvedSlotValue(intent.slots?.person);
   if (!value) return frageWer(res, 'Wen soll ich suchen?', personen, direktiven);
 
   const person = personen.find(p => p.name.toLowerCase() === value.toLowerCase());
   if (!person) return speak(res, `Ich habe keine Person namens ${value} gefunden.`, true, direktiven);
 
-  return speak(res, await buildLocationSpeech(redis, person), true, direktiven);
+  return standort(body, res, person, direktiven);
+}
+
+/**
+ * Sagt, wo jemand ist - und zeigt es auf Geraeten mit Bildschirm als Karte.
+ *
+ * Die Karte haengt nur an, wenn der Echo APL meldet (siehe `kannKarte` in
+ * lib/karte.js); ein Echo Dot bekommt dieselbe Antwort wie bisher.
+ */
+async function standort(body, res, person, direktiven) {
+  const info = await buildLocationInfo(redis, person);
+  let karte = null;
+  try {
+    karte = info.karte && kannKarte(body) ? kartenDirektive(info.karte) : null;
+  } catch (err) {
+    // Die Karte ist Zugabe: Ohne sie bleibt die Ansage, ein Fehler hier darf
+    // nicht zu "Es ist leider ein Fehler aufgetreten" werden.
+    console.error('Karte nicht gebaut:', err);
+  }
+  return speak(res, info.text, true, karte ? [...direktiven, karte] : direktiven);
 }
 
 /**
