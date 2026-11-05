@@ -2,9 +2,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  KACHEL, kannKarte, weltPixel, zoomFuer, kachelRaster, kartenDirektive, meterProPixel,
+  KACHEL, kannKarte, weltPixel, zoomFuer, kachelRaster, kartenDirektive, meterProPixel, kartenDauerMs,
 } from '../lib/karte.js'
 import { kartenOrt } from '../lib/geo.js'
+import { speak } from '../lib/alexa.js'
 
 const mitApl = { context: { System: { device: { supportedInterfaces: { 'Alexa.Presentation.APL': { runtime: { maxVersion: '2024.1' } } } } } } };
 const ohneApl = { context: { System: { device: { supportedInterfaces: { AudioPlayer: {} } } } } };
@@ -98,4 +99,28 @@ test('Ortszeile ohne gesprochene Praepositionen', () => {
   assert.equal(kartenOrt('zu Hause', loc), 'zu Hause');
   assert.equal(kartenOrt(null, loc), '51.5000, 7.4500');
   assert.equal(kartenOrt('an einem unbekannten Ort', loc), '51.5000, 7.4500');
+});
+
+test('Anzeigedauer: Vorgabe, Einstellung und Grenzen', () => {
+  assert.equal(kartenDauerMs(undefined), 180000);
+  assert.equal(kartenDauerMs('300'), 300000);
+  assert.equal(kartenDauerMs('abc'), 180000);
+  assert.equal(kartenDauerMs('2'), 10000);
+  assert.equal(kartenDauerMs('99999'), 600000);
+  const d = kartenDirektive({ name: 'J', lat: 51, lon: 7, ort: 'x', alter: 'y' });
+  assert.equal(d.document.settings.idleTimeout, 180000);
+});
+
+test('speak mit null: Sitzung offen, ohne Mikrofon und ohne Reprompt', () => {
+  let gesendet;
+  const res = { status: () => ({ json: b => { gesendet = b; } }) };
+  speak(res, 'Julia ist zu Hause.', null, [{ type: 'X' }]);
+  assert.equal('shouldEndSession' in gesendet.response, false);
+  assert.equal(gesendet.response.reprompt, undefined);
+  speak(res, 'Wen?', false);
+  assert.equal(gesendet.response.shouldEndSession, false);
+  assert.ok(gesendet.response.reprompt);
+  speak(res, 'Bis bald.');
+  assert.equal(gesendet.response.shouldEndSession, true);
+  assert.equal(gesendet.response.reprompt, undefined);
 });
