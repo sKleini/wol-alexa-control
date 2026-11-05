@@ -17,7 +17,7 @@
 // versehentlich sagt.
 import { Redis } from '@upstash/redis'
 import { buildLocationInfo } from '../lib/geo.js'
-import { kannKarte, kartenDirektive } from '../lib/karte.js'
+import { kannKarte, kartenDirektive, istFernseher } from '../lib/karte.js'
 import { befehlAnPerson } from '../lib/ring.js'
 import { handleSkill as musikBox, fritzSid } from '../lib/musik.js'
 import { nasTon, eigeneBasis } from '../lib/naston.js'
@@ -187,7 +187,7 @@ async function standort(body, res, person, direktiven) {
   const info = await buildLocationInfo(redis, person);
   let karte = null;
   try {
-    karte = info.karte && kannKarte(body) ? kartenDirektive(info.karte) : null;
+    karte = info.karte && kannKarte(body) ? kartenDirektive(info.karte, istFernseher(body)) : null;
   } catch (err) {
     // Die Karte ist Zugabe: Ohne sie bleibt die Ansage, ein Fehler hier darf
     // nicht zu "Es ist leider ein Fehler aufgetreten" werden.
