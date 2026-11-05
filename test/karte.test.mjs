@@ -45,7 +45,7 @@ test('Raster: 9 x 7 Kacheln, die Mitte liegt auf der Position', () => {
   // Genau eine Kachel enthaelt den Bildschirmmittelpunkt (0,0).
   const mitte = k.filter(t => t.links <= 0 && t.links + KACHEL > 0 && t.oben <= 0 && t.oben + KACHEL > 0);
   assert.equal(mitte.length, 1);
-  assert.match(mitte[0].url, /^https:\/\/tile\.openstreetmap\.org\/16\/34125\/21789\.png$/);
+  assert.match(mitte[0].url, /^https:\/\/basemaps\.cartocdn\.com\/rastertiles\/voyager\/16\/34125\/21789\.png$/);
 });
 
 test('Raster: ueber die Datumsgrenze hinweg bleiben die Kachelnummern gueltig', () => {
@@ -62,7 +62,8 @@ test('Direktive: RenderDocument mit Pin, Kreis und Quellenangabe', () => {
   assert.equal(d.datasources.karte.name, 'Julia');
   assert.equal(d.datasources.karte.zeile, 'Schule · vor 3 Minuten');
   const json = JSON.stringify(d);
-  assert.match(json, /OpenStreetMap-Mitwirkende/);
+  assert.match(json, /OpenStreetMap-Mitwirkende © CARTO/);
+  assert.doesNotMatch(json, /tile\.openstreetmap\.org/);
   // 120 m bei Zoom 16 in Dortmund sind gut 80 Pixel Radius.
   const r = Math.round(120 / meterProPixel(51.5178, 16));
   assert.ok(json.includes(`"borderRadius":${r}`), `Kreis mit Radius ${r} fehlt`);
@@ -102,13 +103,13 @@ test('Ortszeile ohne gesprochene Praepositionen', () => {
 });
 
 test('Anzeigedauer: Vorgabe, Einstellung und Grenzen', () => {
-  assert.equal(kartenDauerMs(undefined), 180000);
+  assert.equal(kartenDauerMs(undefined), 25000);
   assert.equal(kartenDauerMs('300'), 300000);
-  assert.equal(kartenDauerMs('abc'), 180000);
+  assert.equal(kartenDauerMs('abc'), 25000);
   assert.equal(kartenDauerMs('2'), 10000);
   assert.equal(kartenDauerMs('99999'), 600000);
   const d = kartenDirektive({ name: 'J', lat: 51, lon: 7, ort: 'x', alter: 'y' });
-  assert.equal(d.document.settings.idleTimeout, 180000);
+  assert.equal(d.document.settings.idleTimeout, 25000);
 });
 
 test('speak mit null: Sitzung offen, ohne Mikrofon und ohne Reprompt', () => {

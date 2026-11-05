@@ -347,11 +347,13 @@ The `u` parameter must match the person's name in the dashboard (8.2). For more 
 4. **Build the model**.
    - *(Optional, for Echo Show)* **Build → Interfaces → Alexa Presentation Language** → switch on
      (tick the device shapes you own) → **Save Interfaces** → build again. Devices with a screen
-     then show a **map** with the position next to the answer: OpenStreetMap tiles, a pin and — if
+     then show a **map** with the position next to the answer: CARTO tiles (OpenStreetMap data), a pin and — if
      the phone reported it — the accuracy circle; a stale position is drawn grey. The map stays on
-     screen for three minutes (Vercel env var `KARTE_DAUER_SEK`, 10–600 s; the device may cap it) —
+     screen for 25 seconds (Vercel env var `KARTE_DAUER_SEK`, 10–600 s; the device may cap it) —
      the session stays open without the microphone, *"Alexa, stopp"* closes it early. Without the interface (or on an Echo Dot) the skill only speaks, as
-     before. The tiles come straight from `tile.openstreetmap.org`; set the Vercel env var
+     before. The tiles come from `basemaps.cartocdn.com` (free, no key) — **not**
+     `tile.openstreetmap.org`, which answers the Echo with *"403 Access blocked"* because its image
+     loader does not send the identification OSM's tile policy requires. Set the Vercel env var
      `KARTE_KACHELN` (template with `{z}`, `{x}`, `{y}`) to use another tile server.
 5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"*.
 6. Copy the **Skill ID** (`amzn1.ask.skill....`) into the `ALEXA_SKILL_ID` environment variable in Vercel and redeploy.
