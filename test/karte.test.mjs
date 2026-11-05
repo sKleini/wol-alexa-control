@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  KACHEL, kannKarte, weltPixel, zoomFuer, kachelRaster, kartenDirektive, meterProPixel, kartenDauerMs,
+  KACHEL, kannKarte, weltPixel, zoomFuer, kachelRaster, kartenDirektive, meterProPixel, kartenDauerMs, istFernseher,
 } from '../lib/karte.js'
 import { kartenOrt } from '../lib/geo.js'
 import { speak } from '../lib/alexa.js'
@@ -63,6 +63,8 @@ test('Direktive: RenderDocument mit Pin, Kreis und Quellenangabe', () => {
   assert.equal(d.datasources.karte.zeile, 'Schule · vor 3 Minuten');
   const json = JSON.stringify(d);
   assert.match(json, /OpenStreetMap-Mitwirkende/);
+  assert.match(json, /tile\.openstreetmap\.org/);
+  assert.doesNotMatch(json, /CARTO/);
   // 120 m bei Zoom 16 in Dortmund sind gut 80 Pixel Radius.
   const r = Math.round(120 / meterProPixel(51.5178, 16));
   assert.ok(json.includes(`"borderRadius":${r}`), `Kreis mit Radius ${r} fehlt`);
@@ -102,13 +104,13 @@ test('Ortszeile ohne gesprochene Praepositionen', () => {
 });
 
 test('Anzeigedauer: Vorgabe, Einstellung und Grenzen', () => {
-  assert.equal(kartenDauerMs(undefined), 180000);
+  assert.equal(kartenDauerMs(undefined), 25000);
   assert.equal(kartenDauerMs('300'), 300000);
-  assert.equal(kartenDauerMs('abc'), 180000);
+  assert.equal(kartenDauerMs('abc'), 25000);
   assert.equal(kartenDauerMs('2'), 10000);
   assert.equal(kartenDauerMs('99999'), 600000);
   const d = kartenDirektive({ name: 'J', lat: 51, lon: 7, ort: 'x', alter: 'y' });
-  assert.equal(d.document.settings.idleTimeout, 180000);
+  assert.equal(d.document.settings.idleTimeout, 25000);
 });
 
 test('speak mit null: Sitzung offen, ohne Mikrofon und ohne Reprompt', () => {
@@ -123,4 +125,33 @@ test('speak mit null: Sitzung offen, ohne Mikrofon und ohne Reprompt', () => {
   speak(res, 'Bis bald.');
   assert.equal(gesendet.response.shouldEndSession, true);
   assert.equal(gesendet.response.reprompt, undefined);
+});
+
+test('Fernseher erkennen: Viewport-Modus TV, auch in Viewports[]', () => {
+  assert.equal(istFernseher({ context: { Viewport: { mode: 'TV' } } }), true);
+  assert.equal(istFernseher({ context: { Viewport: { mode: 'HUB' } } }), false);
+  assert.equal(istFernseher({ context: { Viewports: [{ type: 'APL', mode: 'TV' }] } }), true);
+  assert.equal(istFernseher({ context: {} }), false);
+  assert.equal(istFernseher(null), false);
+});
+
+test('Fire TV bekommt CARTO-Kacheln, Echo Show OpenStreetMap', () => {
+  const p = { name: 'J', lat: 51.5178, lon: 7.4593, ort: 'x', alter: 'y' };
+  const tv = JSON.stringify(kartenDirektive(p, true));
+  assert.match(tv, /basemaps\.cartocdn\.com\/rastertiles\/voyager\/16\//);
+  assert.doesNotMatch(tv, /tile\.openstreetmap\.org/);
+  assert.match(tv, /© OpenStreetMap-Mitwirkende © CARTO/);
+  const show = JSON.stringify(kartenDirektive(p, false));
+  assert.match(show, /tile\.openstreetmap\.org\/16\//);
+  assert.doesNotMatch(show, /cartocdn/);
+});
+
+test('Kachelquelle fuer Fernseher separat umstellbar', () => {
+  process.env.KARTE_KACHELN_TV = 'https://tv.example/{z}/{x}/{y}.png';
+  try {
+    assert.match(JSON.stringify(kartenDirektive({ name: 'J', lat: 51, lon: 7, ort: 'x', alter: 'y' }, true)), /tv\.example\/16\//);
+    assert.match(JSON.stringify(kartenDirektive({ name: 'J', lat: 51, lon: 7, ort: 'x', alter: 'y' }, false)), /tile\.openstreetmap\.org/);
+  } finally {
+    delete process.env.KARTE_KACHELN_TV;
+  }
 });
