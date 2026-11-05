@@ -18,6 +18,7 @@
 import { Redis } from '@upstash/redis'
 import { buildLocationInfo } from '../lib/geo.js'
 import { kannKarte, kartenDirektive, istFernseher } from '../lib/karte.js'
+import { kachelDurchreichen } from '../lib/kachel.js'
 import { befehlAnPerson } from '../lib/ring.js'
 import { handleSkill as musikBox, fritzSid } from '../lib/musik.js'
 import { nasTon, eigeneBasis } from '../lib/naston.js'
@@ -57,6 +58,12 @@ export default async function handler(req, res) {
       fritzSid(link, redis, erzwingen, () => Infinity, null, ohneAnmeldung)
         .then(e => ({ sid: e.sid, angemeldet: e.angemeldet }))
     ));
+  }
+
+  // Die Kartenkacheln fuer den Fire TV, aus demselben Grund hier - siehe
+  // lib/kachel.js.
+  if (queryOf(req).kachel && (req.method === 'GET' || req.method === 'HEAD')) {
+    return kachelDurchreichen(req, res, queryOf(req));
   }
 
   // Und die Nachrichten eines Senders, aus demselben Grund hier - siehe
@@ -109,14 +116,14 @@ export default async function handler(req, res) {
     if (body.request.type === 'LaunchRequest') {
       const person = standardPerson(personen);
       if (!person) return speak(res, 'Es ist noch keine Person eingerichtet. Bitte lege im Dashboard eine Person an.', true, direktiven);
-      return await standort(body, res, person, direktiven);
+      return await standort(body, res, person, direktiven, eigeneBasis(req));
     }
 
     if (body.request.type === 'IntentRequest') {
       const intent = body.request.intent || {};
       switch (intent.name) {
         case 'WhereIsPersonIntent':
-          return await handleWhereIs(body, intent, res, personen, direktiven);
+          return await handleWhereIs(body, intent, res, personen, direktiven, eigeneBasis(req));
         case 'RingPersonIntent':
           return handleRing(intent, res, personen, direktiven);
         case 'SilencePersonIntent':
@@ -167,14 +174,14 @@ export function dynamischeEntitaeten(personen) {
   return dynamischeWerte('PERSON_NAME', (personen || []).map(p => p?.name));
 }
 
-async function handleWhereIs(body, intent, res, personen, direktiven) {
+async function handleWhereIs(body, intent, res, personen, direktiven, basis) {
   const value = resolvedSlotValue(intent.slots?.person);
   if (!value) return frageWer(res, 'Wen soll ich suchen?', personen, direktiven);
 
   const person = personen.find(p => p.name.toLowerCase() === value.toLowerCase());
   if (!person) return speak(res, `Ich habe keine Person namens ${value} gefunden.`, true, direktiven);
 
-  return standort(body, res, person, direktiven);
+  return standort(body, res, person, direktiven, basis);
 }
 
 /**
@@ -183,11 +190,11 @@ async function handleWhereIs(body, intent, res, personen, direktiven) {
  * Die Karte haengt nur an, wenn der Echo APL meldet (siehe `kannKarte` in
  * lib/karte.js); ein Echo Dot bekommt dieselbe Antwort wie bisher.
  */
-async function standort(body, res, person, direktiven) {
+async function standort(body, res, person, direktiven, basis = '') {
   const info = await buildLocationInfo(redis, person);
   let karte = null;
   try {
-    karte = info.karte && kannKarte(body) ? kartenDirektive(info.karte, istFernseher(body)) : null;
+    karte = info.karte && kannKarte(body) ? kartenDirektive(info.karte, istFernseher(body), basis) : null;
   } catch (err) {
     // Die Karte ist Zugabe: Ohne sie bleibt die Ansage, ein Fehler hier darf
     // nicht zu "Es ist leider ein Fehler aufgetreten" werden.

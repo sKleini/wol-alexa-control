@@ -352,9 +352,10 @@ The `u` parameter must match the person's name in the dashboard (8.2). For more 
      screen for 25 seconds (Vercel env var `KARTE_DAUER_SEK`, 10–600 s; the device may cap it) —
      the session stays open without the microphone, *"Alexa, stopp"* closes it early. Without the interface (or on an Echo Dot) the skill only speaks, as
      before. Echo Show devices load the tiles from `tile.openstreetmap.org`. A **Fire TV**
-     (viewport mode `TV`) gets the free CARTO tiles from `basemaps.cartocdn.com` instead (OSM data, no
-     key): OSM answers its image loader with *"403 Access blocked"* because it does not send the
-     identification OSM's tile policy requires. Override with the Vercel env vars `KARTE_KACHELN`
+     (viewport mode `TV`) loads them through this app instead (`/api/skill?kachel=1&z=…&x=…&y=…`,
+     cached a week by Vercel's CDN): OSM answers the Fire TV's image loader with *"403 Access
+     blocked"* because it does not send the identification OSM's tile policy requires; the app
+     fetches with its own User-Agent. Override with the Vercel env vars `KARTE_KACHELN`
      (Echo Show & co.) and `KARTE_KACHELN_TV` (TVs), each a template with `{z}`, `{x}`, `{y}`.
 5. **Endpoint** → **HTTPS** → Default region: `https://your-app.vercel.app/api/skill` → SSL certificate type: *"My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority"*.
 6. Copy the **Skill ID** (`amzn1.ask.skill....`) into the `ALEXA_SKILL_ID` environment variable in Vercel and redeploy.
