@@ -56,3 +56,40 @@ test('relay_status_leitet_strom_vor_der_schluesselpruefung_weiter', () => {
   // sicher - darum zaehlt auch der Pfad.
   assert.match(text, /queryOf\(req\)\.art === 'strom' \|\| \(req\.url \|\| ''\)\.startsWith\('\/api\/strom'\)/);
 });
+
+test('fritz_rewrite_vor_der_startseite', () => {
+  // /api/fritz (Stand vom FRITZ!-Smart-Home-Relay) hat wie /api/strom keine
+  // eigene Funktion - api/ ist mit zwoelf Dateien voll.
+  const rewrites = konfig.rewrites || [];
+  const fritz = rewrites.findIndex(r => r.source === '/api/fritz');
+  const start = rewrites.findIndex(r => r.source === '/');
+  assert.notEqual(fritz, -1);
+  assert.equal(rewrites[fritz].destination, '/api/relay-status?art=fritz');
+  assert.ok(fritz < start);
+});
+
+test('relay_status_leitet_fritz_vor_der_schluesselpruefung_weiter', () => {
+  // Der VPS kommt mit X-Fritz-Push-Schluessel, nicht mit dem Standort-Schluessel.
+  const text = readFileSync(new URL('../api/relay-status.js', import.meta.url), 'utf8');
+  const weiter = text.indexOf('return handleFritzPush(req, res, redis)');
+  assert.notEqual(weiter, -1);
+  assert.ok(weiter < text.indexOf("if (!['GET', 'POST'].includes(req.method))"));
+  assert.ok(weiter < text.indexOf('if (!keyOk(req))'));
+  assert.match(text, /queryOf\(req\)\.art === 'fritz' \|\| \(req\.url \|\| ''\)\.startsWith\('\/api\/fritz'\)/);
+});
+
+
+test('alexa_js_gibt_fritz_an_lib_fritz', () => {
+  // Als Text geprueft: api/alexa.js laedt @upstash/redis.
+  const text = readFileSync(new URL('../api/alexa.js', import.meta.url), 'utf8');
+  assert.match(text, /from '\.\.\/lib\/fritz\.js'/);
+  const weiche = text.indexOf('if (istFritz(');
+  assert.notEqual(weiche, -1);
+  // Vor jeder Weiterleitung nach Namespace - auch ReportState gehoert dazu.
+  assert.ok(weiche < text.indexOf("if (namespace === 'Alexa.Discovery'"));
+  assert.ok(weiche < text.indexOf('return handlePowerControl(request, res)'));
+  assert.ok(weiche < text.indexOf('return handleSceneControl(request, res)'));
+  assert.match(text, /return handleFritz\(request, res, redis\)/);
+  // Discovery: in eigenem try, damit ein kaputter Stand die WoL-PCs nicht mitnimmt.
+  assert.match(text, /try \{\s*endpoints\.push\(\.\.\.fritzEndpunkte\(standAus\(await redis\.get\(FRITZ_SCHLUESSEL\)\)\)\);?\s*\} catch/);
+});

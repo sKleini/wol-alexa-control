@@ -1,5 +1,6 @@
 import { Redis } from '@upstash/redis'
 import crypto from 'crypto'
+import { istFritz, handleFritz, fritzEndpunkte, standAus, FRITZ_SCHLUESSEL } from '../lib/fritz.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -24,6 +25,11 @@ export default async function handler(req, res) {
 
   const request = req.body;
   if (!request || !request.directive || !request.directive.header) return res.status(400).end();
+
+  // FRITZ! Smart Home (Heizkoerperregler, Steckdosen, Vorlagen): alle
+  // Direktiven samt ReportState in lib/fritz.js - vor der Weiche nach
+  // Namespace, damit WoL, LED und Muelltonne unberuehrt bleiben.
+  if (istFritz(request.directive.endpoint?.endpointId)) return handleFritz(request, res, redis);
 
   const namespace = request.directive.header.namespace;
   const name = request.directive.header.name;
@@ -171,6 +177,14 @@ async function handleDiscovery(request, res) {
         }
       ]
     });
+
+    // FRITZ!-Geraete aus dem Stand des VPS-Relays. Eigenes try: ein kaputter
+    // oder fehlender Stand darf die Discovery der uebrigen Geraete nie kippen.
+    try {
+      endpoints.push(...fritzEndpunkte(standAus(await redis.get(FRITZ_SCHLUESSEL))));
+    } catch (err) {
+      console.error("Fritz discovery error:", err?.message);
+    }
 
     return res.status(200).json({
       event: {

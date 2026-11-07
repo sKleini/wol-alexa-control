@@ -109,6 +109,9 @@ VPS strom-cloud (every 5 min, outbound only) → POST /api/strom (ciphertext) �
 | `LED_TOPIC` | *(optional, LED feature)* ntfy.sh topic the LED relay listens on |
 | `LED_PASSWORD` | *(optional, LED feature)* Password expected by the LED relay |
 | `LED_CALL_KEY` | **Required if you use the manual `/api/led` endpoint.** The endpoint fails closed: with this variable unset it always answers `401`. Leave it unset to keep `/api/led` disabled — the Alexa LED command and the LED schedule work independently of it |
+| `FRITZ_TOPIC` | *(optional, FRITZ! Smart Home)* ntfy.sh topic the FRITZ! smart home relay listens on (= GitHub secret `FRITZ_NTFY_TOPIC` in wireguard-vps-strato) |
+| `FRITZ_PASSWORD` | *(optional, FRITZ! Smart Home)* Password expected by that relay (= `FRITZ_RELAY_PASSWORD`) |
+| `FRITZ_PUSH_SCHLUESSEL` | *(optional, FRITZ! Smart Home)* Key the VPS sends as `X-Fritz-Push-Schluessel` when it pushes the device state to `/api/fritz`. Unset, `/api/fritz` answers `401` (fail closed) |
 | `ABFALL_TOPIC` | *(optional, waste feature)* ntfy.sh topic the waste relay listens on |
 | `ABFALL_PASSWORD` | *(optional, waste feature)* Password expected by the waste relay |
 | `LOCATION_KEY` | *(optional, location feature)* Secret key for the `/api/location` ingest endpoint |
@@ -262,6 +265,23 @@ The skill exposes a static virtual device **"Fritzbox LED"** (shown as a light i
   GET https://your-app.vercel.app/api/led?action=on|off&key=<LED_CALL_KEY>
   ```
 - Monitor the relay on the VPS: `journalctl -u fritzbox-led-relay -f`
+
+#### 7a. (Optional) FRITZ! Smart Home: radiator thermostats, smart plugs, templates
+
+The FRITZ!DECT devices of the FRITZ!Box 7590AX in Weinsheim show up in the Alexa app as real smart home devices, controllable from the app and by voice:
+
+| FRITZ! device | Alexa category | In the Alexa app |
+|---|---|---|
+| Radiator thermostat (FRITZ!DECT 301/302) | Thermostat | Target 8–28 °C in 0.5 steps, current temperature, modes *Heat* (comfort temperature), *Eco* (reduced temperature), *Off*, a **"Boost"** switch (30 min), battery and reachability |
+| Smart plug (FRITZ!DECT 200/210) | Smart plug | On/off, temperature, "Leistung in Watt" (read only) |
+| Template (FRITZ!Box *Vorlage*) | Scene | Activate, e.g. *"Alexa, Alles aus"* |
+
+How it works: the relay `fritz-smarthome-relay` on the VPS (repo [wireguard-vps-strato](https://github.com/sKleini/wireguard-vps-strato), workflow 41) reads the box every 60 s through the WireGuard tunnel and pushes the state to `POST /api/fritz` (rewritten to `api/relay-status.js`, which hands it to `lib/fritz.js`; stored as `fritz:stand` in Redis). Discovery and ReportState are answered from that state — the box is never asked while Alexa waits. Commands go out as `fritz:<command>:<id>:<value>:<password>` on the relay's own ntfy topic; the relay switches and pushes the new state right away. If the state is older than 15 minutes (relay, tunnel or box down) or the box reports a device as absent, the device shows as *unreachable* and commands are refused with `ENDPOINT_UNREACHABLE` instead of being sent into the void.
+
+- Set `FRITZ_TOPIC`, `FRITZ_PASSWORD` and `FRITZ_PUSH_SCHLUESSEL` (see step 2) to the same values as the GitHub secrets of workflow 41, then run workflow 41 *aktivieren*.
+- Tell Alexa: **"Alexa, discover my devices"** — again after pairing a new FRITZ!DECT device.
+- Device names are the ones from the FRITZ!Box; the `endpointId` is `fritz-<AIN without spaces>`, so renaming in the box keeps the device in Alexa.
+- Not included on purpose: FRITZ!Box groups (create groups in the Alexa app), lamps, heating schedules (they stay in the box; a target set via Alexa lasts until the next switching point, like one set at the thermostat).
 
 #### 7b. (Optional) Waste Collection Announcement
 
@@ -763,6 +783,11 @@ FRITZ!NAS folder.
 | *"Alexa, turn on [Device Name]"* | Sends WoL via VPS → Fritz!Box TR-064 |
 | *"Alexa, turn off [Device Name]"* | Sends shutdown command via ntfy.sh → Windows Agent |
 | *"Alexa, turn on/off Fritzbox LED"* | Switches the Fritz!Box LED display via ntfy.sh → LED relay |
+| *"Alexa, stelle Heizung Wohnzimmer auf 21 Grad"* | Sets the FRITZ! radiator thermostat via ntfy.sh → FRITZ! smart home relay |
+| *"Alexa, mach Heizung Bad wärmer"* / *"… aus"* | Raises the target by one degree / switches the thermostat off |
+| *"Alexa, schalte Boost von Heizung Bad ein"* | 30 minutes of full heating on that thermostat (the exact wording for a toggle by voice may vary; the switch in the Alexa app always works) |
+| *"Alexa, schalte Steckdose Keller aus"* | Switches the FRITZ! smart plug |
+| *"Alexa, Alles aus"* | Applies the FRITZ!Box template of that name |
 | *"Alexa, Mülltonne"* | Announces the next waste collection via ntfy.sh → waste relay |
 | *"Alexa, wo ist Julia?"* | Speaks the current location of the default person (via routine, see 8.4) |
 | *"Alexa, frag familien finder, wo [Name] ist"* | Speaks the current location of any configured person |
@@ -782,6 +807,8 @@ All communication between Vercel and your PC/VPS uses [ntfy.sh](https://ntfy.sh)
 The VPS relay uses local TR-064 (HTTP, port 49000) over the WireGuard tunnel — no Fritz!Box external access is required or enabled.
 
 The optional LED feature uses its own, fully separated chain: a dedicated ntfy.sh topic (`LED_TOPIC`) and password (`LED_PASSWORD`) taken directly from the environment variables (no hashing). The LED relay additionally ignores messages older than 60 seconds or with a wrong password.
+
+The optional FRITZ! smart home feature has its own chain as well: its own topic (`FRITZ_TOPIC`) and password (`FRITZ_PASSWORD`). `/api/alexa` only acts on `fritz-*` endpoints present in the last pushed state and checks the value (8–28 °C) before anything is published; the relay checks both again against what it read from the box itself, so a forged ntfy message can never reach an unknown device. The box credentials stay on the VPS — no FRITZ!Box remote access is opened. The pushed state (device names, temperatures, switch states, watts) is stored unencrypted in Redis, because this app has to read it. `/api/fritz` accepts only `POST` with `X-Fritz-Push-Schluessel`, at most 64 KB and exactly the expected shape; a rejected push costs no Redis command.
 
 The optional waste feature works the same way: its own topic (`ABFALL_TOPIC`) and password (`ABFALL_PASSWORD`), separate from LED and WoL, and a relay that ignores messages older than 60 seconds, with a wrong password, with an unknown action or with an already seen ID.
 
