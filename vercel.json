@@ -18,6 +18,10 @@
       "destination": "/api/relay-status?art=strom"
     },
     {
+      "source": "/api/fritz",
+      "destination": "/api/relay-status?art=fritz"
+    },
+    {
       "source": "/",
       "destination": "/index.html"
     }

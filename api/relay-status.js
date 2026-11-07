@@ -8,6 +8,7 @@ import { Redis } from '@upstash/redis'
 import { keyOk } from '../lib/auth.js'
 import { queryOf } from '../lib/query.js'
 import { handleStrom } from '../lib/strom.js'
+import { handleFritzPush } from '../lib/fritz.js'
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -23,6 +24,9 @@ export default async function handler(req, res) {
   // Der Pfad zaehlt mit, weil nicht sicher ist, ob Vercel beim Rewrite die
   // Query des Ziels (?art=strom) in req.url schreibt.
   if (queryOf(req).art === 'strom' || (req.url || '').startsWith('/api/strom')) return handleStrom(req, res, redis);
+  // /api/fritz: Stand vom FRITZ!-Smart-Home-Relay (Workflow 41), aus demselben
+  // Grund hier und mit eigenem Schluessel (X-Fritz-Push-Schluessel).
+  if (queryOf(req).art === 'fritz' || (req.url || '').startsWith('/api/fritz')) return handleFritzPush(req, res, redis);
   if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ error: 'Method not allowed' });
   if (!keyOk(req)) return res.status(401).end();
 
