@@ -501,3 +501,32 @@ test('ntfy_weg_trotzdem_response', async () => {
   assert.equal(gesendet.length, 1);
   assert.equal(res.body.event.header.name, 'Response');
 });
+
+// ------------------------------------------ Befunde der Schlusspruefung ---
+
+test('stand_mit_rohwerten_wird_angenommen', () => {
+  // Das Relay traegt fuer Heizen/Eco die AHA-Rohwerte mit (komfortAha, absenkAha).
+  const stand = standBeispiel();
+  Object.assign(stand.geraete[0], { komfortAha: 42, absenkAha: 253, absenk: null });
+  assert.equal(standOk(stand), true);
+});
+
+test('eco_mit_absenkung_aus_meldet_keinen_null_sollwert', async () => {
+  const stand = standBeispiel();
+  stand.geraete[0].absenk = null;   // Absenktemperatur "Aus" in der Box
+  const { res, gesendet } = await sende(
+    direktive('Alexa.ThermostatController', 'SetThermostatMode', WZ, { thermostatMode: { value: 'ECO' } }), { stand });
+  assert.equal(gesendet[0].body, nachricht('soll', '116570272633', 'absenk'));
+  assert.equal(ctx(res, 'Alexa.ThermostatController', 'targetSetpoint'), undefined);
+  assert.equal(ctx(res, 'Alexa.ThermostatController', 'thermostatMode').value, 'ECO');
+});
+
+test('waermer_ohne_komforttemperatur_bei_aus', async () => {
+  const stand = standBeispiel();
+  stand.geraete[1].komfort = null;  // Bad: aus, Komfort unbekannt
+  const { res, gesendet } = await sende(
+    direktive('Alexa.ThermostatController', 'AdjustTargetTemperature', BAD, { targetSetpointDelta: { value: 1, scale: 'CELSIUS' } }), { stand });
+  assert.equal(gesendet.length, 0);
+  assert.equal(res.body.event.header.namespace, 'Alexa.ThermostatController');
+  assert.equal(res.body.event.payload.type, 'THERMOSTAT_IS_OFF');
+});
