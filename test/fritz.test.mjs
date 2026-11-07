@@ -408,11 +408,13 @@ test('waermer_und_kaelter', async () => {
 
 test('modus_setzen', async () => {
   const modus = (value) => ({ thermostatMode: { value } });
-  const faelle = [['ECO', 'absenk', 17], ['HEAT', 'komfort', 21], ['OFF', 'aus', null]];
-  for (const [wert, nachrichtWert, setpoint] of faelle) {
+  // Eco meldet "HEAT" zurueck: Die Alexa-App blendet im Eco-Modus jeden
+  // einzelnen Sollwert aus (sie erwartet dort Ober- und Untergrenze).
+  const faelle = [['ECO', 'absenk', 17, 'HEAT'], ['HEAT', 'komfort', 21, 'HEAT'], ['OFF', 'aus', null, 'OFF']];
+  for (const [wert, nachrichtWert, setpoint, gemeldet] of faelle) {
     const { res, gesendet } = await sende(direktive('Alexa.ThermostatController', 'SetThermostatMode', WZ, modus(wert)));
     assert.equal(gesendet[0].body, nachricht('soll', '116570272633', nachrichtWert));
-    assert.equal(ctx(res, 'Alexa.ThermostatController', 'thermostatMode').value, wert);
+    assert.equal(ctx(res, 'Alexa.ThermostatController', 'thermostatMode').value, gemeldet);
     const ziel = ctx(res, 'Alexa.ThermostatController', 'targetSetpoint');
     if (setpoint === null) assert.equal(ziel, undefined);
     else assert.deepEqual(ziel.value, { value: setpoint, scale: 'CELSIUS' });
@@ -518,7 +520,8 @@ test('eco_mit_absenkung_aus_meldet_keinen_null_sollwert', async () => {
     direktive('Alexa.ThermostatController', 'SetThermostatMode', WZ, { thermostatMode: { value: 'ECO' } }), { stand });
   assert.equal(gesendet[0].body, nachricht('soll', '116570272633', 'absenk'));
   assert.equal(ctx(res, 'Alexa.ThermostatController', 'targetSetpoint'), undefined);
-  assert.equal(ctx(res, 'Alexa.ThermostatController', 'thermostatMode').value, 'ECO');
+  // Absenkung "Aus" heisst: der Regler ist danach aus - so steht es dann auch in der App.
+  assert.equal(ctx(res, 'Alexa.ThermostatController', 'thermostatMode').value, 'OFF');
 });
 
 test('waermer_ohne_komforttemperatur_bei_aus', async () => {
@@ -529,4 +532,16 @@ test('waermer_ohne_komforttemperatur_bei_aus', async () => {
   assert.equal(gesendet.length, 0);
   assert.equal(res.body.event.header.namespace, 'Alexa.ThermostatController');
   assert.equal(res.body.event.payload.type, 'THERMOSTAT_IS_OFF');
+});
+
+
+test('zustand_eco_wird_als_heizen_mit_sollwert_gemeldet', () => {
+  // Gemeldet am 07.11.2026: Nach "Eco" zeigte die Alexa-App keinen Wert mehr,
+  // auch nach dem Neuladen - der Bericht enthielt targetSetpoint, die App
+  // zeigt ihn im Eco-Modus nur nicht. Deshalb ECO als HEAT mit dem Absenkwert.
+  const stand = standBeispiel();
+  Object.assign(stand.geraete[0], { modus: 'ECO', soll: 17.0 });
+  const props = eigenschaften(eintragFuer(stand, WZ), stand, JETZT);
+  assert.equal(eigenschaft(props, 'Alexa.ThermostatController', 'thermostatMode').value, 'HEAT');
+  assert.deepEqual(eigenschaft(props, 'Alexa.ThermostatController', 'targetSetpoint').value, { value: 17, scale: 'CELSIUS' });
 });
