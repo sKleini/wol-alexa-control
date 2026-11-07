@@ -272,7 +272,7 @@ The FRITZ!DECT devices of the FRITZ!Box 7590AX in Weinsheim show up in the Alexa
 
 | FRITZ! device | Alexa category | In the Alexa app |
 |---|---|---|
-| Radiator thermostat (FRITZ!DECT 301/302) | Thermostat | Target 8–28 °C in 0.5 steps, current temperature, modes *Heat* (comfort temperature), *Eco* (reduced temperature), *Off*, a **"Boost"** switch (30 min), battery and reachability |
+| Radiator thermostat (FRITZ!DECT 301/302) | Thermostat | Target 8–28 °C in 0.5 steps, current temperature, modes *Heat* (comfort temperature), *Eco* (sets the reduced temperature; the app then shows it as *Heat* with that value, because it hides any single target in Eco mode), *Off*, a **"Boost"** switch (30 min), battery and reachability |
 | Smart plug (FRITZ!DECT 200/210) | Smart plug | On/off, temperature, "Leistung in Watt" (read only) |
 | Template (FRITZ!Box *Vorlage*) | Scene | Activate, e.g. *"Alexa, Alles aus"* |
 
