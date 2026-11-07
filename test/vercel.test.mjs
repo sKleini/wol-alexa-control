@@ -77,3 +77,19 @@ test('relay_status_leitet_fritz_vor_der_schluesselpruefung_weiter', () => {
   assert.ok(weiter < text.indexOf('if (!keyOk(req))'));
   assert.match(text, /queryOf\(req\)\.art === 'fritz' \|\| \(req\.url \|\| ''\)\.startsWith\('\/api\/fritz'\)/);
 });
+
+
+test('alexa_js_gibt_fritz_an_lib_fritz', () => {
+  // Als Text geprueft: api/alexa.js laedt @upstash/redis.
+  const text = readFileSync(new URL('../api/alexa.js', import.meta.url), 'utf8');
+  assert.match(text, /from '\.\.\/lib\/fritz\.js'/);
+  const weiche = text.indexOf('if (istFritz(');
+  assert.notEqual(weiche, -1);
+  // Vor jeder Weiterleitung nach Namespace - auch ReportState gehoert dazu.
+  assert.ok(weiche < text.indexOf("if (namespace === 'Alexa.Discovery'"));
+  assert.ok(weiche < text.indexOf('return handlePowerControl(request, res)'));
+  assert.ok(weiche < text.indexOf('return handleSceneControl(request, res)'));
+  assert.match(text, /return handleFritz\(request, res, redis\)/);
+  // Discovery: in eigenem try, damit ein kaputter Stand die WoL-PCs nicht mitnimmt.
+  assert.match(text, /try \{\s*endpoints\.push\(\.\.\.fritzEndpunkte\(standAus\(await redis\.get\(FRITZ_SCHLUESSEL\)\)\)\);?\s*\} catch/);
+});

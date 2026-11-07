@@ -27,6 +27,9 @@ import {
   eigenschaften,
   erreichbar,
   eintragFuer,
+  istFritz,
+  befehlFuer,
+  handleFritz,
 } from '../lib/fritz.js'
 
 // Ein Stand, wie ihn lese_stand() im Relay fuer die Beispiel-XML in
@@ -311,4 +314,190 @@ test('zustand_steckdose', () => {
   const terrasse = eigenschaften(eintragFuer(stand, 'fritz-087610654321'), stand, JETZT);
   assert.equal(eigenschaft(terrasse, 'Alexa.PowerController', 'powerState').value, 'OFF');
   assert.equal(eigenschaft(terrasse, 'Alexa.RangeController', 'rangeValue'), undefined);
+});
+
+
+// --------------------------------------------------------- Direktiven ---
+
+const WZ = 'fritz-116570272633';      // Heizung Wohnzimmer, HEAT 21
+const BAD = 'fritz-116570111111';     // Heizung Bad, OFF, Boost an
+const BUERO = 'fritz-116570222222';   // nicht da
+const KELLER = 'fritz-087610123456';  // Steckdose an
+const VORLAGE = 'fritz-tmp6f2c1a-3c8b1e4f2';
+
+function direktive(namespace, name, endpointId, payload = {}, instance) {
+  return {
+    directive: {
+      header: { namespace, name, messageId: 'm-1', correlationToken: 'ct-1', payloadVersion: '3',
+                ...(instance ? { instance } : {}) },
+      endpoint: { endpointId, scope: { type: 'BearerToken', token: 'x' } },
+      payload,
+    },
+  };
+}
+
+const soll = (value, scale = 'CELSIUS') => ({ targetSetpoint: { value, scale } });
+
+async function sende(anfrage, { stand = standBeispiel(), jetztMs = JETZT, env = process.env, wirft = false } = {}) {
+  const gesendet = [];
+  const senden = async (url, opts) => {
+    gesendet.push({ url, ...opts });
+    if (wirft) throw new Error('ntfy weg');
+    return { ok: true };
+  };
+  const redis = redisMit(stand ? { [FRITZ_SCHLUESSEL]: stand } : {});
+  const res = antwortFaenger();
+  await handleFritz(anfrage, res, redis, { env, senden, jetztMs });
+  return { res, gesendet, redis };
+}
+
+const nachricht = (befehl, id, wert) => `fritz:${befehl}:${id}:${wert}:relay-pw`;
+const ctx = (res, namespace, name) => res.body.context.properties.find(p => p.namespace === namespace && p.name === name);
+
+test('ist_fritz', () => {
+  assert.equal(istFritz(WZ), true);
+  assert.equal(istFritz('endpoint-fritzbox-led'), false);
+  assert.equal(istFritz(undefined), false);
+});
+
+test('soll_temperatur_setzen', async () => {
+  const { res, gesendet } = await sende(direktive('Alexa.ThermostatController', 'SetTargetTemperature', WZ, soll(21.3)));
+  assert.equal(gesendet.length, 1);
+  assert.equal(gesendet[0].url, 'https://ntfy.sh/fritz-0123456789abcdef');
+  assert.equal(gesendet[0].method, 'POST');
+  assert.equal(gesendet[0].body, nachricht('soll', '116570272633', '21.5'));
+  assert.equal(res.body.event.header.name, 'Response');
+  assert.equal(res.body.event.header.correlationToken, 'ct-1');
+  assert.deepEqual(ctx(res, 'Alexa.ThermostatController', 'targetSetpoint').value, { value: 21.5, scale: 'CELSIUS' });
+  assert.equal(ctx(res, 'Alexa.ThermostatController', 'thermostatMode').value, 'HEAT');
+});
+
+test('fahrenheit_und_kelvin_werden_umgerechnet', async () => {
+  for (const [wert, skala] of [[70, 'FAHRENHEIT'], [294.15, 'KELVIN']]) {
+    const { gesendet } = await sende(direktive('Alexa.ThermostatController', 'SetTargetTemperature', WZ, soll(wert, skala)));
+    assert.equal(gesendet[0].body, nachricht('soll', '116570272633', '21.0'), skala);
+  }
+});
+
+test('ausserhalb_des_bereichs_nichts_senden', async () => {
+  for (const wert of [30, 7, 85]) {
+    const skala = wert === 85 ? 'FAHRENHEIT' : 'CELSIUS';
+    const { res, gesendet } = await sende(direktive('Alexa.ThermostatController', 'SetTargetTemperature', WZ, soll(wert, skala)));
+    assert.equal(gesendet.length, 0);
+    assert.equal(res.body.event.header.name, 'ErrorResponse');
+    assert.equal(res.body.event.payload.type, 'TEMPERATURE_VALUE_OUT_OF_RANGE');
+    assert.deepEqual(res.body.event.payload.validRange, {
+      minimumValue: { value: 8, scale: 'CELSIUS' }, maximumValue: { value: 28, scale: 'CELSIUS' },
+    });
+  }
+});
+
+test('waermer_und_kaelter', async () => {
+  const delta = (value, scale = 'CELSIUS') => ({ targetSetpointDelta: { value, scale } });
+  let r = await sende(direktive('Alexa.ThermostatController', 'AdjustTargetTemperature', WZ, delta(1)));
+  assert.equal(r.gesendet[0].body, nachricht('soll', '116570272633', '22.0'));
+  r = await sende(direktive('Alexa.ThermostatController', 'AdjustTargetTemperature', WZ, delta(-2)));
+  assert.equal(r.gesendet[0].body, nachricht('soll', '116570272633', '19.0'));
+  // Aus: Basis ist die Komforttemperatur (Bad: 22) - "waermer" heisst einschalten.
+  r = await sende(direktive('Alexa.ThermostatController', 'AdjustTargetTemperature', BAD, delta(1)));
+  assert.equal(r.gesendet[0].body, nachricht('soll', '116570111111', '23.0'));
+  // Fahrenheit-Delta: 9 F = 5 C.
+  r = await sende(direktive('Alexa.ThermostatController', 'AdjustTargetTemperature', WZ, delta(-9, 'FAHRENHEIT')));
+  assert.equal(r.gesendet[0].body, nachricht('soll', '116570272633', '16.0'));
+});
+
+test('modus_setzen', async () => {
+  const modus = (value) => ({ thermostatMode: { value } });
+  const faelle = [['ECO', 'absenk', 17], ['HEAT', 'komfort', 21], ['OFF', 'aus', null]];
+  for (const [wert, nachrichtWert, setpoint] of faelle) {
+    const { res, gesendet } = await sende(direktive('Alexa.ThermostatController', 'SetThermostatMode', WZ, modus(wert)));
+    assert.equal(gesendet[0].body, nachricht('soll', '116570272633', nachrichtWert));
+    assert.equal(ctx(res, 'Alexa.ThermostatController', 'thermostatMode').value, wert);
+    const ziel = ctx(res, 'Alexa.ThermostatController', 'targetSetpoint');
+    if (setpoint === null) assert.equal(ziel, undefined);
+    else assert.deepEqual(ziel.value, { value: setpoint, scale: 'CELSIUS' });
+  }
+  const { res, gesendet } = await sende(direktive('Alexa.ThermostatController', 'SetThermostatMode', WZ, modus('AUTO')));
+  assert.equal(gesendet.length, 0);
+  assert.equal(res.body.event.header.namespace, 'Alexa.ThermostatController');
+  assert.equal(res.body.event.payload.type, 'UNSUPPORTED_THERMOSTAT_MODE');
+});
+
+test('boost_steckdose_vorlage', async () => {
+  let r = await sende(direktive('Alexa.ToggleController', 'TurnOn', WZ, {}, 'Fritz.Boost'));
+  assert.equal(r.gesendet[0].body, nachricht('boost', '116570272633', 'an'));
+  const boost = ctx(r.res, 'Alexa.ToggleController', 'toggleState');
+  assert.equal(boost.value, 'ON');
+  assert.equal(boost.instance, 'Fritz.Boost');
+  r = await sende(direktive('Alexa.ToggleController', 'TurnOff', BAD, {}, 'Fritz.Boost'));
+  assert.equal(r.gesendet[0].body, nachricht('boost', '116570111111', 'aus'));
+  r = await sende(direktive('Alexa.PowerController', 'TurnOff', KELLER));
+  assert.equal(r.gesendet[0].body, nachricht('schalten', '087610123456', 'aus'));
+  assert.equal(ctx(r.res, 'Alexa.PowerController', 'powerState').value, 'OFF');
+  r = await sende(direktive('Alexa.SceneController', 'Activate', VORLAGE));
+  assert.equal(r.gesendet[0].body, nachricht('vorlage', 'tmp6f2c1a-3c8b1e4f2', '-'));
+  assert.equal(r.res.body.event.header.namespace, 'Alexa.SceneController');
+  assert.equal(r.res.body.event.header.name, 'ActivationStarted');
+});
+
+test('falsche_direktive_fuer_die_art', async () => {
+  for (const anfrage of [
+    direktive('Alexa.PowerController', 'TurnOn', WZ),
+    direktive('Alexa.ThermostatController', 'SetTargetTemperature', KELLER, soll(21)),
+    direktive('Alexa.ToggleController', 'TurnOn', WZ, {}, 'Fritz.Fenster'),
+    direktive('Alexa.SceneController', 'Deactivate', VORLAGE),
+  ]) {
+    const { res, gesendet } = await sende(anfrage);
+    assert.equal(gesendet.length, 0);
+    assert.equal(res.body.event.payload.type, 'INVALID_DIRECTIVE');
+  }
+  assert.ok(befehlFuer(direktive('Alexa.PowerController', 'TurnOn', WZ).directive, { art: 'hkr' }).fehler);
+});
+
+test('report_state', async () => {
+  const { res, gesendet } = await sende(direktive('Alexa', 'ReportState', WZ));
+  assert.equal(gesendet.length, 0);
+  assert.equal(res.body.event.header.namespace, 'Alexa');
+  assert.equal(res.body.event.header.name, 'StateReport');
+  assert.equal(res.body.event.header.correlationToken, 'ct-1');
+  assert.deepEqual(ctx(res, 'Alexa.ThermostatController', 'targetSetpoint').value, { value: 21, scale: 'CELSIUS' });
+  // Auch ein abwesendes Geraet bekommt einen Bericht - mit UNREACHABLE.
+  const buero = await sende(direktive('Alexa', 'ReportState', BUERO));
+  assert.deepEqual(ctx(buero.res, 'Alexa.EndpointHealth', 'connectivity').value, { value: 'UNREACHABLE' });
+});
+
+test('unbekanntes_geraet', async () => {
+  for (const anfrage of [
+    direktive('Alexa.PowerController', 'TurnOn', 'fritz-000000000000'),
+    direktive('Alexa', 'ReportState', 'fritz-000000000000'),
+  ]) {
+    const { res, gesendet } = await sende(anfrage);
+    assert.equal(gesendet.length, 0);
+    assert.equal(res.body.event.payload.type, 'NO_SUCH_ENDPOINT');
+  }
+  const ohneStand = await sende(direktive('Alexa.PowerController', 'TurnOn', KELLER), { stand: null });
+  assert.equal(ohneStand.res.body.event.payload.type, 'NO_SUCH_ENDPOINT');
+});
+
+test('nicht_erreichbar_nichts_senden', async () => {
+  let r = await sende(direktive('Alexa.ThermostatController', 'SetTargetTemperature', BUERO, soll(21)));
+  assert.equal(r.gesendet.length, 0);
+  assert.equal(r.res.body.event.payload.type, 'ENDPOINT_UNREACHABLE');
+  r = await sende(direktive('Alexa.PowerController', 'TurnOn', KELLER), { jetztMs: ZEIT * 1000 + 901_000 });
+  assert.equal(r.gesendet.length, 0);
+  assert.equal(r.res.body.event.payload.type, 'ENDPOINT_UNREACHABLE');
+});
+
+test('ohne_topic_oder_passwort_internal_error', async () => {
+  for (const env of [{ FRITZ_PASSWORD: 'relay-pw' }, { FRITZ_TOPIC: 'fritz-0123456789abcdef' }]) {
+    const { res, gesendet } = await sende(direktive('Alexa.PowerController', 'TurnOn', KELLER), { env });
+    assert.equal(gesendet.length, 0);
+    assert.equal(res.body.event.payload.type, 'INTERNAL_ERROR');
+  }
+});
+
+test('ntfy_weg_trotzdem_response', async () => {
+  const { res, gesendet } = await sende(direktive('Alexa.PowerController', 'TurnOn', KELLER), { wirft: true });
+  assert.equal(gesendet.length, 1);
+  assert.equal(res.body.event.header.name, 'Response');
 });
