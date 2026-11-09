@@ -727,7 +727,7 @@
             const menge = e.soll ? `${e.bytes} von ${e.soll}` : `${e.bytes}`;
             const kurz = e.soll && e.bytes < e.soll ? '  ABGERISSEN' : '';
             return `${uhr}  TON   ${e.status}  ${menge} B in ${e.dauer} ms`
-                + `${e.angemeldet ? '  ANMELDUNG' : ''}${kurz}`
+                + `${e.angemeldet ? '  ANMELDUNG' : ''}${e.weg === 'vps' ? '  über VPS' : ''}${kurz}`
                 + `${e.grund ? '  ' + e.grund : ''}  ${e.datei || ''}`;
         }
 
@@ -1272,6 +1272,7 @@
                             if (!e.range) teile.push('no range support');
                             if (e.zuLang) teile.push('over an hour in one file — chapters give "weiter" a sensible place to land');
                         }
+                        if (e.hinweis) teile.push(e.hinweis);
                         lines.push(`${icon} ${esc(e.url)} — ${esc(teile.join(' · '))}`);
                     }
                     ab = r.weiter;

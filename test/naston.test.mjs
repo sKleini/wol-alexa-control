@@ -1302,3 +1302,31 @@ test('Datei-Freigabe, die HTML statt Ton liefert: 502 statt Anmeldeseite an den 
     assert.equal(res.statusCode, 502);
   });
 });
+
+import { mitBoxweg } from '../lib/naston.js'
+
+test('mitBoxweg: nur Datei-Freigaben der betroffenen Box, sonst dieselben Objekte', () => {
+  const datei = { url: FREIGABE, name: 'Lied' };
+  const ordner = { url: tonUrl(BASIS, FREIGABE, PFAD, SCHLUESSEL), name: 'Ordner' };
+  const fremd = { url: 'https://example.org/a.mp3', name: 'fremd' };
+  const andereBox = { url: 'https://andere.myfritz.net/nas/filelink.lua?id=1234abcd', name: 'andere' };
+  const playlists = [{ name: 'A', titel: [datei, ordner, fremd, andereBox] }, { name: 'B', titel: [fremd] }];
+
+  assert.equal(mitBoxweg(playlists, BASIS, {}, SCHLUESSEL), playlists, 'ohne Ausfall unveraendert');
+
+  const neu = mitBoxweg(playlists, BASIS, { vps: new Set(['https://abc.myfritz.net:456']) }, SCHLUESSEL);
+  const [a, b] = neu;
+  assert.equal(b, playlists[1], 'eine Playlist ohne Datei-Freigabe bleibt dasselbe Objekt');
+  assert.match(a.titel[0].url, /^https:\/\/meine-app\.vercel\.app\/api\/skill\?ton=/);
+  assert.deepEqual(tonTokenLesen(new URL(a.titel[0].url).searchParams.get('ton'), SCHLUESSEL), { link: FREIGABE, pfad: '' });
+  assert.equal(a.titel[0].name, 'Lied');
+  assert.equal(a.titel[1], ordner, 'Ordner-Titel laufen schon ueber die App');
+  assert.equal(a.titel[2], fremd);
+  assert.equal(a.titel[3], andereBox, 'eine andere Box ist nicht betroffen');
+  assert.equal(playlists[0].titel[0].url, FREIGABE, 'gespeichert bleibt die Adresse der Box');
+
+  const ohneWeg = mitBoxweg(playlists, BASIS, { unerreichbar: new Set(['https://abc.myfritz.net:456']) }, SCHLUESSEL);
+  assert.equal(ohneWeg[0].titel[0].unerreichbar, true);
+  assert.equal(ohneWeg[0].titel[0].url, FREIGABE);
+  assert.equal(ohneWeg[0].titel[2].unerreichbar, undefined);
+});
