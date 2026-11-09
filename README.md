@@ -126,6 +126,10 @@ VPS strom-cloud (every 5 min, outbound only) → POST /api/strom (ciphertext) �
 | `MUSIK_TON_LANGSAM_MS` | *(optional, Meine Plattenkiste)* From how many milliseconds a single delivery is logged as a warning rather than a note. Default `20000`. It is a yardstick, not a ceiling: `maxDuration` is set to 60 s, but one measured run lasted 205 s (see below) |
 | `MUSIK_TON_STILLSTAND_MS` | *(optional, Meine Plattenkiste)* After how many milliseconds without a single byte being taken a delivery is ended. Default `60000`; `0` switches the watchdog off. A paused Echo does not close the connection, it only stops reading, so `close` never arrives and the delivery would otherwise run on to the function's clock — on the very instance that has to answer Alexa within eight seconds. It ends a delivery that has **stopped**, not one that is merely slow: while bytes are still being taken someone is listening |
 | `MUSIK_STARTWACHE` | *(optional, Meine Plattenkiste)* How many milliseconds a start has to report back before it counts as silent; `0` switches the watch off. Default `15000` — in the logs `PlaybackStarted` arrived 1 to 5 seconds after the fetch. A `Play REPLACE_ALL` the Echo drops leaves no trace of its own: the skill answers in milliseconds, the Echo fetches the file and receives all of it, and then nothing comes — no `PlaybackStarted`, no `PlaybackFailed`, no `ExceptionEncountered`. The watch turns that into a dated entry in the history, with both stream tokens beside it |
+| `MUSIK_VPS_URL` | *(optional, Meine Plattenkiste)* Address of the **music passage** on the VPS (`https://<VPS>:8443`). With `MUSIK_VPS_KEY` and `MUSIK_VPS_CERT` it lets the box keep playing when its DSL is down (see 9.2a). Set by workflow 42 (*aktivieren*) in `sKleini/wireguard-vps-strato`; if any of the three is missing, the passage does not exist and nothing changes |
+| `MUSIK_VPS_KEY` | *(optional, Meine Plattenkiste)* Key the app sends in `X-Musik-Schluessel`; the passage rejects every request without it. Set by workflow 42 |
+| `MUSIK_VPS_CERT` | *(optional, Meine Plattenkiste)* The passage's own certificate (PEM). The app trusts exactly this one for the VPS — its private key never leaves the VPS. Set by workflow 42 |
+| `MUSIK_VPS_BOX` | *(optional, Meine Plattenkiste)* Hostname of the box behind the passage. Without it, NAS addresses of any `…myfritz.net` name may take the passage; set it when a second FRITZ!Box with its own shares is in a playlist, so its requests do not land at the Weinsheim box |
 | `MUSIK_TON_LAUF` | *(optional, Meine Plattenkiste)* `0` switches off the cancelling of superseded deliveries. Every start address carries `&g=1` and calls out a new playback; an appended track (`ENQUEUE`) joins the one that stands, so a track playing while the next is prefetched is never cut. When a newer playback starts, the older deliveries stop within five seconds. Measured before this: 180 MB in two and a half minutes for six files, 49 MB of it for two tracks that were never heard. The counter is one for the whole app, not one per device — two Echos playing different playlists at the same time would cancel each other, which is what `0` is for |
 | `MUSIK_CLEAR_QUEUE` | *(optional, Meine Plattenkiste)* `0` drops the `AudioPlayer.ClearQueue` (`CLEAR_ALL`) that otherwise precedes every start. It is the long-standing suspicion against a device that sits silent on old state — and `CLEAR_ALL` also stops whatever is playing, so if a start ever goes silent on a paused device, this is the first thing to try. No deploy needed |
 | `MUSIK_TON_BUDGET_GB` | *(optional, Meine Plattenkiste)* Monthly ceiling for the audio passed through the app, in GB. Default `50` (the Hobby plan allows 100); above it the endpoint answers `503` instead of quietly running on. `0` means no ceiling. The running total is in Redis (`musik_ton_monat:<YYYY-MM>`) and printed in the dashboard |
@@ -482,6 +486,31 @@ The card in the dashboard marks such a playlist with **FRITZ!NAS**; clicking tha
 - **When the import finds nothing, it hands back the page it fetched**: an expandable *Page source* block below the field, with the page title, the scripts it loads and its source (in full if it is small, otherwise both ends of it), plus a copy button. That is the fastest way to tell apart a link pointing at the wrong place, a login in the way, and a list the browser builds — without digging through the browser's developer tools. It appears only when nothing was found, and only behind `ADMIN_PASSWORD` like the rest.
 - The import runs behind `ADMIN_PASSWORD` like everything else under `/api/manage`, refuses anything but `https://`, and rejects hosts that resolve to a private or loopback address, so it cannot be used as a probe into the Vercel network.
 
+##### 9.2a When the box's DSL is down
+
+**What happened.** On 9 November the DSL at the box went down and it switched to its mobile fallback. There it only gets an address from the carrier's private network; its MyFRITZ! name then points at a private address, and nobody reaches the box from outside. Check URLs said `zeigt auf eine private Adresse`, and Alexa rejected the Play directive of a file share with *"The URL specified in the Play directive is invalid"*.
+
+**What still worked was the tunnel.** The box builds its WireGuard tunnel to the VPS by itself, over mobile too. The **music passage** on the VPS (workflow 42 in `sKleini/wireguard-vps-strato`) takes requests from this app and hands them through the tunnel to the box. [`lib/boxweg.js`](lib/boxweg.js) decides per request which way to take:
+
+- **Normally nothing changes.** As long as the box is reachable directly, every request goes there as before.
+- **When its name resolves to a private address or not at all** — or a connection was just refused — NAS requests (`/nas/…`) go to the passage for five minutes, then the direct way is tried again. So the app comes back by itself once the DSL is back.
+- **Only the box goes that way.** Addresses of other servers never do; the passage forwards to exactly one box anyway.
+- **Redirects** of the box to its internal address are turned back into its public name, so cookies, session numbers and the rest of the code see the same addresses as always.
+
+What that means per kind of playlist:
+
+| Playlist | During the outage |
+|---|---|
+| FRITZ!NAS **folder** share | plays as usual — the tracks already point at this app, which now fetches through the tunnel |
+| FRITZ!NAS **file** share | rewritten while playing (not when saving) to this app's tone endpoint, which fetches the file through the tunnel without a session number. After the outage, the Echo plays from the box directly again |
+| any other MP3 | unchanged |
+
+**Without the passage** (the three `MUSIK_VPS_*` variables missing) the skill says *"Ich erreiche die Musik gerade nicht"* when a playlist would start with a file share of an unreachable box, instead of sending a directive Alexa rejects in English.
+
+**Visible in the dashboard:** Check URLs tests NAS addresses through the tunnel and adds *"Box von außen nicht erreichbar – läuft über den VPS"*; the history marks tone fetches with `über VPS`.
+
+**What it costs:** every track during the outage goes over the box's mobile data and through the app's monthly budget (`MUSIK_TON_BUDGET_GB`), which counts both ways alike.
+
 ##### 9.3 Dashboard
 
 - Open the dashboard → **Playlists** → enter a **speech-ready name** (this is what you say: `Kinderlieder`, `Hörspiele`) and the **URLs, one per line**. Optionally add a display title after a pipe: `https://…/01.mp3 | Hallo Welt` — it appears on Echo Show and in the Alexa app; otherwise the file name is used.
@@ -739,6 +768,7 @@ FRITZ!NAS folder.
 | Nothing at all happens after the second sentence | the session had already closed, or the answer arrived too late | should no longer occur — see **Why the skill never goes silent** above; check the `musik-box … ms` line in the Vercel logs |
 | "Ich komme gerade nicht an deine Playlists" | Redis did not answer within the time budget | say it again; if it repeats, check Upstash |
 | Alexa confirms, then silence — on a Fire TV, a tablet, or anything that is not an Echo | the device does not offer the `AudioPlayer` interface, so it drops the `Play` directive without a word; only the sentence was left, and it promised something that never came | fixed: a device that does not report `AudioPlayer` now hears why instead of a promise. The log line `musik-box Geraet kann: …` lists what the device actually reported |
+| *"The URL specified in the Play directive is invalid"*, Check URLs says `zeigt auf eine private Adresse` | the box runs on its mobile fallback (DSL down); its MyFRITZ! name points at a carrier-private address, and Alexa rejects the address of a file share | with the music passage set up (9.2a, workflow 42) the app plays through the tunnel by itself. Without it the skill now says so instead of failing in English; once the DSL is back, it plays directly again |
 | Alexa confirms, then silence | URL is not a direct file, not https, or the certificate is invalid | **Check URLs** in the dashboard; the URL must play in a browser straight away |
 | Alexa confirms, then silence — FRITZ!NAS **folder** share, on every device | the stored address carried a session number, and the box ties a session to the IP that fetched it; the skill's number is never valid for the Echo | fixed: the tracks of a folder share now point at this app, which fetches from the box itself and passes the bytes through (see 9.2). Re-save the playlist once so its addresses are rewritten |
 | Silence from a FRITZ!NAS folder playlist, `401` in the Vercel log of `/api/skill` | no signing key: `MUSIK_TON_KEY`, `BRIDGE_KEY` and `ADMIN_PASSWORD` are all unset | set one of them, then import the folder again — the addresses are signed with it |
