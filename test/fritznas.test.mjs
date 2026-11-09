@@ -225,3 +225,47 @@ test('sitzungsUrteil laesst 5xx und Schweigen unklar', () => {
   assert.equal(sitzungsUrteil(null, null), null, 'nicht erreichbar');
   assert.equal(sitzungsUrteil(undefined, null), null, 'Zeit abgelaufen');
 });
+
+// ---------------------------------------------------------------------------
+// Bei DSL-Ausfall: Sitzung und Weckruf durch den Tunnel (lib/boxweg.js)
+// ---------------------------------------------------------------------------
+
+import { sitzungGilt, weckeStream } from '../lib/fritznas.js'
+import { boxnetz, wegVergessen } from '../lib/boxweg.js'
+
+async function ueberTunnel(antwortGeber, arbeit) {
+  const vorher = { ...boxnetz };
+  const env = { MUSIK_VPS_URL: process.env.MUSIK_VPS_URL, MUSIK_VPS_KEY: process.env.MUSIK_VPS_KEY, MUSIK_VPS_CERT: process.env.MUSIK_VPS_CERT };
+  Object.assign(process.env, { MUSIK_VPS_URL: 'https://85.215.133.221:8443', MUSIK_VPS_KEY: 'k'.repeat(64), MUSIK_VPS_CERT: 'CERT' });
+  const abrufe = [];
+  wegVergessen();
+  boxnetz.pruefe = async () => 'zeigt auf eine private Adresse';
+  boxnetz.direkt = async () => { throw new Error('direkt geht nicht'); };
+  boxnetz.vps = async (url, init) => { abrufe.push({ url, init }); return antwortGeber(url, init); };
+  try { return await arbeit(abrufe); } finally {
+    Object.assign(boxnetz, vorher);
+    wegVergessen();
+    for (const [k, v] of Object.entries(env)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+
+test('sitzungGilt fragt bei Ausfall durch den Tunnel - mit demselben Formular', async () => {
+  await ueberTunnel(() => Response.json({ root: '/Musik', rights: { read: true } }), async (abrufe) => {
+    const auskunft = await sitzungGilt(istFritzFreigabe(FREIGABE), 'aabbccddeeff0011');
+    assert.deepEqual(auskunft, { gilt: true, kurz: 'HTTP 200, JSON', wurzel: '/Musik' });
+    assert.equal(abrufe.length, 1);
+    assert.equal(abrufe[0].url, 'https://85.215.133.221:8443/nas/api/data.lua');
+    assert.equal(abrufe[0].init.method, 'POST');
+    const formular = new URLSearchParams(abrufe[0].init.body);
+    assert.equal(formular.get('sid'), 'aabbccddeeff0011');
+    assert.equal(formular.get('a'), 'check_nas_rights');
+  });
+});
+
+test('weckeStream bei Ausfall: kein "zeigt auf eine private Adresse" mehr, sondern Ton', async () => {
+  await ueberTunnel(() => new Response(Buffer.alloc(1024, 1), { status: 206, headers: { 'content-type': 'audio/mpeg' } }), async (abrufe) => {
+    const ergebnis = await weckeStream(streamUrl('https://abc.myfritz.net:456', 'aabbccddeeff0011', '/a.mp3'));
+    assert.equal(ergebnis.ok, true, ergebnis.kurz);
+    assert.equal(abrufe.length, 1);
+  });
+});
