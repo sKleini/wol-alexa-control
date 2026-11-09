@@ -1163,3 +1163,142 @@ test('Zwei ueberlappende Lieferungen: die zuerst fertige laesst die andere gesch
   });
   assert.deepEqual(schalter, [true]);
 });
+
+// ---------------------------------------------------------------------------
+// Bei DSL-Ausfall: der Weg ueber den VPS (lib/boxweg.js)
+// ---------------------------------------------------------------------------
+//
+// Am 9. November lief die Box ueber Mobilfunk, ihr Name zeigte auf eine
+// private Adresse, und `zielErlaubt` lehnte jeden Abruf ab. Mit eingerichtetem
+// Durchgang (Workflow 42 im Repo wireguard-vps-strato) geht derselbe Abruf
+// jetzt durch den Tunnel.
+
+import { boxnetz, wegVergessen } from '../lib/boxweg.js'
+
+const VPS_ENV = {
+  MUSIK_VPS_URL: 'https://85.215.133.221:8443',
+  MUSIK_VPS_KEY: 'k'.repeat(64),
+  MUSIK_VPS_CERT: '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
+};
+
+/** Box ueber Mobilfunk: Name privat, Abrufe nur ueber den VPS. */
+async function beiAusfall({ mitVps = true, vpsAntwort }, arbeit) {
+  const vorher = { ...boxnetz };
+  const env = {};
+  for (const k of Object.keys(VPS_ENV)) { env[k] = process.env[k]; if (mitVps) process.env[k] = VPS_ENV[k]; else delete process.env[k]; }
+  const direkte = [];
+  const ueberVps = [];
+  wegVergessen();
+  boxnetz.pruefe = async () => 'zeigt auf eine private Adresse';
+  boxnetz.direkt = async (url) => { direkte.push(String(url)); throw new Error('direkt geht nicht'); };
+  boxnetz.vps = async (url, init) => { ueberVps.push({ url, init }); return vpsAntwort(url, init, ueberVps.length); };
+  try {
+    return await arbeit({ direkte, ueberVps });
+  } finally {
+    Object.assign(boxnetz, vorher);
+    wegVergessen();
+    for (const [k, v] of Object.entries(env)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+
+const tonAntwort = () => new Response(Buffer.alloc(2048, 7), {
+  status: 206,
+  headers: { 'content-type': 'audio/mpeg', 'content-range': 'bytes 0-2047/9000', 'content-length': '2048' },
+});
+
+test('Ordner-Freigabe bei Ausfall: der Ton kommt durch den Tunnel, der Verlauf sagt es', async () => {
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  const token = tonToken(FREIGABE, PFAD);
+  const res = attrappeRes();
+  const redis = attrappeRedis();
+  await beiAusfall({ vpsAntwort: tonAntwort }, async ({ direkte, ueberVps }) => {
+    const lauf = nasTon({ method: 'GET', headers: { range: 'bytes=0-2047' } }, res, redis, token, async () => 'aabbccddeeff0011');
+    await Promise.all([lauf, fertig(res)]);
+    assert.equal(res.statusCode, 206);
+    assert.equal(Buffer.concat(res.stuecke).length, 2048);
+    assert.equal(direkte.length, 0, 'direkt wird gar nicht erst versucht');
+    assert.equal(ueberVps.length, 1);
+    const u = new URL(ueberVps[0].url);
+    assert.equal(u.origin, 'https://85.215.133.221:8443');
+    assert.equal(u.pathname, '/nas/cgi-bin/luacgi_notimeout');
+    assert.equal(u.searchParams.get('sid'), 'aabbccddeeff0011');
+    assert.equal(u.searchParams.get('path'), PFAD);
+    assert.equal(ueberVps[0].init.headers.get('x-musik-schluessel'), VPS_ENV.MUSIK_VPS_KEY);
+    assert.equal(ueberVps[0].init.headers.get('range'), 'bytes=0-2047');
+  });
+  assert.equal(redis.merkzettel.verlauf[0]?.weg, 'vps');
+});
+
+test('Ordner-Freigabe bei Ausfall ohne Durchgang: abgelehnt wie bisher', async () => {
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  const token = tonToken(FREIGABE, PFAD);
+  const res = attrappeRes();
+  await beiAusfall({ mitVps: false, vpsAntwort: tonAntwort }, async ({ ueberVps }) => {
+    await nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'sid');
+    assert.equal(res.statusCode, 400);
+    assert.equal(ueberVps.length, 0);
+  });
+});
+
+test('Datei-Freigabe: leerer Pfad holt den Link selbst, ohne Sitzungsnummer', async () => {
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  const token = tonToken(FREIGABE, '');
+  assert.deepEqual(tonTokenLesen(token, 'test-schluessel'), { link: FREIGABE, pfad: '' });
+  const res = attrappeRes();
+  let sidGefragt = 0;
+  await beiAusfall({ vpsAntwort: tonAntwort }, async ({ ueberVps }) => {
+    const lauf = nasTon({ method: 'GET', headers: { range: 'bytes=0-2047' } }, res, attrappeRedis(), token,
+      async () => { sidGefragt++; return 'sid'; });
+    await Promise.all([lauf, fertig(res)]);
+    assert.equal(res.statusCode, 206);
+    assert.equal(sidGefragt, 0, 'eine Datei-Freigabe braucht keine Sitzung');
+    assert.equal(ueberVps.length, 1);
+    assert.equal(ueberVps[0].url, 'https://85.215.133.221:8443/nas/filelink.lua?id=535f52fbb2016f4f');
+  });
+});
+
+test('Datei-Freigabe folgt Umleitungen der Box - und bleibt dabei im Tunnel', async () => {
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  const token = tonToken(FREIGABE, '');
+  const res = attrappeRes();
+  await beiAusfall({
+    vpsAntwort: (_url, _init, n) => (n === 1
+      ? new Response(null, { status: 302, headers: { location: 'https://192.168.188.1/nas/datei.lua?x=1' } })
+      : tonAntwort()),
+  }, async ({ direkte, ueberVps }) => {
+    const lauf = nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'sid');
+    await Promise.all([lauf, fertig(res)]);
+    assert.equal(res.statusCode, 206);
+    assert.deepEqual(ueberVps.map(a => a.url), [
+      'https://85.215.133.221:8443/nas/filelink.lua?id=535f52fbb2016f4f',
+      'https://85.215.133.221:8443/nas/datei.lua?x=1',
+    ]);
+    assert.equal(direkte.length, 0, 'nie an die interne Adresse');
+  });
+});
+
+test('Datei-Freigabe: eine Umleitung auf einen fremden Host wird nicht verfolgt', async () => {
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  const token = tonToken(FREIGABE, '');
+  const res = attrappeRes();
+  await beiAusfall({
+    vpsAntwort: () => new Response(null, { status: 302, headers: { location: 'https://example.org/boese.mp3' } }),
+  }, async ({ direkte, ueberVps }) => {
+    await nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'sid');
+    assert.equal(res.statusCode, 502);
+    assert.equal(ueberVps.length, 1);
+    assert.equal(direkte.length, 0);
+  });
+});
+
+test('Datei-Freigabe, die HTML statt Ton liefert: 502 statt Anmeldeseite an den Echo', async () => {
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  const token = tonToken(FREIGABE, '');
+  const res = attrappeRes();
+  await beiAusfall({
+    vpsAntwort: () => new Response('<html>FRITZ!NAS</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+  }, async () => {
+    await nasTon({ method: 'GET', headers: {} }, res, attrappeRedis(), token, async () => 'sid');
+    assert.equal(res.statusCode, 502);
+  });
+});
