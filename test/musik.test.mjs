@@ -3680,3 +3680,124 @@ test('"Spiele SWR drei Nachrichten" startet die neueste Sendung von vorn', async
     assert.ok(Number(t) >= vorher, `${gesagt}: frischer Stempel ${t}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// DSL-Ausfall: Datei-Freigaben ueber die App, oder ein ehrlicher Satz
+// ---------------------------------------------------------------------------
+//
+// Gemeldet am 9. November: "The URL specified in the Play directive is
+// invalid". Die Box lief ueber Mobilfunk, ihr Name zeigte privat, und Alexa
+// lehnte die Adresse der Datei-Freigabe schon in der Direktive ab.
+
+import { boxnetz, wegVergessen } from '../lib/boxweg.js'
+
+const DATEI_FREIGABE = 'https://dy9gujj18dwlu4bu.myfritz.net:456/nas/filelink.lua?id=9f09b873e798a2a0';
+const DATEI = { name: 'Datei', titel: [{ url: DATEI_FREIGABE, name: 'Lied' }, { url: 'https://example.org/b.mp3', name: 'fremd' }] };
+const APP = 'https://meine-app.vercel.app';
+const VPS = {
+  MUSIK_VPS_URL: 'https://85.215.133.221:8443',
+  MUSIK_VPS_KEY: 'k'.repeat(64),
+  MUSIK_VPS_CERT: '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
+};
+
+async function mitBoxLage({ privat, mitVps }, arbeit) {
+  const vorher = { ...boxnetz };
+  const env = {};
+  for (const k of [...Object.keys(VPS), 'ADMIN_PASSWORD']) env[k] = process.env[k];
+  for (const k of Object.keys(VPS)) { if (mitVps) process.env[k] = VPS[k]; else delete process.env[k]; }
+  process.env.ADMIN_PASSWORD = 'test-schluessel';
+  wegVergessen();
+  boxnetz.pruefe = async (u) => (privat && String(u).includes('myfritz.net') ? 'zeigt auf eine private Adresse' : null);
+  try { return await arbeit(); } finally {
+    Object.assign(boxnetz, vorher);
+    wegVergessen();
+    for (const [k, v] of Object.entries(env)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+
+async function skillMitBasis(request, playlists, opts = {}) {
+  const res = antwortFaenger();
+  await handleSkill(anfrage(request, opts), res, redisMit({ [REDIS_KEY]: playlists }), APP);
+  return res.body.response;
+}
+
+test('DSL-Ausfall mit Durchgang: die Datei-Freigabe spielt ueber den Ton-Endpunkt der App', async () => {
+  await mitBoxLage({ privat: true, mitVps: true }, async () => {
+    const r = await skillMitBasis(intent('PlayPlaylistIntent', 'Datei'), [DATEI]);
+    const url = new URL(spielt(r).audioItem.stream.url);
+    assert.equal(url.origin, APP);
+    assert.equal(url.pathname, '/api/skill');
+    assert.ok(url.searchParams.get('ton'), 'mit Token');
+    // Das Token traegt die Freigabe und einen leeren Pfad.
+    const { tonTokenLesen } = await import('../lib/naston.js');
+    assert.deepEqual(tonTokenLesen(url.searchParams.get('ton'), 'test-schluessel'), { link: DATEI_FREIGABE, pfad: '' });
+  });
+});
+
+test('Normalfall: die Datei-Freigabe bleibt die Adresse der Box', async () => {
+  await mitBoxLage({ privat: false, mitVps: true }, async () => {
+    const r = await skillMitBasis(intent('PlayPlaylistIntent', 'Datei'), [DATEI]);
+    assert.equal(spielt(r).audioItem.stream.url, DATEI_FREIGABE);
+  });
+});
+
+test('DSL-Ausfall ohne Durchgang: ein Satz statt einer Direktive, die Alexa ablehnt', async () => {
+  await mitBoxLage({ privat: true, mitVps: false }, async () => {
+    const r = await skillMitBasis(intent('PlayPlaylistIntent', 'Datei'), [DATEI]);
+    assert.equal(spielt(r), undefined);
+    assert.match(r.outputSpeech.text, /Ich erreiche die Musik gerade nicht/);
+  });
+});
+
+test('DSL-Ausfall: eine fremde MP3 in derselben Playlist bleibt unangetastet', async () => {
+  await mitBoxLage({ privat: true, mitVps: true }, async () => {
+    const r = await skillMitBasis(
+      { type: 'AudioPlayer.PlaybackNearlyFinished', token: 'Datei|0|0|0' }, [DATEI], { token: 'Datei|0|0|0' });
+    assert.equal(spielt(r).audioItem.stream.url, 'https://example.org/b.mp3');
+  });
+});
+
+test('Ausfall waehrend der Wiedergabe: der zweite Versuch nach PlaybackFailed nimmt den Ton-Endpunkt', async () => {
+  // Der Titel war noch mit der Adresse der Box eingereiht, dann fiel das DSL.
+  // Der Echo meldet PlaybackFailed; derselbe Titel kommt noch einmal, jetzt
+  // ueber die App.
+  await mitBoxLage({ privat: true, mitVps: true }, async () => {
+    const r = await skillMitBasis({
+      type: 'AudioPlayer.PlaybackFailed', token: 'Datei|0|0|0',
+      error: { type: 'MEDIA_ERROR_UNKNOWN', message: 'invalid url' },
+    }, [DATEI], { token: 'Datei|0|0|0' });
+    const url = new URL(spielt(r).audioItem.stream.url);
+    assert.equal(url.origin, APP);
+    assert.match(spielt(r).audioItem.stream.token, /^Datei\|0\|/, 'derselbe Titel');
+  });
+});
+
+test('Check URLs bei Ausfall: geprueft durch den Tunnel, mit Hinweis statt "zeigt auf eine private Adresse"', async () => {
+  await mitBoxLage({ privat: true, mitVps: true }, async () => {
+    const vorher = boxnetz.vps;
+    boxnetz.vps = async () => new Response(Buffer.alloc(16, 0), {
+      status: 206, headers: { 'content-type': 'audio/mpeg', 'content-range': 'bytes 0-15/4000000', 'content-length': '16' },
+    });
+    try {
+      const res = antwortFaenger();
+      await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Datei', ab: '0' } }, res,
+        redisMit({ [REDIS_KEY]: [{ name: 'Datei', titel: [DATEI.titel[0]] }] }));
+      const [e] = res.body.ergebnisse;
+      assert.equal(e.fehler, null);
+      assert.equal(e.status, 206);
+      assert.equal(e.weg, 'vps');
+      assert.equal(e.hinweis, 'Box von außen nicht erreichbar – läuft über den VPS');
+    } finally {
+      boxnetz.vps = vorher;
+    }
+  });
+});
+
+test('Check URLs ohne Durchgang: der alte Grund bleibt stehen', async () => {
+  await mitBoxLage({ privat: true, mitVps: false }, async () => {
+    const res = antwortFaenger();
+    await handleManage({ method: 'GET', query: { pruefen: '1', name: 'Datei', ab: '0' } }, res,
+      redisMit({ [REDIS_KEY]: [{ name: 'Datei', titel: [DATEI.titel[0]] }] }));
+    assert.equal(res.body.ergebnisse[0].fehler, 'zeigt auf eine private Adresse');
+  });
+});
