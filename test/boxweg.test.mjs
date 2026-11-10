@@ -209,3 +209,17 @@ test('boxFetch reicht die umgeschriebene Umleitung durch', async () => {
   assert.equal(antwort.headers.get('location'), `${BOX}/nas/x?sid=9`);
   assert.equal(ueberVps(antwort), true);
 });
+
+test('boxFetch ueber den VPS folgt nie selbst einer Umleitung - der Schluessel bleibt beim Durchgang', async () => {
+  nameZeigt(PRIVAT);
+  await boxFetch(`${BOX}/nas/a`, { redirect: 'follow' }, { konfig: KONFIG, env: {} });
+  assert.equal(ueberVpsAbrufe[0].init.redirect, 'manual');
+});
+
+test('boxFetch ohne Durchgang fragt keinen Namen nach', async () => {
+  nameZeigt(null);
+  await boxFetch(`${BOX}/nas/a`, {}, { konfig: null, env: {} });
+  await boxFetch('https://example.org/nas/a', {}, { konfig: KONFIG, env: {} });
+  assert.equal(gefragt, 0);
+  assert.equal(direkte.length, 2);
+});
