@@ -3801,3 +3801,11 @@ test('Check URLs ohne Durchgang: der alte Grund bleibt stehen', async () => {
     assert.equal(res.body.ergebnisse[0].fehler, 'zeigt auf eine private Adresse');
   });
 });
+
+test('Ohne Durchgang: ein nicht aufloesbarer Name ist kein Grund, nicht zu spielen', async () => {
+  await mitBoxLage({ privat: false, mitVps: false }, async () => {
+    boxnetz.pruefe = async () => 'Hostname nicht aufloesbar';
+    const r = await skillMitBasis(intent('PlayPlaylistIntent', 'Datei'), [DATEI]);
+    assert.equal(spielt(r).audioItem.stream.url, DATEI_FREIGABE);
+  });
+});
