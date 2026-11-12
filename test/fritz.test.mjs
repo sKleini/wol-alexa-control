@@ -545,3 +545,51 @@ test('zustand_eco_wird_als_heizen_mit_sollwert_gemeldet', () => {
   assert.equal(eigenschaft(props, 'Alexa.ThermostatController', 'thermostatMode').value, 'HEAT');
   assert.deepEqual(eigenschaft(props, 'Alexa.ThermostatController', 'targetSetpoint').value, { value: 17, scale: 'CELSIUS' });
 });
+
+// ------------------------------------------------------- FRITZ!-Gruppen ---
+
+function standMitGruppen() {
+  const stand = standBeispiel();
+  stand.geraete.push(
+    { id: 'grp5a1b2c-3d4e5f607', ain: 'grp5A1B2C-3D4E5F607', art: 'hkr', name: 'Heizung Büro', da: true,
+      temp: 19.8, soll: 20.0, modus: 'HEAT', komfort: 20.0, absenk: 17.0, komfortAha: 40, absenkAha: 34,
+      boost: false, batterie: null, batterieLeer: false, gruppe: true },
+    { id: 'grp7e8f90-1a2b3c4d5', ain: 'grp7E8F90-1A2B3C4D5', art: 'dose', name: 'Steckdosen Keller', da: true,
+      an: true, gruppe: true },
+  );
+  return stand;
+}
+
+test('gruppen_werden_angenommen', () => {
+  assert.equal(standOk(standMitGruppen()), true);
+  const kaputt = standMitGruppen();
+  kaputt.geraete.at(-1).gruppe = 'ja';
+  assert.equal(standOk(kaputt), false);
+});
+
+test('discovery_heizungsgruppe_ohne_akku', () => {
+  const e = nach(fritzEndpunkte(standMitGruppen()), 'grp5a1b2c-3d4e5f607');
+  assert.equal(e.friendlyName, 'Heizung Büro');
+  assert.equal(e.description, 'FRITZ! Heizkörpergruppe');
+  assert.deepEqual(e.displayCategories, ['THERMOSTAT']);
+  assert.ok(schnittstelle(e, 'Alexa.ThermostatController'));
+  assert.ok(schnittstelle(e, 'Alexa.ToggleController', 'Fritz.Boost'));
+  // Eine Gruppe hat keinen Akku - die App soll keinen anbieten.
+  assert.deepEqual(schnittstelle(e, 'Alexa.EndpointHealth').properties.supported, [{ name: 'connectivity' }]);
+});
+
+test('discovery_steckdosengruppe', () => {
+  const e = nach(fritzEndpunkte(standMitGruppen()), 'grp7e8f90-1a2b3c4d5');
+  assert.equal(e.description, 'FRITZ! Steckdosengruppe');
+  assert.deepEqual(e.displayCategories, ['SMARTPLUG']);
+});
+
+test('zustand_und_befehl_fuer_heizungsgruppe', async () => {
+  const stand = standMitGruppen();
+  const props = eigenschaften(eintragFuer(stand, 'fritz-grp5a1b2c-3d4e5f607'), stand, JETZT);
+  assert.deepEqual(eigenschaft(props, 'Alexa.TemperatureSensor', 'temperature').value, { value: 19.8, scale: 'CELSIUS' });
+  assert.equal(eigenschaft(props, 'Alexa.EndpointHealth', 'battery'), undefined);
+  const { gesendet } = await sende(
+    direktive('Alexa.ThermostatController', 'SetTargetTemperature', 'fritz-grp5a1b2c-3d4e5f607', soll(21)), { stand });
+  assert.equal(gesendet[0].body, nachricht('soll', 'grp5a1b2c-3d4e5f607', '21.0'));
+});
