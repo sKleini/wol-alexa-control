@@ -551,7 +551,7 @@ test('zustand_eco_wird_als_heizen_mit_sollwert_gemeldet', () => {
 function standMitGruppen() {
   const stand = standBeispiel();
   stand.geraete.push(
-    { id: 'grp5a1b2c-3d4e5f607', ain: 'grp5A1B2C-3D4E5F607', art: 'hkr', name: 'Heizung Büro', da: true,
+    { id: 'grp5a1b2c-3d4e5f607', ain: 'grp5A1B2C-3D4E5F607', art: 'hkr', name: 'Heizungen Büro', da: true,
       temp: 19.8, soll: 20.0, modus: 'HEAT', komfort: 20.0, absenk: 17.0, komfortAha: 40, absenkAha: 34,
       boost: false, batterie: null, batterieLeer: false, gruppe: true },
     { id: 'grp7e8f90-1a2b3c4d5', ain: 'grp7E8F90-1A2B3C4D5', art: 'dose', name: 'Steckdosen Keller', da: true,
@@ -569,7 +569,7 @@ test('gruppen_werden_angenommen', () => {
 
 test('discovery_heizungsgruppe_ohne_akku', () => {
   const e = nach(fritzEndpunkte(standMitGruppen()), 'grp5a1b2c-3d4e5f607');
-  assert.equal(e.friendlyName, 'Heizung Büro');
+  assert.equal(e.friendlyName, 'Heizungen Büro');
   assert.equal(e.description, 'FRITZ! Heizkörpergruppe');
   assert.deepEqual(e.displayCategories, ['THERMOSTAT']);
   assert.ok(schnittstelle(e, 'Alexa.ThermostatController'));
