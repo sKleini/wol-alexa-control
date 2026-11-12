@@ -285,7 +285,8 @@ How it works: the relay `fritz-smarthome-relay` on the VPS (repo [wireguard-vps-
 - Set `FRITZ_TOPIC`, `FRITZ_PASSWORD` and `FRITZ_PUSH_SCHLUESSEL` (see step 2) to the same values as the GitHub secrets of workflow 41, then run workflow 41 *aktivieren*.
 - Tell Alexa: **"Alexa, discover my devices"** — again after pairing a new FRITZ!DECT device.
 - Device names are the ones from the FRITZ!Box; the `endpointId` is `fritz-<AIN without spaces>`, so renaming in the box keeps the device in Alexa.
-- Not included on purpose: FRITZ!Box groups (create groups in the Alexa app), lamps, heating schedules (they stay in the box; a target set via Alexa lasts until the next switching point, like one set at the thermostat).
+- **FRITZ!Box groups** come along: a heating group such as "Büro" (from "Heizung Büro Links" and "Heizung Büro Rechts") appears as its own thermostat **"Heizungen Büro"** and sets both at once; a plug group as "Steckdosen …". The prefix keeps it apart from an Alexa room "Büro"; if a single device already has that name, the group becomes "Heizungsgruppe …"/"Steckdosengruppe …". Groups have no battery; without a group reading the current temperature is the mean of the reachable members.
+- Not included on purpose: lamps, heating schedules (they stay in the box; a target set via Alexa lasts until the next switching point, like one set at the thermostat).
 
 #### 7b. (Optional) Waste Collection Announcement
 
