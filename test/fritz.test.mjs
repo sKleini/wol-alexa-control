@@ -338,12 +338,15 @@ function direktive(namespace, name, endpointId, payload = {}, instance) {
 
 const soll = (value, scale = 'CELSIUS') => ({ targetSetpoint: { value, scale } });
 
-async function sende(anfrage, { stand = standBeispiel(), jetztMs = JETZT, env = process.env, wirft = false } = {}) {
+async function sende(anfrage, { stand = standBeispiel(), jetztMs = JETZT, env = process.env, wirft = false,
+                                status = [] } = {}) {
   const gesendet = [];
+  const stati = [...status];   // HTTP-Status der ntfy-Antworten der Reihe nach, sonst 200
   const senden = async (url, opts) => {
     gesendet.push({ url, ...opts });
     if (wirft) throw new Error('ntfy weg');
-    return { ok: true };
+    const code = stati.shift() ?? 200;
+    return { ok: code >= 200 && code < 300, status: code };
   };
   const redis = redisMit(stand ? { [FRITZ_SCHLUESSEL]: stand } : {});
   const res = antwortFaenger();
@@ -500,8 +503,22 @@ test('ohne_topic_oder_passwort_internal_error', async () => {
 
 test('ntfy_weg_trotzdem_response', async () => {
   const { res, gesendet } = await sende(direktive('Alexa.PowerController', 'TurnOn', KELLER), { wirft: true });
-  assert.equal(gesendet.length, 1);
+  assert.equal(gesendet.length, 2);   // einmal wiederholt, dann aufgegeben
   assert.equal(res.body.event.header.name, 'Response');
+});
+
+test('ntfy_http_fehler_wird_einmal_wiederholt', async () => {
+  // fetch wirft bei 429 nicht - frueher ging der Befehl dann still verloren.
+  const { res, gesendet } = await sende(
+    direktive('Alexa.ThermostatController', 'SetTargetTemperature', WZ, soll(21)), { status: [429] });
+  assert.equal(gesendet.length, 2);
+  assert.equal(gesendet[1].body, nachricht('soll', '116570272633', '21.0'));
+  assert.equal(res.body.event.header.name, 'Response');
+});
+
+test('ntfy_ok_wird_nicht_wiederholt', async () => {
+  const { gesendet } = await sende(direktive('Alexa.PowerController', 'TurnOn', KELLER), { status: [200] });
+  assert.equal(gesendet.length, 1);
 });
 
 // ------------------------------------------ Befunde der Schlusspruefung ---
