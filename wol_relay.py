@@ -43,10 +43,14 @@ def get_topic(mac: str, password: str) -> str:
     clean = mac.replace(":", "").replace("-", "").replace(" ", "").lower()
     return "wol_" + hashlib.sha256((clean + password).encode()).hexdigest()[:20]
 
+def topic_hinweis(topic: str) -> str:
+    """Topic fuers Log gekuerzt ("wol_***"): Wer es kennt, kann den PC wecken."""
+    return topic[:4] + "***"
+
 def listen():
     topic = get_topic(MAC_ADDRESS, ADMIN_PASSWORD)
     url   = f"https://ntfy.sh/{topic}/json"
-    print(f"[ntfy] Listening on topic: {topic}")
+    print(f"[ntfy] Listening on topic: {topic_hinweis(topic)}")
 
     while True:
         try:
@@ -68,7 +72,8 @@ def listen():
                             send_wol_tr064(MAC_ADDRESS)
                         # "off" is handled by agent.exe on the Windows PC
         except Exception as e:
-            print(f"[Error] {e} — reconnecting in 5s...")
+            # Nur der Fehlertyp: Die Meldung von requests enthaelt die URL samt Topic.
+            print(f"[Error] {e.__class__.__name__} — reconnecting in 5s...")
             time.sleep(5)
 
 if __name__ == "__main__":
