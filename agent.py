@@ -165,7 +165,10 @@ class WolAgentApp(ctk.CTk):
                 self.safe_update_status("🟢 Secure Listening Active", "#00ff88")
                 
                 with session.get(url, stream=True, timeout=45) as r:
-                    for line in r.iter_lines():
+                    # chunk_size=1: ntfy schickt den Stream ohne Chunk-Kodierung; mit dem
+                    # Standardpuffer (512 Bytes) blieb eine einzelne Nachricht haengen, bis
+                    # genug Keepalives nachkamen (gemessen: 20-25 s oder gar nicht).
+                    for line in r.iter_lines(chunk_size=1):
                         if not self.is_running: break
                         if line:
                             data = json.loads(line)
