@@ -610,3 +610,22 @@ test('zustand_und_befehl_fuer_heizungsgruppe', async () => {
     direktive('Alexa.ThermostatController', 'SetTargetTemperature', 'fritz-grp5a1b2c-3d4e5f607', soll(21)), { stand });
   assert.equal(gesendet[0].body, nachricht('soll', 'grp5a1b2c-3d4e5f607', '21.0'));
 });
+
+test('log_nennt_direktive_eingang_und_dauer', async () => {
+  const zeilen = [];
+  const alt = console.log;
+  console.log = (z) => zeilen.push(z);
+  try {
+    let t = Date.UTC(2026, 10, 23, 18, 34, 55, 123);
+    const uhr = () => { const jetzt = t; t += 340; return jetzt; };
+    const redis = redisMit({ [FRITZ_SCHLUESSEL]: standBeispiel() });
+    await handleFritz(direktive('Alexa.ThermostatController', 'SetTargetTemperature', WZ, soll(23.5)),
+      antwortFaenger(), redis,
+      { env: process.env, senden: async () => ({ ok: true, status: 200 }), jetztMs: JETZT, uhr });
+  } finally {
+    console.log = alt;
+  }
+  assert.deepEqual(zeilen, [
+    'Fritz: soll 2633 -> 23.5 (SetTargetTemperature 23.5 CELSIUS, Eingang 18:34:55.123Z, ntfy nach 340 ms)',
+  ]);
+});
